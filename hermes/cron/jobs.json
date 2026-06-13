@@ -1,0 +1,42 @@
+{
+  "jobs": [
+    {
+      "id": "1ab987a1f402",
+      "name": "\u6bcf\u65e5\u5de5\u4f5c\u533a\u5907\u4efd",
+      "prompt": "",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": "git_daily_backup.sh",
+      "no_agent": true,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 23 * * *",
+        "display": "0 23 * * *"
+      },
+      "schedule_display": "0 23 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 0
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-06-13T18:00:00.274770+08:00",
+      "next_run_at": "2026-06-13T23:00:00+08:00",
+      "last_run_at": null,
+      "last_status": null,
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "telegram:5985994327",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": "D:\\Hermes agent"
+    }
+  ],
+  "updated_at": "2026-06-13T18:00:00.275774+08:00"
+}
