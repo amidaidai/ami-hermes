@@ -203,7 +203,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"**4h {_kl_summary(k4h, '背景')}**",
         f"**③ 现价：{_fmt_price(price)}** · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
         f"**④ 状态：{status}**",
-        f"**⑤ 模型：{model_id}** · setup_id `{setup_id}`",
+        f"**⑤ 模型：{model_id}**",
         f"**⑥ 评分：{_score13(merged, results, status)}**",
         f"**⑦ 决策：{_decision_text(merged, status)}** · 置信 {n5}/5 — {_reason_one_liner(merged, dir_cn)}",
         f"**⑧ 仓位：{_pos_level(data_grade, status)}** · 最大风险 `{meta.get('risk_usd',2)}U`",
@@ -339,7 +339,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     risk.append(f"⑥ 数据闸门：{_gate_data(data_grade)} — 数据{data_grade}级 · 缺口{_gaps(engine_data)}")
     risk.append(f"⑦ 事件闸门：{_gate_event(engine_data)} — 重大数据前后{'30' if _has_event(engine_data) else '0'}分钟")
     risk.append(f"⑧ 执行闸门：{_gate_exec(klines, price, status)} — 入场距现价≤0.5ATR才可执行")
-    risk.append(f"⑨ 复盘字段：model_id `{model_id}` · entry_tag `{meta.get('entry_tag','')}` · exit_tag `{meta.get('exit_tag','')}` · result `待复盘`")
+    risk.append(f"⑨ 复盘：入场、止损、止盈、失效、结果必须本地记录 — 卡面只保留人读内容")
     risk.append(f"⑩ 心态：禁追价 — 禁复仇 — 连亏后暂停")
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]

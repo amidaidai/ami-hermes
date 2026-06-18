@@ -67,10 +67,24 @@ def test_render_card_locked_hides_machine_fields():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # 机器字段不出现在卡片正文（setup_id/entry_tag/exit_tag可在头部⑤和风控⑨出现，独立机器字段区不可）
-    assert "机器字段" not in card
-    assert "monitor_write" not in card
-    # 但 model_id 中文模型名可以出现（⑤模型）
+    # v6.9 锁定：分析卡正文禁止任何机器字段/枚举泄漏。
+    forbidden = [
+        "机器字段",
+        "monitor_write",
+        "setup_id",
+        "model_id",
+        "entry_tag",
+        "exit_tag",
+        "BTCUSDT-VWAP反抽-20260618-120000",
+        "vwap_pullback_short",
+        "planned_rr_exit",
+        "critical",
+        "warning",
+        "info",
+    ]
+    for token in forbidden:
+        assert token not in card, f"分析卡正文泄漏机器字段/枚举: {token}"
+    # 中文模型名可以作为人读策略名出现，但字段名 model_id 不允许出现。
     assert "VWAP反抽" in card
 
 
