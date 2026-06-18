@@ -134,6 +134,26 @@ def _market_one_liner(merged: dict, regime_name: str | None = None) -> str:
     return base
 
 
+def _env_walls_line(symbol: str, price, klines: dict) -> str:
+    """环境④挂单墙/清算行。加密接 depth_wall 真实大额挂单墙；XAU 走K线估算清算区。"""
+    su = symbol.upper()
+    if "XAU" not in su and price:
+        try:
+            import sys as _sys
+            from pathlib import Path as _P
+            _sd = str(_P("D:/Hermes agent/scripts"))
+            if _sd not in _sys.path:
+                _sys.path.insert(0, _sd)
+            from depth_wall import analyze_walls
+            sym2 = symbol if su.endswith("USDT") else su + "USDT"
+            w = analyze_walls(sym2, top_n=2, min_notional_usd=1_000_000)
+            if w.get("ok") and (w.get("support_walls") or w.get("resist_walls")):
+                return f"④ 挂单墙：{w['summary']} — 大额限价墙=磁吸位/止损陷阱"
+        except Exception:
+            pass
+    return f"④ 清算：上 `{_liquidation(klines, 'up')}` · 下 `{_liquidation(klines, 'down')}` — {_liq_read(klines, price)}"
+
+
 def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dict,
                        engine_data: dict, grok: dict | None = None,
                        search_sent: str = "", community: str = "",
@@ -214,15 +234,20 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # ═══ 一、环境 ═══
     env = ["**一、环境**"]
     env.append(f"① 数据：{data_grade}级 · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}")
-    env.append(f"② 衍生：Funding `{funding_rate}` · OI `{oi_latest}`{oi_trend} · 杠杆情绪{_lev_sentiment(funding_rate, ls_long)}")
-    env.append(f"③ 主动成交：Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir} {cvd_quality}级 — {_taker_cvd_read(taker_dir, cvd_dir, cvd_quality)}")
-    env.append(f"④ 清算：上 `{_liquidation(klines, 'up')}` · 下 `{_liquidation(klines, 'down')}` — {_liq_read(klines, price)}")
+    if "XAU" in symbol.upper():
+        env.append(f"② 衍生：黄金无 Funding/OI/Taker（非加密·不适用）— 替代：DXY {_nna(engine_data,'dxy')} · US10Y {_nna(engine_data,'us10y')} · 实际利率/避险情绪")
+        env.append(f"③ 主动成交：Binance 订单流不适用黄金 — 改看多源现货一致性（金十+gold-api+Yahoo）· CVD {cvd_dir} {cvd_quality}级（TV估算·仅参考）")
+    else:
+        env.append(f"② 衍生：Funding `{funding_rate}` · OI `{oi_latest}`{oi_trend} · 杠杆情绪{_lev_sentiment(funding_rate, ls_long)}")
+        env.append(f"③ 主动成交：Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir} {cvd_quality}级 — {_taker_cvd_read(taker_dir, cvd_dir, cvd_quality)}")
+    env.append(_env_walls_line(symbol, price, klines))
     env.append(f"⑤ 宏观：DXY {_nna(engine_data,'dxy')} · US10Y {_nna(engine_data,'us10y')} · SPX {_nna(engine_data,'spx')} — {_macro_read(engine_data)}")
     env.append(f"⑥ 催化：{_nna(engine_data,'catalyst','无')} · 等级{_nna(engine_data,'catalyst_grade','D')} — {_catalyst_impact(engine_data)}")
     fg_v = fg.get("value", "?") if fg else "?"
     fg_c = fg.get("classification", "?") if fg else "?"
     env.append(f"⑦ 社区全景：恐慌贪婪 `{fg_v}`（{fg_c}）· CG情绪 {_cg_read(engine_data)} — 只作背景/仓位微调")
-    env.append(f"⑧ X情绪：{search_sent or '未采集'} — 只验证/挑战结构{' ⚠与结构冲突' if _sent_conflict(search_sent, bias_cn) else ''}")
+    _sent_src = "web源·非X实时" if search_sent else "未采集"
+    env.append(f"⑧ 情绪：{search_sent or '未采集'}（{_sent_src}）— 只验证/挑战结构·不覆盖方向{' ⚠与结构冲突' if _sent_conflict(search_sent, bias_cn) else ''}")
     env.append(f"⑨ 数据缺口：{_gaps(engine_data)} — 缺失项不参与加分")
     env.append(f"⑩ 风控：{_env_risk(data_grade, status)} · {_pos_level(data_grade, status)} · 最大风险 `{meta.get('risk_usd',2)}U` — {_risk_reason(status, bias_cn)}")
 
@@ -264,7 +289,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     strongest_short = next((r for r in top_models if r.get("direction") == "short"), None)
     game.append(f"④ 最强多：{strongest_long['name'] if strongest_long else '无'} {float(strongest_long.get('confidence',0)):.2f}" if strongest_long else "④ 最强多：无 — 无有效做多模型匹配")
     game.append(f"⑤ 最强空：{strongest_short['name'] if strongest_short else '无'} {float(strongest_short.get('confidence',0)):.2f}" if strongest_short else "⑤ 最强空：无 — 无有效做空模型匹配")
-    game.append(f"⑥ 社区：X {_x_dir(search_sent)} · CG {_cg_read(engine_data)} · F&G `{fg_v}` — {_community_read(fg, community)}")
+    game.append(f"⑥ 社区：情绪 {_x_dir(search_sent)}（web源·非X实时）· CG {_cg_read(engine_data)} · F&G `{fg_v}` — {_community_read(fg, community)}")
     game.append(f"⑦ 催化：{_nna(engine_data,'catalyst','无')} · 等级{_nna(engine_data,'catalyst_grade','D')} — {_catalyst_dir(engine_data)}")
     structure_dir = _structure_verdict(klines, merged)
     engine_dir = "偏空" if short_c > long_c else "偏多" if long_c > short_c else "中性"
