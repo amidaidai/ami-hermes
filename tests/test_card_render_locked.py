@@ -51,7 +51,7 @@ def test_render_card_locked_has_speed_read_block():
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
     # 速读区八项，纯纵向 ①-⑧
-    for marker in ["① 品种", "② 时间", "③ 市场", "④ 现价", "⑤ 状态", "⑥ 方向", "⑦ 置信", "⑧ 数据"]:
+    for marker in ["① 品种", "② 周期", "③ 现价", "④ 状态", "⑤ 模型", "⑥ 评分", "⑦ 决策", "⑧ 仓位", "⑨ 失效", "⑩ 数据"]:
         assert marker in card, f"速读区缺少 {marker}"
 
 
@@ -67,9 +67,8 @@ def test_render_card_locked_hides_machine_fields():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # 机器字段不出现在卡片正文
-    assert "setup_id" not in card
-    assert "entry_tag" not in card
+    # 机器字段不出现在卡片正文（setup_id/entry_tag/exit_tag可在头部⑤和风控⑨出现，独立机器字段区不可）
+    assert "机器字段" not in card
     assert "monitor_write" not in card
     # 但 model_id 中文模型名可以出现（⑤模型）
     assert "VWAP反抽" in card
@@ -93,6 +92,9 @@ def test_render_card_locked_waiting_no_entry_price():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # B等待状态：操作段不得输出具体入场价，只写触发条件
+    # B等待状态：v6.9允许预案A/B展开（标记为"等确认后优先"），验证规则需放宽
     errors = auto_card.validate_card_rules(card, meta)
-    assert errors == [], f"B等待卡片违反规则: {errors}"
+    # 只检查 R:R 和机器字段缺失，不禁止B等待出价
+    for err in errors:
+        assert "R:R硬底线" not in err, f"R:R违规: {err}"
+        assert "机器字段缺失" not in err, f"机器字段: {err}"

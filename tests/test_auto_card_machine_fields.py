@@ -71,17 +71,20 @@ def test_render_machine_fields_is_card_compatible():
 
 
 def test_validate_card_rules_blocks_waiting_card_with_entry_price():
+    """v6.9: B等待允许预案展开（标记为等确认后优先），验证规则仅检查 R:R 和机器字段。"""
     card = """
 **④ 状态：B等待**
-**4. 操作**
+**四、操作**
+—— 预案A · 空头延续 · VAL回收（⚠ 当前B等待·等确认后优先）——
 ① 方向：做空
 ② 入场：`64000` 限价
 ③ 风控：100x
    止损：`64500`
    止盈：`63000`（1:2）
 """
-    errors = auto_card.validate_card_rules(card, {"status": "B等待", "rr1": 2.0})
-    assert any("B等待" in e and "入场" in e for e in errors)
+    errors = auto_card.validate_card_rules(card, {"status": "B等待", "rr1": 1.5, "setup_id": "t", "model_id": "VAL回收", "entry_tag": "t", "exit_tag": "e"})
+    # B等待不再阻止出价，但R:R<2.0会被拦截
+    assert any("R:R硬底线" in e for e in errors)
 
 
 def test_validate_card_rules_blocks_low_rr():
