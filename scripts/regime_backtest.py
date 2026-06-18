@@ -193,6 +193,44 @@ def split_by_regime(result, closes, highs, lows, timestamps, **kw) -> dict[str, 
     return out
 
 
+def overfit_health_check(split: dict) -> dict:
+    """过拟合体检(社区精华·López de Prado + r/algotrading共识)。
+
+    三项启发式:
+      1. 盈利-交易数反向: 高期望栏若交易笔数反而更少 → 运气非边际(最强信号)
+      2. 单栏样本不足: 任一栏 <MIN_SAMPLE → 不可外推
+      3. 跨态期望塌陷: 趋势栏正期望而震荡栏负期望 → 策略仅在趋势有效
+
+    返回 {flags: [...], verdict: str, deflate: bool}
+    deflate=True 表示混合胜率被高估,仓位口径必须用更保守栏。
+    """
+    flags = []
+    t, r = split.get("trend"), split.get("range")
+    deflate = False
+    # 体检1: 盈利-交易数反向关联
+    if t and r and t.n and r.n:
+        hi_exp, lo_exp = (t, r) if t.avg_r >= r.avg_r else (r, t)
+        if hi_exp.n < lo_exp.n * 0.6:
+            flags.append(
+                f"⚠ 盈利栏交易数反而更少({hi_exp.regime} {hi_exp.n}笔 期望{hi_exp.avg_r:+.3f}R "
+                f"< {lo_exp.regime} {lo_exp.n}笔) — 高期望疑似运气非边际(López de Prado)")
+            deflate = True
+    # 体检2: 样本不足
+    for reg, st in split.items():
+        if st and 0 < st.n < MIN_SAMPLE:
+            flags.append(f"⚠ {st.regime}栏样本{st.n}<{MIN_SAMPLE} — 不可外推·不用于权重")
+            deflate = True
+    # 体检3: 跨态期望塌陷
+    if t and r and t.n and r.n and r.avg_r < 0 <= t.avg_r:
+        flags.append("⚠ 震荡栏期望为负·趋势栏为正 — 策略仅趋势有效·震荡月停用")
+        deflate = True
+    if not flags:
+        verdict = "通过 — 未见明显过拟合信号"
+    else:
+        verdict = "不通过 — 混合胜率高估真实期望·仓位用保守栏"
+    return {"flags": flags, "verdict": verdict, "deflate": deflate}
+
+
 def format_regime_report(split: dict, symbol: str = "") -> str:
     """纯纵向·无表格·棠溪卡片风格."""
     lines = [f"分市态回测分栏 — {symbol}".rstrip(" —"), ""]
@@ -248,4 +286,11 @@ if __name__ == "__main__":
     split = split_by_regime(res, closes, highs, lows, ts)
     print(format_regime_report(split, "BTCUSDT"))
     print()
-    print(f"混合胜率(对照): {res.win_rate}% · 混合期望: {res.avg_r:+.3f}R — 不用于仓位")
+    health = overfit_health_check(split)
+    print("【过拟合体检】")
+    print(f"① 结论：{health['verdict']}")
+    for f in health["flags"]:
+        print(f"   {f}")
+    print()
+    deflate_note = " — ⚠ 体检不通过·混合胜率高估·仓位用保守栏" if health["deflate"] else ""
+    print(f"混合胜率(对照): {res.win_rate}% · 混合期望: {res.avg_r:+.3f}R — 不用于仓位{deflate_note}")

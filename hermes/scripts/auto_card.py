@@ -144,11 +144,18 @@ def _env_walls_line(symbol: str, price, klines: dict) -> str:
             _sd = str(_P("D:/Hermes agent/scripts"))
             if _sd not in _sys.path:
                 _sys.path.insert(0, _sd)
-            from depth_wall import analyze_walls
+            from depth_wall import analyze_walls, oi_price_regime
             sym2 = symbol if su.endswith("USDT") else su + "USDT"
             w = analyze_walls(sym2, top_n=2, min_notional_usd=1_000_000)
             if w.get("ok") and (w.get("support_walls") or w.get("resist_walls")):
-                return f"④ 挂单墙：{w['summary']} — 大额限价墙=磁吸位/止损陷阱"
+                line = f"④ 挂单墙：{w['summary']} — 大额限价墙=磁吸位/止损陷阱"
+                try:
+                    oi = oi_price_regime(sym2)
+                    if oi.get("ok"):
+                        line += f"\n④.① {oi['summary']}"
+                except Exception:
+                    pass
+                return line
         except Exception:
             pass
     return f"④ 清算：上 `{_liquidation(klines, 'up')}` · 下 `{_liquidation(klines, 'down')}` — {_liq_read(klines, price)}"
@@ -215,6 +222,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # ═══ ⑩ 头部 ═══
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
     head = [
+        f"**◷ {now.strftime('%Y-%m-%d %H:%M')} CST**",
         f"**① 品种：{symbol}.P:{'OANDA' if 'XAU' in symbol.upper() else 'BINANCE'}**",
         f"**② 周期：**",
         f"**5m {_kl_summary(k5m, '当前')}**",
@@ -283,7 +291,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     game = ["**三、博弈**"]
     game.append(f"① DMI：{bias_cn} — 背景{_dmi_bg(merged)} · 位置{_dmi_pos(klines, price)} · 量能{_dmi_vol(klines)} · 执行等待")
     game.append(f"② 引擎：做空 {short_c:.3f} vs 做多 {long_c:.3f} — **{bias_cn}**")
-    game.append(f"③ 订单流：CVD {cvd_dir} · Taker {taker_dir} · OI {oi_trend.replace('(','').replace(')','') if oi_trend else 'N/A'} — {_flow_confirm(cvd_dir, taker_dir, bias_cn)}")
+    _near_lv = _near_key_level(klines, price)
+    _anchor_txt = "锚定关键位" if _near_lv else "未锚定(信号降噪)"
+    game.append(f"③ 订单流：CVD {cvd_dir} · Taker {taker_dir} · OI {oi_trend.replace('(','').replace(')','') if oi_trend else 'N/A'} — {_flow_confirm(cvd_dir, taker_dir, bias_cn)} · {_anchor_txt}")
+    game.append(f"③.① CVD背离：{_cvd_divergence(cvd_dir, klines, _near_lv)}")
     top_models = sorted([r for r in (results or []) if float(r.get("confidence") or 0) > 0.1], key=lambda r: float(r.get("confidence") or 0), reverse=True)
     strongest_long = next((r for r in top_models if r.get("direction") == "long"), None)
     strongest_short = next((r for r in top_models if r.get("direction") == "short"), None)
@@ -311,7 +322,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"① 方向：{dir_cn}")
         ops.append(f"② 入场：`{_fmt_price(price).strip('`')}` · 限价")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, merged)}")
-        ops.append(f"   确认：CVD转{bias_cn} · Taker {bias_cn}≥1.0 · 15m收线确认")
+        ops.append(f"   确认：CVD转{bias_cn} · Taker {bias_cn}≥1.0 · 15m收线确认 · 订单流须在关键位发生(孤立信号不计)")
         ops.append(f"③ 风控：100x")
         stop_a = _plan_stop(klines, merged, price, bias_cn)
         tp1_a, tp2_a = _plan_targets(klines, price, bias_cn)
@@ -329,7 +340,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"① 方向：{_alt_dir(dir_cn)}")
         ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, bias_cn)}` · 限价")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, bias_cn)}")
-        ops.append(f"   确认：CVD转{_alt_dir(bias_cn)} · Taker {_alt_dir(bias_cn)}≥1.3 · 不再跌回关键位下方")
+        ops.append(f"   确认：CVD转{_alt_dir(bias_cn)} · Taker {_alt_dir(bias_cn)}≥1.3 · 不再跌回关键位下方 · 订单流须在关键位发生(孤立信号不计)")
         ops.append(f"③ 风控：100x")
         stop_b = _plan_stop_b(klines, price, bias_cn)
         tp1_b, tp2_b = _plan_targets_b(klines, price, bias_cn)
@@ -601,6 +612,59 @@ def _dmi_vol(klines: dict) -> str:
 def _flow_confirm(cvd_dir: str, taker_dir: str, bias_cn: str) -> str:
     if cvd_dir == taker_dir: return "确认方向"
     return "分歧待确认"
+
+def _price_momentum(klines: dict) -> str:
+    """近端价格动量方向：取15m优先,回退5m。返回 上行/下行/横盘。"""
+    k = klines.get("15m") or klines.get("5m") or {}
+    c = k.get("close"); o = k.get("open")
+    try:
+        c = float(c); o = float(o)
+        if o <= 0: return "横盘"
+        chg = (c - o) / o * 100
+        if chg > 0.15: return "上行"
+        if chg < -0.15: return "下行"
+        return "横盘"
+    except (TypeError, ValueError):
+        return "横盘"
+
+def _cvd_divergence(cvd_dir: str, klines: dict, near_level: bool) -> str:
+    """CVD背离判定(社区精华·CryptoCred吸收理论)。
+    perp CVD方向 vs 价格动量不一致 → 吸收/假突破 → 反转预警。
+    仅在锚定关键位时才升级为⚠预警(订单流锚定结构铁律)。"""
+    mom = _price_momentum(klines)
+    # CVD 买=买方激进(看多) 卖=卖方激进(看空)
+    cvd_bull = cvd_dir == "买"
+    cvd_bear = cvd_dir == "卖"
+    if mom == "横盘" or cvd_dir in ("N/A", None, ""):
+        return "无显著背离 — CVD与价格动量未分歧"
+    # 背离: CVD看多但价格不跟(下行) / CVD看空但价格上行
+    diverge = (cvd_bull and mom == "下行") or (cvd_bear and mom == "上行")
+    if not diverge:
+        return f"同向 — CVD{cvd_dir}·价格{mom}·订单流续航确认"
+    tag = "⚠ 关键位吸收·反转预警" if near_level else "背离·须价到关键位才计入"
+    side = "多头无续航(诱多/吸筹离场)" if cvd_bull else "空头无续航(诱空/吸筹回补)"
+    return f"{tag} — CVD{cvd_dir}冲·价格{mom}不跟 → {side}"
+
+def _near_key_level(klines: dict, price, threshold_pct: float = 0.4) -> bool:
+    """价格是否锚定在关键位附近(±threshold_pct%)。订单流降噪铁律:孤立信号不计。"""
+    try:
+        p = float(price or 0)
+        if p <= 0: return False
+    except (TypeError, ValueError):
+        return False
+    cands = []
+    for tf in ("4h", "1h", "15m"):
+        k = klines.get(tf) or {}
+        for key in ("vwap", "poc", "val", "vah", "value_val", "value_vah", "high", "low"):
+            v = k.get(key)
+            try:
+                if v: cands.append(float(v))
+            except (TypeError, ValueError):
+                pass
+    for lv in cands:
+        if lv > 0 and abs(p - lv) / p * 100 <= threshold_pct:
+            return True
+    return False
 
 def _x_dir(search_sent: str) -> str:
     if not search_sent: return "未采集"
