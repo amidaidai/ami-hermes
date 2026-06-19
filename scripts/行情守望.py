@@ -88,10 +88,10 @@ ALERT_BUDGET_WINDOW = 3600
 ALERT_BUDGET_BY_TIER = {"critical": 8, "warning": 4, "info": 2, "invalidated": 2, "expired": 1}
 ALERT_BUDGET_GLOBAL = 12
 STRICT_PUSH_MODE = True
-# 棠溪确认监控运行中；warning/位信门槛降至65，避免智能更新位被永久静默。
-# 位信初始分66-74（缺少TradingView+CVD复核）在实时场景+CVD配合上浮后可推到>=65。
-MIN_WARNING_LEVEL_SCORE = 65
-MIN_CRITICAL_LEVEL_SCORE = 70
+# 位信门槛三级梯度（社区共识：接近信号噪音大→高门槛，突破信号已确认→中门槛，失效提醒→低门槛）
+MIN_WARNING_LEVEL_SCORE = 75   # 接近/未确认 → 严格过滤
+MIN_CRITICAL_LEVEL_SCORE = 70  # 突破/已确认 → 优先推送
+MIN_INFO_LEVEL_SCORE = 60      # 失效/过期 → 保持提醒
 NOISE_SUMMARY_WINDOW = 3 * 3600
 MAX_STALE_SECONDS = 90
 MAX_PRICE_JUMP_PCT = {"BTCUSDT": 1.2, "XAUUSD": 0.6}
@@ -158,7 +158,7 @@ def parse_duration(text):
 
 def get_price(symbol, block=None):
     symu = str(symbol).upper()
-    # 最高优先级硬守卫：XAU 系列绝不碰 Binance ticker
+    # 最高优先级硬守卫：XAU 系列绝不碰 Binance ticker (强化版，防止任何路径泄漏400)
     if "XAU" in symu or not symu.endswith("USDT"):
         if ts:
             try:
@@ -171,6 +171,7 @@ def get_price(symbol, block=None):
         if isinstance(block, dict) and isinstance(block.get("price_at_analysis"), (int, float)):
             log(f"价格源不可用 {symbol}: 使用分析价临时兜底")
             return float(block["price_at_analysis"])
+        # 绝不继续到 Binance
         return None
 
     if ts:
@@ -181,6 +182,9 @@ def get_price(symbol, block=None):
                 return float(price)
         except Exception as e:
             log(f"模板价格错误 {symbol}: {e}")
+    # 额外守卫，防止符号漂移
+    if "XAU" in symu or not symu.endswith("USDT"):
+        return None
     try:
         r = _http_get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
         r.raise_for_status()
@@ -486,11 +490,17 @@ def _verify_predictions_if_needed(state: dict):
                 total_verified += len(verified)
         
         if total_verified > 0:
-            log(f"预测回验完成：{total_verified}条")
-            stats = aggregate_stats()
-            if stats.get("total_predictions"):
-                acc = stats.get("overall_accuracy", 0)
-                log(f"模型胜率：{acc:.1%} ({stats['total_predictions']}条已验证)")
+                # 降频：只在首次或每小时输出一次，避免刷 monitor.log
+                should_log = not hasattr(_verify_predictions_if_needed, '_last_log')
+                if not should_log:
+                    should_log = now - getattr(_verify_predictions_if_needed, '_last_log', 0) > 3600
+                if should_log:
+                    log(f"预测回验完成：{total_verified}条")
+                    stats = aggregate_stats()
+                    if stats.get("total_predictions"):
+                        acc = stats.get("overall_accuracy", 0)
+                        log(f"模型胜率：{acc:.1%} ({stats['total_predictions']}条有效预测)")
+                    _verify_predictions_if_needed._last_log = now
     except Exception as e:
         log(f"预测回验错误: {str(e)[:80]}")
 
@@ -907,21 +917,20 @@ def push_allowed(tier, hits, snapshot=None):
             return True, f"触发且位信{score}% · 数据{data_q}级"
         return False, f"未达到强确认：位信{score}% · 数据{data_q}级"
     if tier == "invalidated":
-        if high_priority and score >= 60:
+        if high_priority and score >= 50:
             return True, f"高优先级计划失效且位信{score}%"
-        if score >= MIN_WARNING_LEVEL_SCORE:
+        if score >= MIN_INFO_LEVEL_SCORE:
             return True, f"计划失效且位信{score}%"
-        # v2.1: 失效但位信不足→记录但不静默全部
         return False, f"失效提醒降噪：位信{score}%"
     if tier == "expired":
-        if high_priority or score >= 65:
+        if high_priority or score >= MIN_INFO_LEVEL_SCORE:
             return True, f"{'高优先级' if high_priority else '位信'+str(score)+'%'}过期"
         return False, f"过期降噪：位信{score}%"
-    # v7.4: info 门槛与 MIN_WARNING_LEVEL_SCORE(65) 统一，消除死区
+    # info 用独立门槛（比 warning 宽松，保持提醒）
     if tier == "info":
         if high_priority and score >= 60:
             return True, f"高优先级接近提醒·位信{score}%"
-        if score >= MIN_WARNING_LEVEL_SCORE:
+        if score >= MIN_INFO_LEVEL_SCORE:
             return True, f"接近计划位·位信{score}%"
         return False, f"接近降噪：位信{score}%"
     return False, "严格模式不推送接近/过期提醒"
@@ -1450,22 +1459,26 @@ def process_block(raw, symbol, block, state):
 
     allow_push, push_reason = push_allowed(tier, hits, snapshot)
     pushed = False
+    auto_refreshed = False  # 初始化：只有 allow_push 时才会重算
     if allow_push:
-        msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
-        pushed = push(msg, target=alert_target_for(symbol))
+        # v7.5: 突破后就地自动重算结构（在推送前完成，合并通知到同一条消息）
+        raw, auto_refreshed = auto_refresh_structure(raw, symbol, price, breached)
+        if auto_refreshed:
+            msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
+            msg += f"\n\n🔁 结构已自动重算 — 等回踩确认后说「分析 {symbol.replace('USDT', '')}」刷新卡"
+            pushed = push(msg, target=alert_target_for(symbol))
+        else:
+            msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
+            pushed = push(msg, target=alert_target_for(symbol))
     else:
         log(f"降噪不推送 {symbol} {tier}: {push_reason}")
         record_noise(state, symbol, tier, push_reason)
 
     if breached:
         raw = mark_levels(raw, symbol, {x["name"] for x in breached}, "triggered")
-    # v7.5: 突破后就地自动重算结构（推送已发完，用旧位触发；重算供下一轮）。
-    # 成功重算则不再写 pending 请求；失败时退回旧的 maybe_request_refresh 机制。
-    raw, auto_refreshed = auto_refresh_structure(raw, symbol, price, breached)
+    # v7.5: 结构重算已在推送前完成（合并到同一条消息），此处只处理失败的 pending 请求
     refresh_req = None
-    if auto_refreshed:
-        push(f"🔁 {symbol} · 结构已自动更新\n触发突破后已重算五模型结构位，等回踩确认\n说「分析 {symbol.replace('USDT', '')}」看完整新卡", target=alert_target_for(symbol))
-    else:
+    if not auto_refreshed:
         refresh_req = maybe_request_refresh(raw, symbol, block, tier, hits)
         if refresh_req:
             log(f"结构刷新请求: {symbol} {refresh_req['reasons']}")

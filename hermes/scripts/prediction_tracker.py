@@ -87,16 +87,29 @@ def verify_predictions(symbol: str, current_price: float, lookback_hours: float 
             continue
         
         price_change = (current_price - old_price) / old_price
-        
-        # Direction check: "偏多" should have price up, "偏空" should have price down
+
+        # Direction check: only count meaningful moves (>=0.5% or high confidence)
         direction = pred["direction"]
+        conf = max(pred.get("global_confidence", 0), pred.get("long_confidence", 0), pred.get("short_confidence", 0))
+        min_move = 0.005  # 0.5% for meaningful
         if direction == "偏多":
-            was_correct = price_change > 0.001  # >0.1% up
+            was_correct = price_change > min_move
         elif direction == "偏空":
-            was_correct = price_change < -0.001  # >0.1% down
+            was_correct = price_change < -min_move
         else:
-            was_correct = True  # "方向不明" always correct (no prediction made)
-        
+            # "方向不明" 不算预测，不计入胜率
+            pred["verified"] = True
+            pred["verification_time"] = datetime.now(TZ).isoformat(timespec="seconds")
+            pred["was_correct"] = None  # excluded from stats
+            pred["excluded"] = True
+            updated_lines.append(json.dumps(pred, ensure_ascii=False, separators=(",", ":")))
+            continue
+
+        # Additional: low confidence predictions are not counted as "correct" for stats
+        if conf < 0.5 and not was_correct:
+            pred["was_correct"] = None
+            pred["excluded"] = True
+
         pred["verified"] = True
         pred["verification_time"] = datetime.now(TZ).isoformat(timespec="seconds")
         pred["price_at_verification"] = current_price
@@ -126,7 +139,7 @@ def aggregate_stats() -> dict:
                 continue
             try:
                 p = json.loads(line)
-                if p.get("verified") and p.get("was_correct") is not None:
+                if p.get("verified") and p.get("was_correct") is not None and not p.get("excluded"):
                     predictions.append(p)
             except json.JSONDecodeError:
                 continue
