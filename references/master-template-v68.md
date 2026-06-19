@@ -1,15 +1,24 @@
 # 棠溪分析卡 · 主模板 v6.9.2 (2026-06-20 社区完美融合最终版)
 
 **v6.9.2 完美优化依据（全面联网社区最新共识 2025-2026）**：
-- X/Reddit/Substack/TradingView 社区核心：Liquidity Sweep 是灵魂（机构猎止损），必须 + CVD 背离/吸收确认 + Displacement。
-- Kill Zone（London/NY）是黄金最高概率过滤器，非时段静默或降级。
-- Volume Profile（VAH/VAL/POC/Naked POC/HVN-LVN）+ ICT/SMC 融合是主流盈利框架。
-- 真实回测共识：胜率 50-65%（而非 70-80%），R:R ≥2 底线，≥20 笔真实样本后才调权重。
-- CVD 只在结构关键位（扫荡后）才有效，孤立信号降噪。
-- 4H 结构非可选项，必须先读。
-- 黄金专属：Asia 筑范围 → London 扫 → NY/CVD 确认序列。
-- BTC 专属：现货 CVD vs 永续分化判断杠杆 vs 真实需求。
-- 所有优化均映射到现有融合模块（scoring_engine / five_model_matcher / regime_classifier / structure_detector / cvd_aggtrades）。
+- Liquidity Sweep 是灵魂（机构猎止损），必须 + CVD背离/吸收 + Displacement 确认。孤立信号=噪音。
+- Kill Zone（London/NY）是黄金最高概率过滤器，非时段静默或降级。黄金专属：Asia筑范围 → London扫荡 → NY/CVD确认 + Displacement。
+- Volume Profile（VAH/VAL/POC/Naked POC/HVN-LVN）+ ICT/SMC 是主流盈利框架。
+- CVD 只在关键位（扫荡后）有效；BTC现货vs永续分化判断杠杆vs真实需求。
+- 真实回测共识：胜率50-65%（而非70-80%），R:R≥2底线，≥20笔真实样本后才调权重。
+- 4H结构非可选项，必须先读。
+- Confluence（多重确认）是王道：Sweep + CVD + Displacement + Kill Zone + FVG/OB + 结构 = 高概率。
+- 所有优化映射到现有融合模块（scoring_engine, five_model_matcher, regime_classifier, structure_detector, cvd_aggtrades, multi_model_engine）。
+
+**铁律（永远不变）**：
+- 先 `read_file("references/master-template-v68.md")` 确认底板。
+- 正文零机器字段（setup_id/model_id/entry_tag/exit_tag/critical/warning/info 及其值绝不出现）。
+- 头部10段 + 正文五段完整。
+- R:R 底线 1:2，三源一致优先 ⚠。
+- 每张卡必须有 MEDIA 截图（BTC 15m full + CVD，XAU 5m full + CVD）。
+- 真实成交必须走 成交记录.py → 成交复盘.py → 策略治理.py 更新权重。
+
+本模板为唯一权威，已取代所有旧文件。
 
 **铁律（永远不变）**：
 - 先 read_file("references/master-template-v68.md") 确认底板。

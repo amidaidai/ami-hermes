@@ -724,3 +724,9 @@ if __name__ == "__main__":
     
     print("\n--- JSON ---")
     print(json.dumps({"results": results, "merged": merged}, ensure_ascii=False, indent=2))
+
+def get_perfect_community_signals(data: dict, symbol: str) -> dict:
+    """Perfect v6.9.2 community signals for renderer and monitor."""
+    from auto_card import _compute_perfect_signals  # reuse
+    price = data.get("price", 0)
+    return _compute_perfect_signals(data, symbol, price)

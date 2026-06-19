@@ -465,6 +465,70 @@ def _grade_short(data: dict) -> str:
     if not data: return "C"
     return "A" if data.get("quality") == "A" else "B"
 
+def _compute_perfect_signals(engine_data: dict, symbol: str, price: float) -> dict:
+    """Perfect community signals: liquidity_sweep, cvd_divergence, displacement, kill_zone, confluence.
+    Uses existing snapshot + simple rules mapped from community (Sweep + CVD + Displacement).
+    """
+    ed = engine_data or {}
+    su = symbol.upper()
+    is_xau = "XAU" in su
+    is_btc = "BTC" in su
+
+    # Kill Zone (XAU priority, community consensus)
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    hour = now.hour
+    if is_xau:
+        if 2 <= hour < 5 or 7 <= hour < 10:  # London/NY approx CST
+            kill_zone = "London/NY Kill Zone — 内 · 高优先"
+        else:
+            kill_zone = "非Kill Zone — 静默或降级"
+    else:
+        kill_zone = "全时段优先高流动性"
+
+    # Liquidity Sweep + CVD (core from community)
+    sweep = "无"
+    cvd_div = "无背离"
+    displacement = "弱"
+    try:
+        levels = ed.get("levels", []) or []
+        cvd = ed.get("cvd", {}) or {}
+        cvd_dir = cvd.get("direction", "中性")
+        if levels:
+            for l in levels[:2]:
+                if "扫" in str(l.get("name", "")) or "sweep" in str(l.get("name", "")).lower():
+                    sweep = f"已扫 {l.get('name')}"
+                    if cvd_dir in ("买", "卖"):
+                        cvd_div = f"价格 + CVD {cvd_dir} 背离/吸收"
+                    break
+        # Simple displacement: large move in recent klines
+        k5 = ed.get("klines", {}).get("5m", {})
+        if k5 and k5.get("close") and k5.get("open"):
+            chg = abs(k5["close"] - k5["open"]) / max(k5["open"], 1) * 100
+            if chg > 0.3:
+                displacement = "强"
+    except:
+        pass
+
+    # Confluence score (community: Sweep + CVD + Kill + Structure + FVG)
+    conf = 0
+    if "已扫" in sweep: conf += 3
+    if "背离" in cvd_div or "吸收" in cvd_div: conf += 2
+    if "Kill Zone" in kill_zone and is_xau: conf += 2
+    if displacement == "强": conf += 1
+    confluence = f"{min(conf, 8)}/8 — {'高概率' if conf >= 5 else '需更多确认'}"
+
+    return {
+        "liquidity_sweep": sweep,
+        "cvd_divergence": cvd_div,
+        "displacement": displacement,
+        "kill_zone": kill_zone,
+        "confluence": confluence,
+        "is_xau": is_xau,
+        "is_btc": is_btc
+    }
+
+
 def _cvd_note(quality: str) -> str:
     if quality == "C": return "（K线估算）"
     return ""
