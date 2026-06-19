@@ -17,6 +17,7 @@ from pathlib import Path
 TZ = timezone(timedelta(hours=8))
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / "AppData" / "Local" / "hermes")
 SOURCE = HERMES_HOME / "hermes-agent"
+HERMES_EXE = SOURCE / "venv" / "Scripts" / "hermes.exe"
 LOG_DIR = HERMES_HOME / "maintenance-logs"
 
 
@@ -51,12 +52,17 @@ def main() -> int:
     else:
         report.append("源码：非git目录 · 仅执行 hermes update")
 
-    check_code, check_out = run(["python", "-m", "hermes_cli.main", "update", "--check"], timeout=300)
+    if not HERMES_EXE.exists():
+        report.append(f"状态：失败 · hermes.exe 不存在 {HERMES_EXE}")
+        print("\n".join(report))
+        return 1
+
+    check_code, check_out = run([str(HERMES_EXE), "update", "--check"], timeout=300)
     report.append(f"检查：exit {check_code}")
     if check_out:
         report.append(compact(check_out, 600))
 
-    update_code, update_out = run(["python", "-m", "hermes_cli.main", "update", "--yes", "--backup"], timeout=1200)
+    update_code, update_out = run([str(HERMES_EXE), "update", "--yes", "--backup"], timeout=1200)
     log_file = LOG_DIR / f"hermes-update-{datetime.now(TZ).strftime('%Y%m%d-%H%M%S')}.log"
     log_file.write_text(update_out, encoding="utf-8")
     report.append(f"升级：{'成功' if update_code == 0 else '失败'} · exit {update_code}")
