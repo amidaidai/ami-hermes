@@ -22,6 +22,12 @@ SNAPSHOT_DIR = DATA_DIR / "source_snapshots"
 LOG_FILE = DATA_DIR / "monitor.log"
 ARCHIVE_DIR = DATA_DIR / "snapshot_archive"
 
+# 技能完整性护栏：技能根目录（no-agent cron 在桌面运行时执行，LOCALAPPDATA 可用）
+SKILLS_ROOT = Path(
+    os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))
+) / "hermes" / "skills"
+_LINE_NUM_PREFIX = re.compile(r"^\d+\|")
+
 MAX_EVENTS = 1000
 EVENT_RETENTION_DAYS = 7
 SNAPSHOT_RETENTION_DAYS = 7
@@ -146,10 +152,46 @@ def cleanup_log() -> int:
     return original - len(kept)
 
 
+def check_skill_integrity() -> list[str]:
+    """技能文件完整性护栏：扫描所有 SKILL.md/模板，检测行号污染 + frontmatter 损坏。
+    返回问题描述列表（空=全部健康）。背景：2026-06-19 母版技能被行号污染导致跨渠道
+    分析卡生成不了，此检查防止此类无声损坏复发。"""
+    problems: list[str] = []
+    if not SKILLS_ROOT.is_dir():
+        return problems
+    for p in SKILLS_ROOT.rglob("*.md"):
+        if ".bak" in p.name or "corrupted" in str(p):
+            continue
+        # 1. 行号污染：行首 `数字|`（read_file 带行号输出被当内容回写）
+        try:
+            with open(p, encoding="utf-8") as f:
+                first = f.readline()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _LINE_NUM_PREFIX.match(first):
+            problems.append(f"行号污染: {p.relative_to(SKILLS_ROOT)}")
+            continue
+        # 2. SKILL.md frontmatter 完整性
+        if p.name == "SKILL.md":
+            try:
+                lines = p.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if not lines or lines[0].strip() != "---":
+                problems.append(f"frontmatter首行损坏: {p.relative_to(SKILLS_ROOT)}")
+                continue
+            end = next((i for i in range(1, min(len(lines), 150))
+                        if lines[i].strip() == "---"), None)
+            if end is None:
+                problems.append(f"frontmatter无结束边界: {p.relative_to(SKILLS_ROOT)}")
+    return problems
+
+
 def main() -> None:
     ev_removed = cleanup_events()
     snap_archived, snap_deleted = cleanup_snapshots()
     log_trimmed = cleanup_log()
+    skill_problems = check_skill_integrity()
     parts = []
     if ev_removed:
         parts.append(f"监控事件: 清理{ev_removed}条")
@@ -161,6 +203,12 @@ def main() -> None:
         parts.append(f"日志轮转: 精简{log_trimmed}行")
     if parts:
         print("[清理守护] " + " · ".join(parts))
+    # 技能护栏：只在发现问题时报警（静默通过，不刷屏）
+    if skill_problems:
+        print(f"[技能护栏] ⚠ 发现 {len(skill_problems)} 个损坏技能文件：")
+        for prob in skill_problems[:10]:
+            print(f"  {prob}")
+        print("修复：Python 逐行剥离行首 ^\\d+\\| 前缀，备份后写回，重跑验证。")
 
 
 if __name__ == "__main__":

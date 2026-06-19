@@ -253,7 +253,13 @@ def report_target():
 def _send_one(target, msg):
     """单通道发送。Telegram 走 Bot API 直连（省子进程开销，超时自包含），
     其余通道（Discord 等）走 subprocess → hermes_cli 兜底。
-    返回 True 只代表真实发送成功；失败会写日志，不能再假装 push_sent=True。"""
+    返回 True 只代表真实发送成功；失败会写日志，不能再假装 push_sent=True。
+
+    安全开关：环境变量 HANGQING_NO_SEND=1 时一律不外发（测试/CI 用），
+    避免单元测试或回放把真实消息漏发到 Telegram/Discord。"""
+    if os.environ.get("HANGQING_NO_SEND") == "1":
+        log(f"NO_SEND 拦截 {target}: {str(msg)[:60]}")
+        return True
     # Telegram：优先直连 Bot API
     if str(target).startswith("telegram:") or str(target).lstrip("-").split(":")[0].isdigit():
         try:
