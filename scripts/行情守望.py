@@ -14,6 +14,33 @@ from pathlib import Path
 
 import requests
 
+# v7.6: Binance 偶发 SSL UNEXPECTED_EOF / 瞬断 → 裸 requests.get 单次失败即返回 None，
+# 累积可拖垮主循环判读。共享 Session + 退避重试（社区共识：urllib3 Retry + backoff）。
+_HTTP = requests.Session()
+try:
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    _retry = Retry(total=2, backoff_factor=0.5,
+                   status_forcelist=(429, 500, 502, 503, 504),
+                   allowed_methods=frozenset(["GET"]))
+    _HTTP.mount("https://", HTTPAdapter(max_retries=_retry))
+except Exception:
+    pass
+
+
+def _http_get(url, params=None, timeout=5, retries=2):
+    """带 SSL EOF 兜底的 GET：SSLError/ConnectionError 时短暂退避重试。"""
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            return _HTTP.get(url, params=params, timeout=timeout)
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            last = e
+            if attempt < retries:
+                time.sleep(0.4 * (attempt + 1))
+    raise last
+
+
 try:
     import trading_system as ts
 except (ImportError, ModuleNotFoundError, AttributeError):
@@ -139,7 +166,7 @@ def get_price(symbol, block=None):
         except Exception as e:
             log(f"模板价格错误 {symbol}: {e}")
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
+        r = _http_get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
         r.raise_for_status()
         return float(r.json()["price"])
     except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError, KeyError, TypeError) as e:
@@ -154,7 +181,7 @@ def get_close(symbol, interval):
     if not str(symbol).upper().endswith("USDT"):
         return get_price(symbol)
     try:
-        r = requests.get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": 2}, timeout=5)
+        r = _http_get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": 2}, timeout=5)
         r.raise_for_status()
         k = r.json()
         return float(k[-2][4] if len(k) > 1 else k[-1][4])
@@ -176,7 +203,7 @@ def get_cvd(symbol):
         pass
     # 回退：1m K线 taker_buy_volume 估算
     try:
-        r = requests.get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": "1m", "limit": 5}, timeout=5)
+        r = _http_get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": "1m", "limit": 5}, timeout=5)
         r.raise_for_status()
         k = r.json()
         buy = sum(float(x[9]) for x in k)
@@ -226,32 +253,41 @@ def report_target():
 def _send_one(target, msg):
     """单通道发送。Telegram 走 Bot API 直连（省子进程开销，超时自包含），
     其余通道（Discord 等）走 subprocess → hermes_cli 兜底。
-    所有超时/异常在此吞掉，绝不外抛。"""
+    返回 True 只代表真实发送成功；失败会写日志，不能再假装 push_sent=True。"""
     # Telegram：优先直连 Bot API
     if str(target).startswith("telegram:") or str(target).lstrip("-").split(":")[0].isdigit():
         try:
             from telegram_direct import send_telegram_direct
-            ok, _reason = send_telegram_direct(target, msg, timeout=10)
+            ok, reason = send_telegram_direct(target, msg, timeout=10)
             if ok:
+                log(f"推送成功 {target}: telegram_direct")
                 return True
+            log(f"推送失败 {target}: telegram_direct {reason}")
             # 直连失败（如缺 token）→ 落到 subprocess 兜底
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"推送异常 {target}: telegram_direct {type(e).__name__}: {str(e)[:120]}")
     # 兜底：subprocess → hermes_cli（Discord 等非 Telegram 通道也走这里）
+    last_reason = ""
     for attempt in range(3):
         try:
-            subprocess.run(
+            cp = subprocess.run(
                 [sys.executable, "-m", "hermes_cli.main", "send", "-t", target, "-q", msg],
-                timeout=10, capture_output=True
+                timeout=10, capture_output=True, text=True
             )
-            return True
+            if cp.returncode == 0:
+                log(f"推送成功 {target}: hermes_cli")
+                return True
+            last_reason = (cp.stderr or cp.stdout or f"returncode={cp.returncode}").strip()[:200]
+            log(f"推送失败 {target}: hermes_cli {last_reason}")
         except subprocess.TimeoutExpired:
-            if attempt < 2:
-                time.sleep(1)
+            last_reason = "hermes_cli timeout"
+            log(f"推送超时 {target}: {last_reason}")
         except (OSError, ValueError, requests.Timeout, requests.ConnectionError,
-                requests.HTTPError, KeyError, TypeError):
-            if attempt < 2:
-                time.sleep(1)
+                requests.HTTPError, KeyError, TypeError) as e:
+            last_reason = f"{type(e).__name__}: {str(e)[:160]}"
+            log(f"推送异常 {target}: {last_reason}")
+        if attempt < 2:
+            time.sleep(1)
     return False
 
 

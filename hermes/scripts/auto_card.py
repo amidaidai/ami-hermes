@@ -222,13 +222,13 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # ═══ ⑩ 头部 ═══
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
     head = [
-        f"**◷ {now.strftime('%Y-%m-%d %H:%M')} CST**",
         f"**① 品种：{symbol}.P:{'OANDA' if 'XAU' in symbol.upper() else 'BINANCE'}**",
-        f"**② 周期：**",
-        f"**5m {_kl_summary(k5m, '当前')}**",
-        f"**15m {_kl_summary(k15m, '当前')}**",
-        f"**1h {_kl_summary(k1h, '当前')}**",
-        f"**4h {_kl_summary(k4h, '背景')}**",
+        f"**◷ 时间：{now.strftime('%Y-%m-%d %H:%M')} CST**",
+        f"**② 周期：**（高周期定方向 → 低周期找入场）",
+        f"**4h {_kl_summary(k4h, '背景')}** — 背景偏向",
+        f"**1h {_kl_summary(k1h, '当前')}** — 趋势继承",
+        f"**15m {_kl_summary(k15m, '当前')}** — 执行结构",
+        f"**5m {_kl_summary(k5m, '当前')}** — 触发确认",
         f"**③ 现价：{_fmt_price(price)}** · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
         f"**④ 状态：{status}**",
         f"**⑤ 模型：{model_id}**",

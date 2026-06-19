@@ -57,6 +57,40 @@ def build_payload(chat_id: str, thread_id: int | None, text: str,
     return payload
 
 
+_ENV_TOKEN_CACHE: str | None = None
+
+
+def _token_from_env_file() -> str | None:
+    """从 Hermes .env 文件兜底读取 TELEGRAM_BOT_TOKEN。
+
+    watchdog 用 subprocess.Popen 重启行情守望时不继承父进程环境变量，
+    导致子进程 os.environ 里没有 token → 推送报 missing TELEGRAM_BOT_TOKEN。
+    这里直接读 .env 文件保证无论谁拉起进程都能拿到 token。结果缓存避免反复 IO。
+    """
+    global _ENV_TOKEN_CACHE
+    if _ENV_TOKEN_CACHE is not None:
+        return _ENV_TOKEN_CACHE or None
+    candidates = [
+        os.path.expandvars(r"%LOCALAPPDATA%\hermes\.env"),
+        os.path.expanduser("~/AppData/Local/hermes/.env"),
+        os.path.expanduser("~/.hermes/.env"),
+    ]
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("TELEGRAM_BOT_TOKEN="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if val:
+                            _ENV_TOKEN_CACHE = val
+                            return val
+        except (OSError, UnicodeDecodeError):
+            continue
+    _ENV_TOKEN_CACHE = ""
+    return None
+
+
 def send_telegram_direct(target: str, text: str, token: str | None = None,
                          parse_mode: str | None = None,
                          timeout: int = 10) -> tuple[bool, str]:
@@ -64,7 +98,7 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
 
     返回 (成功, 原因)。任何网络/HTTP 异常都被吞掉返回 (False, reason)，绝不外抛。
     """
-    token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN") or _token_from_env_file()
     if not token:
         return False, "missing TELEGRAM_BOT_TOKEN"
 
