@@ -44,3 +44,21 @@ for name, script, timeout in STEPS:
         print(f"❌ {name} 失败: {e}")
 
 print(f"\n凌晨维护结束 · 成功 {ok} · 失败 {fail}")
+# Day trading extension (added during phase2 push)
+def run_day_trading_maintenance():
+    print("—— 日间交易维护启动 ——")
+    for name, script, timeout in DAY_STEPS:
+        print(f"\n—— {name} ——")
+        try:
+            cp = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=timeout)
+            if cp.stdout.strip(): print(cp.stdout.strip()[:500])
+            print("✅" if cp.returncode==0 else "⚠", name)
+        except Exception as e: print("fail", e)
+    print("日间维护完成")
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv)>1 and "day" in sys.argv[1]:
+        run_day_trading_maintenance()
+    else:
+        print("标准凌晨维护 (用 python 日间维护.py day 跑交易验证)")
