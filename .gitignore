@@ -33,3 +33,16 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+data/
+scripts/*_state.json
+scripts/gold_monitor_state.json
+
+# ===== 本机工具/外部仓库/临时启动器 =====
+tools/
+Run
+restart_gateway.cmd
+restart_gateway.ps1
+restart_gw.bat
+restart_gw.ps1
+restart_gw.vbs
+hermes/scripts/repo-maintenance/reset_remote.py
