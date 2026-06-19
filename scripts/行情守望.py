@@ -219,7 +219,7 @@ def get_cvd(symbol):
 import queue as _queue
 import threading as _threading
 
-# v7.2: 推送异步化 — 主循环绝不被 Telegram/Discord 发送阻塞。
+# v7.2: 推送异步化 — 主循环绝不被 Telegram 发送阻塞。
 # 旧实现用 subprocess.run(timeout=10) 同步发送，且 except 只捕获
 # requests.Timeout（subprocess 超时抛 subprocess.TimeoutExpired，根本没被捕获），
 # 一次卡死可拖垮 10s 主循环 → 心跳停滞 → 看门狗误判卡死。
@@ -251,12 +251,12 @@ def report_target():
 
 
 def _send_one(target, msg):
-    """单通道发送。Telegram 走 Bot API 直连（省子进程开销，超时自包含），
-    其余通道（Discord 等）走 subprocess → hermes_cli 兜底。
+    """单通道发送。仅 Telegram。优先走 Bot API 直连（省子进程开销，超时自包含），
+    直连失败（如缺 token）才落到 subprocess → hermes_cli 兜底，同样发 Telegram。
     返回 True 只代表真实发送成功；失败会写日志，不能再假装 push_sent=True。
 
     安全开关：环境变量 HANGQING_NO_SEND=1 时一律不外发（测试/CI 用），
-    避免单元测试或回放把真实消息漏发到 Telegram/Discord。"""
+    避免单元测试或回放把真实消息漏发到 Telegram。"""
     if os.environ.get("HANGQING_NO_SEND") == "1":
         log(f"NO_SEND 拦截 {target}: {str(msg)[:60]}")
         return True
@@ -272,13 +272,14 @@ def _send_one(target, msg):
             # 直连失败（如缺 token）→ 落到 subprocess 兜底
         except Exception as e:
             log(f"推送异常 {target}: telegram_direct {type(e).__name__}: {str(e)[:120]}")
-    # 兜底：subprocess → hermes_cli（Discord 等非 Telegram 通道也走这里）
+    # 兜底：subprocess → hermes_cli（telegram_direct 缺 token 时仍发 Telegram）
+    # 6秒×2 = worst-case 阻塞 12s，低于看门狗心跳容忍阈值，避免拖垮主循环
     last_reason = ""
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             cp = subprocess.run(
                 [sys.executable, "-m", "hermes_cli.main", "send", "-t", target, "-q", msg],
-                timeout=10, capture_output=True, text=True
+                timeout=6, capture_output=True, text=True
             )
             if cp.returncode == 0:
                 log(f"推送成功 {target}: hermes_cli")
@@ -292,7 +293,7 @@ def _send_one(target, msg):
                 requests.HTTPError, KeyError, TypeError) as e:
             last_reason = f"{type(e).__name__}: {str(e)[:160]}"
             log(f"推送异常 {target}: {last_reason}")
-        if attempt < 2:
+        if attempt < 1:
             time.sleep(1)
     return False
 
@@ -315,7 +316,6 @@ def _push_worker_loop():
                 target, msg = None, item
             tg_target = target or f"telegram:{TG_CHAT}:{ALERT_TOPIC_DEFAULT}"
             _send_one(tg_target, msg)
-            _send_one("discord:1474072925199143167", msg)
         except Exception:
             pass
         finally:

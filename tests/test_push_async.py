@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 # 双保险：进程级关闭真实外发。即便 stub 漏掉某条通道，
-# _send_one 顶部的 NO_SEND 开关也会拦下，绝不漏发真实消息到 Telegram/Discord。
+# _send_one 顶部的 NO_SEND 开关也会拦下，绝不漏发真实消息到 Telegram。
 os.environ.setdefault("HANGQING_NO_SEND", "1")
 
 watch_path = ROOT / "scripts" / "行情守望.py"
