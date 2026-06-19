@@ -29,6 +29,10 @@ BK, BS = _load_binance_keys()
 # ═══════════════════ 基础数据 ═══════════════════
 
 def _price(sym: str) -> Optional[float]:
+    s = str(sym).upper()
+    # 硬守卫：XAUUSD 等非 USDT 对绝不调用 Binance ticker，避免 400
+    if not s.endswith("USDT") or "XAU" in s:
+        return None
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={sym}"
         r = urllib.request.Request(url, headers={"User-Agent": UA})

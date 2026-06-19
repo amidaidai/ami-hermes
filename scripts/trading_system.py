@@ -630,6 +630,9 @@ def http_get(url: str, params: dict[str, Any] | None = None, timeout: int = 10) 
 
 
 def binance_spot_price(symbol: str) -> float | None:
+    s = str(symbol).upper()
+    if not s.endswith("USDT") or "XAU" in s:
+        return None
     try:
         data = http_get("https://api.binance.com/api/v3/ticker/price", {"symbol": symbol})
         return float(data["price"])
