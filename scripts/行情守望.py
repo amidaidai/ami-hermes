@@ -165,16 +165,19 @@ def get_price(symbol, block=None):
                 return float(price)
         except Exception as e:
             log(f"模板价格错误 {symbol}: {e}")
-    try:
-        r = _http_get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
-        r.raise_for_status()
-        return float(r.json()["price"])
-    except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError, KeyError, TypeError) as e:
-        log(f"价格错误 {symbol}: {e}")
-        if isinstance(block, dict) and isinstance(block.get("price_at_analysis"), (int, float)):
-            log(f"价格源不可用 {symbol}: 使用分析价临时兜底")
-            return float(block["price_at_analysis"])
-        return None
+    # 非 USDT 对（XAUUSD/GC=F 等）不回退 Binance，直接走兜底
+    is_usdt_pair = str(symbol).upper().endswith("USDT")
+    if is_usdt_pair:
+        try:
+            r = _http_get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
+            r.raise_for_status()
+            return float(r.json()["price"])
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError, KeyError, TypeError) as e:
+            log(f"价格错误 {symbol}: {e}")
+    if isinstance(block, dict) and isinstance(block.get("price_at_analysis"), (int, float)):
+        log(f"价格源不可用 {symbol}: 使用分析价临时兜底")
+        return float(block["price_at_analysis"])
+    return None
 
 
 def get_close(symbol, interval):
