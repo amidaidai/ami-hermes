@@ -315,6 +315,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     game.append(f"⑪ 分界：`{boundary}` — 不破判{_boundary_up(boundary, bias_cn)} · 跌破判{_boundary_down(boundary, bias_cn)}")
 
     # ═══ 四、操作 ═══
+    leverage_text = _leverage_text(symbol)
+    qty_unit = _qty_unit(symbol)
     ops = ["**四、操作**"]
     if status == "B等待" or direction == "wait":
         ops.append("")
@@ -323,13 +325,13 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"② 入场：`{_fmt_price(price).strip('`')}` · 限价")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, merged)}")
         ops.append(f"   确认：CVD转{bias_cn} · Taker {bias_cn}≥1.0 · 15m收线确认 · 订单流须在关键位发生(孤立信号不计)")
-        ops.append(f"③ 风控：100x")
+        ops.append(f"③ 风控：{leverage_text}")
         stop_a = _plan_stop(klines, merged, price, bias_cn)
         tp1_a, tp2_a = _plan_targets(klines, price, bias_cn)
         ops.append(f"   止损：`{stop_a}` — {_stop_reason(bias_cn)}")
         ops.append(f"   止盈：`{tp1_a}` — {_tp_reason(1, tp1_a, price, bias_cn)}")
         ops.append(f"   止盈：`{tp2_a}` — {_tp_reason(2, tp2_a, price, bias_cn)}")
-        ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn)} BTC`")
+        ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
         ops.append(f"   名义：`{_notional(price, meta, bias_cn)}U`")
         ops.append(f"⑤ 失效：{_plan_a_failure(model_id, klines, merged)} — 取消预案A")
@@ -341,13 +343,13 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, bias_cn)}` · 限价")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, bias_cn)}")
         ops.append(f"   确认：CVD转{_alt_dir(bias_cn)} · Taker {_alt_dir(bias_cn)}≥1.3 · 不再跌回关键位下方 · 订单流须在关键位发生(孤立信号不计)")
-        ops.append(f"③ 风控：100x")
+        ops.append(f"③ 风控：{leverage_text}")
         stop_b = _plan_stop_b(klines, price, bias_cn)
         tp1_b, tp2_b = _plan_targets_b(klines, price, bias_cn)
         ops.append(f"   止损：`{stop_b}` — 关键位下方，跌破说明{_alt_dir(bias_cn)}失败")
         ops.append(f"   止盈：`{tp1_b}` — {_tp_reason_b(1, tp1_b, price, bias_cn)}")
         ops.append(f"   止盈：`{tp2_b}` — {_tp_reason_b(2, tp2_b, price, bias_cn)}")
-        ops.append(f"④ 仓位：`{_qty_b(price, meta, bias_cn)} BTC`")
+        ops.append(f"④ 仓位：`{_qty_b(price, meta, bias_cn)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
         ops.append(f"   名义：`{_notional_b(price, meta, bias_cn)}U`")
         ops.append(f"⑤ 失效：{_plan_b_failure(klines, merged, price, bias_cn)} — {_alt_dir(bias_cn)}失败")
@@ -360,10 +362,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"② 入场：{_fmt_price(price)} · {'市价' if status.startswith('A') else '限价'}")
         ops.append(f"   触发：{model_id} 形态在 5m/15m 收线确认")
         ops.append(f"   确认：CVD{'顺向' if cvd_dir=='买' else '顺向'} · Taker确认 · 回踩不破")
-        ops.append(f"③ 风控：100x")
+        ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   止损：`{_plan_stop(klines, merged, price, bias_cn)}` — 结构反向突破")
         ops.append(f"   止盈：`{_plan_targets(klines, price, bias_cn)[0]}` — R:R底线1:2")
-        ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn)} BTC`")
+        ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
         ops.append(f"⑤ 失效：关键结构位反向收复 — 触发后取消")
         ops.append(f"⑥ 复查：入场后 15m×3根 — CVD/结构/移损")
@@ -388,6 +390,26 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
 
 
 # ── v6.9 helper functions ──
+
+def _leverage_text(symbol: str) -> str:
+    su = symbol.upper()
+    if "XAU" in su:
+        return "Exness 1000x"
+    if su in ("BTCUSDT", "ETHUSDT"):
+        return "Binance 100x"
+    if su.endswith("USDT"):
+        return "Binance 20x"
+    return "按账户规则"
+
+
+def _qty_unit(symbol: str) -> str:
+    su = symbol.upper()
+    if "XAU" in su:
+        return "oz"
+    if su.endswith("USDT"):
+        return su.removesuffix("USDT")
+    return "单位"
+
 
 def _oi_trend(oi_data: dict) -> str:
     if not oi_data: return ""

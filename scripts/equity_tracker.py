@@ -11,7 +11,20 @@ from datetime import datetime, timezone, timedelta
 ROOT = Path("D:/Hermes agent")
 REVIEW_FILE = ROOT / "data" / "trade_reviews.jsonl"
 EQUITY_FILE = ROOT / "data" / "equity_curve.json"
+RISK_FILE = ROOT / "data" / "risk_state.json"
 TZ = timezone(timedelta(hours=8))
+
+
+def load_account_baseline(default: float = 100.0) -> float:
+    try:
+        state = json.loads(RISK_FILE.read_text(encoding="utf-8"))
+        for key in ("daily_starting_balance", "weekly_starting_balance", "capital_usd"):
+            value = state.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return float(value)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return default
 
 
 def load_reviews() -> list[dict]:
@@ -31,7 +44,7 @@ def load_reviews() -> list[dict]:
 
 
 def build_equity_curve(
-    initial_balance: float = 100.0,
+    initial_balance: float | None = None,
     reviews: list[dict] | None = None,
 ) -> dict:
     """
@@ -48,6 +61,8 @@ def build_equity_curve(
     """
     if reviews is None:
         reviews = load_reviews()
+    if initial_balance is None:
+        initial_balance = load_account_baseline()
     
     balance = initial_balance
     points = [{
