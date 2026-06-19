@@ -404,4 +404,4 @@ monitor_write：{true/false}
 - `data/monitor_levels.json` → 监控位（含 plan_id/入场/止损/止盈/失效/类型/优先）
 - `data/trade_plans.jsonl` → 计划记录（含 setup_id/model_id/entry_tag/exit_tag）
 - `data/source_snapshot.json` → 数据快照（自动由 trading_system.py 写入）
-- TEMPLATE 发送 Telegram 话题416 + **末尾 MEDIA 截图**
+- 分析卡发送 Telegram 话题846（任务报告） + 监控警报按品种路由 BTC→386 / XAU→385 / 其他→416 + **末尾 MEDIA 截图**
