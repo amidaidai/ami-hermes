@@ -24,7 +24,7 @@
 
 ```
 **◷ {YYYY-MM-DD HH:MM} CST**
-**① 品种：{SYMBOL} · {交易所}**
+**① 品种：{SYMBOL} · {平台}**
 **② 周期：**
 **5m {状态} — {原因}**
 **15m {状态} — {原因}**
@@ -41,7 +41,7 @@
 ```
 
 头部规则：
-① 品种与交易所分开写；只有加密永续的品种名带 `.P`，例：品种 BTCUSDT.P · 交易所 BINANCE，品种 XAUUSD · 交易所 EXNESS，品种 EURUSD · 交易所 OANDA，品种 AAPL · 交易所 NASDAQ，品种 AAPL250117C · 交易所 OPRA。
+① 品种与平台分开写；只有加密永续的品种名带 `.P`，例：品种 BTCUSDT.P · BINANCE，品种 XAUUSD · EXNESS，品种 EURUSD · OANDA，品种 AAPL · NASDAQ，品种 AAPL250117C · OPRA。
 ② 周期必须逐行写 5m、15m、1h、4h；每行只写状态与原因。
 ③ 模型只允许六类执行模型；不归属六类时只能 B等待 或 X禁做。
 ④ 置信上限：结构与订单流分裂最高 `3/5`；数据 C 级最高 B等待。

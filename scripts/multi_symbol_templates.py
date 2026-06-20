@@ -68,7 +68,7 @@ TEMPLATES = {
     "BNB": {
         "symbol": "BNBUSDT",
         "name": "BNB",
-        "market": "交易所平台币",
+        "market": "平台币",
         "exchange": "Binance",
         "leverage": "20x",
         "risk_usd": 10,

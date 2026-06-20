@@ -225,13 +225,17 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     head = [
         f"◷ {now.strftime('%m-%d %H:%M')} CST",
         f"① 品种：{display_symbol}",
-        f"② 周期：4h {_kl_summary(k4h, '背景')} · 1h {_kl_summary(k1h, '当前')} · 15m {_kl_summary(k15m, '当前')} · 5m {_kl_summary(k5m, '当前')}",
-        f"③ 现价：**{_fmt_price(price)}** · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
-        f"**④ 状态：{status}** · ⑤ 模型：{model_id}",
+        "② 周期：",
+        f"5m {_kl_summary(k5m, '当前')} — 等待方向",
+        f"15m {_kl_summary(k15m, '当前')} — 等待方向",
+        f"1h {_kl_summary(k1h, '当前')} — 等待方向",
+        f"4h {_kl_summary(k4h, '背景')} — 等待方向",
+        f"③ 现价：{_fmt_price(price)} · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
+        f"④ 状态：{status} · ⑤ 模型：{model_id}",
         f"⑥ 评分：{_score13(merged, results, status, symbol)}",
-        f"**⑦ 决策：{_decision_text(merged, status)}** · 置信 {n5}/5",
-        f"**⑧ 仓位：{_pos_level(data_grade, status)}** · **风险 `{meta.get('risk_usd',2)}U`**",
-        f"**⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}**",
+        f"⑦ 决策：{_decision_text(merged, status)} · 置信 {n5}/5",
+        f"⑧ 仓位：{_pos_level(data_grade, status)} · 风险 `{meta.get('risk_usd',2)}U`",
+        f"⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}",
         f"⑩ 数据：{data_grade} · {_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
     ]
 

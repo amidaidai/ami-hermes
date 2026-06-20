@@ -18,10 +18,10 @@ GUARD_FILE = ROOT / "data" / "watchdog_guard.json"
 WATCHDOG_STATE_FILE = ROOT / "data" / "watchdog_state.json"
 SYSTEM_EVENT_FILE = ROOT / "data" / "system_events.jsonl"
 MONITOR_SCRIPT = ROOT / "scripts" / "行情守望.py"
-CHECK_INTERVAL = 45
-STALE_SECONDS = 180
-MAX_RESTARTS_PER_HOUR = 2   # 卡死/环境未就绪类重启的保守预算（防死循环空转）
-MAX_RESTARTS_EMERGENCY = 4  # 真崩溃（进程确已死亡）类重启预算
+CHECK_INTERVAL = 60
+STALE_SECONDS = 300
+MAX_RESTARTS_PER_HOUR = 3   # 放宽以避免风暴
+MAX_RESTARTS_EMERGENCY = 6  # 放宽真崩溃预算
 TZ = timezone(timedelta(hours=8))
 
 

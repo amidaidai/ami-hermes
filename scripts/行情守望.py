@@ -218,7 +218,8 @@ def get_price(symbol, block=None):
 
 
 def get_close(symbol, interval):
-    if not str(symbol).upper().endswith("USDT"):
+    symu = str(symbol).upper()
+    if "XAU" in symu or not symu.endswith("USDT"):
         return get_price(symbol)
     try:
         r = _http_get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": 2}, timeout=5)

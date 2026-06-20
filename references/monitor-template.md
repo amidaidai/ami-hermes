@@ -31,4 +31,4 @@
 ① BTCUSDT：Telegram 386。
 ② XAUUSD：Telegram 385。
 ③ 信号巡检/系统任务：Telegram 416 或 846，按任务性质分发。
-④ Discord 不作为当前推送目标。
+④ 推送目标：Telegram 385/386/846（Feishu sidecar 另行配置）
