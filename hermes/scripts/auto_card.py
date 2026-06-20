@@ -322,44 +322,48 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     asset_risk = _asset_risk_text(symbol)
     asset_review = _asset_review_text(symbol)
     if status == "B等待" or direction == "wait":
+        plan_a_bias = _primary_plan_bias(bias_cn)
+        plan_b_bias = _opposite_bias(plan_a_bias)
+        plan_a_dir = _dir_from_bias(plan_a_bias)
+        plan_b_dir = _dir_from_bias(plan_b_bias)
         ops.append("")
-        ops.append(f"—— 预案A · {_plan_a_name(bias_cn, model_id)}（⚠ 当前B等待·等确认后优先）——")
-        ops.append(f"① 方向：{dir_cn}")
+        ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（⚠ 当前B等待·等确认后优先）——")
+        ops.append(f"① 方向：{plan_a_dir}")
         ops.append(f"② 入场：`{_fmt_price(price).strip('`')}` · 限价")
-        ops.append(f"   触发：{_plan_a_trigger(model_id, klines, merged)}")
+        ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
         ops.append(f"   确认：15m收线确认 — 订单流须在关键位发生 — {asset_confirm}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk}")
-        stop_a = _plan_stop(klines, merged, price, bias_cn, symbol)
-        tp1_a, tp2_a = _plan_targets(klines, price, bias_cn, symbol)
-        ops.append(f"   止损：`{stop_a}` — {_stop_reason(bias_cn)}")
-        ops.append(f"   止盈：`{tp1_a}` — {_tp_reason(1, tp1_a, price, bias_cn, symbol)}")
-        ops.append(f"   止盈：`{tp2_a}` — {_tp_reason(2, tp2_a, price, bias_cn, symbol)}")
-        ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`")
+        stop_a = _plan_stop(klines, merged, price, plan_a_bias, symbol)
+        tp1_a, tp2_a = _plan_targets(klines, price, plan_a_bias, symbol)
+        ops.append(f"   止损：`{stop_a}` — {_stop_reason(plan_a_bias)}")
+        ops.append(f"   止盈：`{tp1_a}` — {_tp_reason(1, tp1_a, price, plan_a_bias, symbol)}")
+        ops.append(f"   止盈：`{tp2_a}` — {_tp_reason(2, tp2_a, price, plan_a_bias, symbol)}")
+        ops.append(f"④ 仓位：`{_qty(price, meta, plan_a_bias, symbol)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"   名义：`{_notional(price, meta, bias_cn, symbol)}U`")
-        ops.append(f"⑤ 失效：{_plan_a_failure(model_id, klines, merged)} — 取消预案A")
+        ops.append(f"   名义：`{_notional(price, meta, plan_a_bias, symbol)}U`")
+        ops.append(f"⑤ 失效：{_plan_failure_by_bias(plan_a_bias)} — 取消预案A")
         ops.append(f"⑥ 复查：入场后 15m×3根 — {asset_review}")
-        ops.append(f"⑦ 轨迹：{_trajectory(status, bias_cn, direction)}")
+        ops.append(f"⑦ 轨迹：{_trajectory(status, plan_a_bias, direction)}")
         ops.append("")
-        ops.append(f"—— 预案B · {_plan_b_name(bias_cn, model_id)}（备选 · 次优）——")
-        ops.append(f"① 方向：{_alt_dir(dir_cn)}")
-        ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, bias_cn, symbol)}` · 限价")
-        ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, bias_cn)}")
+        ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}（备选 · 次优）——")
+        ops.append(f"① 方向：{plan_b_dir}")
+        ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}` · 限价")
+        ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
         ops.append(f"   确认：反向结构接受 — 订单流不再背离 — {asset_confirm}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk}")
-        stop_b = _plan_stop_b(klines, price, bias_cn, symbol)
-        tp1_b, tp2_b = _plan_targets_b(klines, price, bias_cn, symbol)
+        stop_b = _plan_stop_b(klines, price, plan_a_bias, symbol)
+        tp1_b, tp2_b = _plan_targets_b(klines, price, plan_a_bias, symbol)
         ops.append(f"   止损：`{stop_b}` — 关键位外侧，反向接受则失败")
-        ops.append(f"   止盈：`{tp1_b}` — {_tp_reason_b(1, tp1_b, price, bias_cn, symbol)}")
-        ops.append(f"   止盈：`{tp2_b}` — {_tp_reason_b(2, tp2_b, price, bias_cn, symbol)}")
-        ops.append(f"④ 仓位：`{_qty_b(price, meta, bias_cn, symbol)} {qty_unit}`")
+        ops.append(f"   止盈：`{tp1_b}` — {_tp_reason_b(1, tp1_b, price, plan_a_bias, symbol)}")
+        ops.append(f"   止盈：`{tp2_b}` — {_tp_reason_b(2, tp2_b, price, plan_a_bias, symbol)}")
+        ops.append(f"④ 仓位：`{_qty_b(price, meta, plan_a_bias, symbol)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"   名义：`{_notional_b(price, meta, bias_cn, symbol)}U`")
-        ops.append(f"⑤ 失效：{_plan_b_failure(klines, merged, price, bias_cn)} — {_alt_dir(bias_cn)}失败")
+        ops.append(f"   名义：`{_notional_b(price, meta, plan_a_bias, symbol)}U`")
+        ops.append(f"⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)} — {plan_b_dir}失败")
         ops.append(f"⑥ 复查：入场后 15m×3根 — {asset_review}")
-        ops.append(f"⑦ 轨迹：{_trajectory_b(status, bias_cn)}")
+        ops.append(f"⑦ 轨迹：{_trajectory_b(status, plan_b_bias)}")
     else:
         plan_tag = " ⚠优先" if priority in ("A", "B") else ""
         ops.append(f"—— 预案{priority} · {dir_cn}{plan_tag} ——")
@@ -875,6 +879,30 @@ def _plan_a_name(bias_cn: str, model_id: str) -> str:
     dir_word = "空头延续" if bias_cn == "偏空" else "多头延续"
     return f"{dir_word} · {model_id}"
 
+
+def _primary_plan_bias(bias_cn: str) -> str:
+    if bias_cn in ("偏空", "空头"):
+        return "偏空"
+    if bias_cn in ("偏多", "多头"):
+        return "偏多"
+    return "偏多"
+
+
+def _dir_from_bias(bias_cn: str) -> str:
+    if bias_cn == "偏空":
+        return "空头"
+    if bias_cn == "偏多":
+        return "多头"
+    return "观望"
+
+
+def _plan_failure_by_bias(bias_cn: str) -> str:
+    if bias_cn == "偏空":
+        return "站回关键位并被15m接受"
+    if bias_cn == "偏多":
+        return "跌破关键位并被15m接受"
+    return "方向未确认"
+
 def _plan_a_trigger(model_id: str, klines: dict, merged: dict) -> str:
     bias = str(merged.get("bias") or "偏空")
     if bias == "偏空":
@@ -1002,8 +1030,13 @@ def _plan_b_name(bias_cn: str, model_id: str) -> str:
     return f"{alt} · 次优"
 
 def _alt_dir(bias_cn_or_dir: str) -> str:
-    mapping = {"偏空": "多头", "偏多": "空头", "空头": "多头", "多头": "空头"}
+    mapping = {"偏空": "多头", "偏多": "空头", "空头": "多头", "多头": "空头", "观望": "观望"}
     return mapping.get(bias_cn_or_dir, "观望")
+
+
+def _opposite_bias(bias_cn: str) -> str:
+    mapping = {"偏空": "偏多", "偏多": "偏空", "空头": "偏多", "多头": "偏空"}
+    return mapping.get(bias_cn, "观望")
 
 def _plan_b_entry(klines: dict, merged: dict, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     p = float(price or 0)
@@ -1029,11 +1062,10 @@ def _plan_b_trigger(model_id: str, klines: dict, merged: dict, bias_cn: str) -> 
     return "跌破支撑 + 15m收线确认"
 
 def _plan_stop_b(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
-    # delegate to main for proper dynamic distance and RR
-    return _plan_stop(klines, {}, price, bias_cn, symbol)
+    return _plan_stop(klines, {}, price, _opposite_bias(bias_cn), symbol)
 
 def _plan_targets_b(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT"):
-    return _plan_targets(klines, price, bias_cn, symbol)
+    return _plan_targets(klines, price, _opposite_bias(bias_cn), symbol)
 
 def _tp_reason_b(n: int, tp: str, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     p = float(price or 0)
