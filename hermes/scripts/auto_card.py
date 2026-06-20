@@ -226,12 +226,12 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"◷ {now.strftime('%m-%d %H:%M')} CST",
         f"① 品种：{display_symbol}",
         f"② 周期：4h {_kl_summary(k4h, '背景')} · 1h {_kl_summary(k1h, '当前')} · 15m {_kl_summary(k15m, '当前')} · 5m {_kl_summary(k5m, '当前')}",
-        f"③ 现价：{_fmt_price(price)} · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
-        f"④ 状态：{status} · ⑤ 模型：{model_id}",
+        f"③ 现价：**{_fmt_price(price)}** · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
+        f"**④ 状态：{status}** · ⑤ 模型：{model_id}",
         f"⑥ 评分：{_score13(merged, results, status, symbol)}",
-        f"⑦ 决策：{_decision_text(merged, status)} · 置信 {n5}/5",
-        f"⑧ 仓位：{_pos_level(data_grade, status)} · 风险 `{meta.get('risk_usd',2)}U`",
-        f"⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}",
+        f"**⑦ 决策：{_decision_text(merged, status)}** · 置信 {n5}/5",
+        f"**⑧ 仓位：{_pos_level(data_grade, status)}** · **风险 `{meta.get('risk_usd',2)}U`**",
+        f"**⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}**",
         f"⑩ 数据：{data_grade} · {_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
     ]
 
@@ -283,54 +283,54 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         plan_b_dir = _dir_from_bias(plan_b_bias)
         ops.append("")
         ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（优先）——")
-        ops.append(f"① 方向：{plan_a_dir}")
-        ops.append(f"② 入场：`{_fmt_price(price).strip('`')}` · 限价")
+        ops.append(f"**① 方向：{plan_a_dir}**")
+        ops.append(f"**② 入场：`{_fmt_price(price).strip('`')}`** · 限价")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
         ops.append(f"   确认：15m收线 + {_asset_confirm_brief(symbol, 'follow')}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
         stop_a = _plan_stop(klines, merged, price, plan_a_bias, symbol)
         tp1_a, tp2_a = _plan_targets(klines, price, plan_a_bias, symbol)
-        ops.append(f"   止损：`{stop_a}`")
-        ops.append(f"   止盈1：`{tp1_a}`")
-        ops.append(f"   止盈2：`{tp2_a}`")
-        ops.append(f"④ 仓位：`{_qty(price, meta, plan_a_bias, symbol)} {qty_unit}`")
-        ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}")
+        ops.append(f"   **止损：`{stop_a}`**")
+        ops.append(f"   **止盈1：`{tp1_a}`**")
+        ops.append(f"   **止盈2：`{tp2_a}`**")
+        ops.append(f"**④ 仓位：`{_qty(price, meta, plan_a_bias, symbol)} {qty_unit}`**")
+        ops.append(f"   **风险：`{meta.get('risk_usd',2)}U`**")
+        ops.append(f"**⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：等确认 → 入场 → 移损/止盈")
         ops.append("")
         ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}——")
-        ops.append(f"① 方向：{plan_b_dir}")
-        ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}` · 限价")
+        ops.append(f"**① 方向：{plan_b_dir}**")
+        ops.append(f"**② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}`** · 限价")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
         ops.append(f"   确认：反向收线 + {_asset_confirm_brief(symbol, 'reverse')}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
         stop_b = _plan_stop_b(klines, price, plan_a_bias, symbol)
         tp1_b, tp2_b = _plan_targets_b(klines, price, plan_a_bias, symbol)
-        ops.append(f"   止损：`{stop_b}`")
-        ops.append(f"   止盈1：`{tp1_b}`")
-        ops.append(f"   止盈2：`{tp2_b}`")
-        ops.append(f"④ 仓位：`{_qty_b(price, meta, plan_a_bias, symbol)} {qty_unit}`")
-        ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}")
+        ops.append(f"   **止损：`{stop_b}`**")
+        ops.append(f"   **止盈1：`{tp1_b}`**")
+        ops.append(f"   **止盈2：`{tp2_b}`**")
+        ops.append(f"**④ 仓位：`{_qty_b(price, meta, plan_a_bias, symbol)} {qty_unit}`**")
+        ops.append(f"   **风险：`{meta.get('risk_usd',2)}U`**")
+        ops.append(f"**⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：反向确认 → 入场 → 移损/止盈")
     else:
         plan_tag = " ⚠优先" if priority in ("A", "B") else ""
         ops.append(f"—— 预案{priority} · {dir_cn}{plan_tag} ——")
-        ops.append(f"① 方向：{dir_cn}")
-        ops.append(f"② 入场：{_fmt_price(price)} · {'市价' if status.startswith('A') else '限价'}")
+        ops.append(f"**① 方向：{dir_cn}**")
+        ops.append(f"**② 入场：{_fmt_price(price)}** · {'市价' if status.startswith('A') else '限价'}")
         ops.append(f"   触发：{model_id} 形态在 5m/15m 收线确认")
         ops.append(f"   确认：{asset_confirm}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
-        ops.append(f"   止损：`{_plan_stop(klines, merged, price, bias_cn, symbol)}` — 结构反向突破")
-        ops.append(f"   止盈：`{_plan_targets(klines, price, bias_cn, symbol)[0]}` — R:R底线1:2")
-        ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`")
-        ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"⑤ 失效：关键结构位反向收复 — 触发后取消")
+        ops.append(f"   **止损：`{_plan_stop(klines, merged, price, bias_cn, symbol)}`** — 结构反向突破")
+        ops.append(f"   **止盈：`{_plan_targets(klines, price, bias_cn, symbol)[0]}`** — R:R底线1:2")
+        ops.append(f"**④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`**")
+        ops.append(f"   **风险：`{meta.get('risk_usd',2)}U`**")
+        ops.append(f"**⑤ 失效：关键结构位反向收复 — 触发后取消**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：{status} → 入场 → 复查 → 移损/止盈/失效")
 
@@ -338,9 +338,9 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     rr1 = meta.get("rr1")
     risk = [
         "五、风控",
-        f"① 风险：`{meta.get('risk_usd',2)}U` · 日限`10U` · R:R≥1:2",
+        f"**① 风险：`{meta.get('risk_usd',2)}U`** · 日限`10U` · R:R≥1:2",
         f"② 闸门：数据{_gate_data(data_grade)} · 事件{_gate_event(engine_data)} · 执行{_gate_exec(klines, price, status)}",
-        "③ 纪律：不追价 · 不复仇 · 必复盘",
+        "**③ 纪律：不追价 · 不复仇 · 必复盘**",
     ]
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]
