@@ -675,12 +675,27 @@ def _compute_perfect_signals(engine_data: dict, symbol: str, price: float) -> di
     except:
         pass
 
-    # Confluence score (community: Sweep + CVD + Kill + Structure + FVG)
+    # Confluence score (community multi-asset: Sweep + CVD + Kill + Displacement + SMT)
     conf = 0
     if "已扫" in sweep: conf += 3
     if "背离" in cvd_div or "吸收" in cvd_div: conf += 2
     if "Kill Zone" in kill_zone and is_xau: conf += 2
+    if "主要交易时段" in kill_zone and not is_btc: conf += 1   # forex/stock boost
     if displacement == "强": conf += 1
+
+    # Asset specific confluence from new data bridge (DXY SMT, earnings)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from system_data_bridge import asset_macro_enrich
+        macro = asset_macro_enrich(symbol)
+        if macro.get("dxy") and (is_xau or "forex" in str(_asset_class(symbol)).lower()):
+            conf += 1  # SMT confirmation boost
+        if "财报" in macro.get("event_flag", ""):
+            conf -= 1  # caution during earnings
+    except:
+        pass
+
     confluence = f"{min(conf, 8)}/8 — {'高概率' if conf >= 5 else '需更多确认'}"
 
     return {
