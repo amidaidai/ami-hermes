@@ -223,70 +223,50 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
     display_symbol = _display_symbol(symbol)
     head = [
-        f"**◷ {now.strftime('%Y-%m-%d %H:%M')} CST**",
+        f"**◷ {now.strftime('%m-%d %H:%M')} CST**",
         f"**① 品种：{display_symbol}**",
-        f"**② 周期：**（高周期定方向 → 低周期找入场）",
-        f"**4h {_kl_summary(k4h, '背景')}** — 背景偏向",
-        f"**1h {_kl_summary(k1h, '当前')}** — 趋势继承",
-        f"**15m {_kl_summary(k15m, '当前')}** — 执行结构",
-        f"**5m {_kl_summary(k5m, '当前')}** — 触发确认",
+        f"**② 周期：4h {_kl_summary(k4h, '背景')} · 1h {_kl_summary(k1h, '当前')} · 15m {_kl_summary(k15m, '当前')} · 5m {_kl_summary(k5m, '当前')}**",
         f"**③ 现价：{_fmt_price(price)}** · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
-        f"**④ 状态：{status}**",
-        f"**⑤ 模型：{model_id}**",
+        f"**④ 状态：{status}** · **⑤ 模型：{model_id}**",
         f"**⑥ 评分：{_score13(merged, results, status)}**",
-        f"**⑦ 决策：{_decision_text(merged, status)}** · 置信 {n5}/5 — {_reason_one_liner(merged, dir_cn)}",
-        f"**⑧ 仓位：{_pos_level(data_grade, status)}** · 最大风险 `{meta.get('risk_usd',2)}U`",
-        f"**⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}** · 有效期 {meta.get('expires_at','—')[:16].replace('T',' ')}",
-        f"**⑩ 数据：{data_grade}** · {_source_count(engine_data)}源 · 多空{_grade_short(ls_data)}级 · Taker{_grade_short(taker_data)}级 · CVD {cvd_quality}级{_cvd_note(cvd_quality)}",
+        f"**⑦ 决策：{_decision_text(merged, status)}** · 置信 {n5}/5",
+        f"**⑧ 仓位：{_pos_level(data_grade, status)}** · 风险 `{meta.get('risk_usd',2)}U`",
+        f"**⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}**",
+        f"**⑩ 数据：{data_grade}** · {_source_count(engine_data)}源 · Taker{_grade_short(taker_data)} · CVD {cvd_quality}",
     ]
 
-    # ═══ 一、环境（精简速读） ═══
+    # ═══ 一、环境（1500字版） ═══
     fg_v = fg.get("value", "?") if fg else "?"
-    fg_c = fg.get("classification", "?") if fg else "?"
-    _sent_src = "web源·非X实时" if search_sent else "未采集"
     if "XAU" in symbol.upper():
-        flow_line = f"CVD {cvd_dir} {cvd_quality}级 · 黄金无Funding/OI — 看DXY `{_nna(engine_data,'dxy')}` / US10Y `{_nna(engine_data,'us10y')}`"
+        flow_line = f"CVD {cvd_dir}{cvd_quality} · DXY `{_nna(engine_data,'dxy')}` · US10Y `{_nna(engine_data,'us10y')}`"
     else:
-        flow_line = f"Funding `{funding_rate}` · OI `{oi_latest}`{oi_trend} · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir} {cvd_quality}级"
+        flow_line = f"Funding `{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
     env = [
         "**一、环境**",
-        f"① 数据：{data_grade}级 · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}",
-        f"② 资金/订单流：{flow_line}",
-        f"③ 宏观/催化：DXY `{_nna(engine_data,'dxy')}` · US10Y `{_nna(engine_data,'us10y')}` · {_nna(engine_data,'catalyst','无')} — {_catalyst_impact(engine_data)}",
-        f"④ 情绪：F&G `{fg_v}`（{fg_c}）· {_x_dir(search_sent)}（{_sent_src}）— 只验证，不盖过结构",
-        f"⑤ 结论：{_env_risk(data_grade, status)} · {_pos_level(data_grade, status)} · 风险 `{meta.get('risk_usd',2)}U` — {_risk_reason(status, bias_cn)}",
+        f"① 数据：{data_grade} · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}",
+        f"② 资金：{flow_line}",
+        f"③ 催化/情绪：{_nna(engine_data,'catalyst','无')} · F&G `{fg_v}` · {_x_dir(search_sent)}",
     ]
 
-    # ═══ 二、结构（只留可交易信息） ═══
+    # ═══ 二、结构（1500字版） ═══
     struct = ["**二、结构**"]
-    struct.append(f"① 4h：{_kl_bias(k4h)} — {_kl_reason('4h', k4h, merged)} · 失效 `{_invalid_4h(k4h, merged)}`")
-    struct.append(f"② 1h：{_kl_bias(k1h)} — 阻 `{_sr_level(k1h,'res',price)}` · 支 `{_sr_level(k1h,'sup',price)}`")
-    atr_v = _atr_15m(klines)
-    dist = abs((float(price or 0) - float(klines.get('low_15m', price or 0)))) if price and klines.get('low_15m') else 0
-    struct.append(f"③ 15m：{_kl_bias(k15m)} — 执行线 `{_exec_line(klines, merged, status)}` · 禁追 {_chase_ok(dist, atr_v)}")
-    struct.append(f"④ 5m：{_kl_bias(k5m)} — {_trigger_5m(k5m, merged, model_id)}")
-    struct.append(f"⑤ 三线：失效 `{_invalid_4h(k4h, merged)}` · 执行 `{_exec_line(klines, merged, status)}` · 禁追 `{_no_chase_line(klines, price)}`")
+    struct.append(f"① 4h：{_kl_bias(k4h)} · 失效 `{_invalid_4h(k4h, merged)}`")
+    struct.append(f"② 1h/15m：阻 `{_sr_level(k1h,'res',price)}` · 支 `{_sr_level(k1h,'sup',price)}` · 执行 `{_exec_line(klines, merged, status)}`")
+    struct.append(f"③ 5m：{_trigger_5m(k5m, merged, model_id)} · 禁追 `{_no_chase_line(klines, price)}`")
 
-    # ═══ 三、博弈（合并裁决） ═══
+    # ═══ 三、博弈（1500字版） ═══
     _near_lv = _near_key_level(klines, price)
-    _anchor_txt = "锚定关键位" if _near_lv else "未锚定·降噪"
-    top_models = sorted([r for r in (results or []) if float(r.get("confidence") or 0) > 0.1], key=lambda r: float(r.get("confidence") or 0), reverse=True)
-    strongest_long = next((r for r in top_models if r.get("direction") == "long"), None)
-    strongest_short = next((r for r in top_models if r.get("direction") == "short"), None)
+    _anchor_txt = "锚定" if _near_lv else "未锚定"
     structure_dir = _structure_verdict(klines, merged)
     engine_dir = "偏空" if short_c > long_c else "偏多" if long_c > short_c else "中性"
     flow_dir = "偏空" if cvd_dir == "卖" else "偏多" if cvd_dir == "买" else "中性"
     resonance = "共振" if (structure_dir == engine_dir == flow_dir) or status.startswith("A") else "未共振"
-    gd = grok.get("grok_direction")
-    gc = grok.get("grok_confidence", 0)
     boundary = _boundary(klines, merged, price)
     game = [
         "**三、博弈**",
-        f"① 裁决：结构{structure_dir} + 引擎{engine_dir} + 订单流{flow_dir} — **{resonance}**",
-        f"② 强弱：空 {short_c:.2f} vs 多 {long_c:.2f} — 最强空 {strongest_short['name'] if strongest_short else '无'} · 最强多 {strongest_long['name'] if strongest_long else '无'}",
-        f"③ 订单流：CVD {cvd_dir} · Taker {taker_dir} · {_anchor_txt} — {_flow_confirm(cvd_dir, taker_dir, bias_cn)}",
-        f"④ 分歧：{_divergence_handling(resonance, status)} · Grok {'一致' if grok.get('agree') else '跳过' if grok.get('skipped') else '分歧'} {gd or '?'} {float(gc):.2f}",
-        f"⑤ 分界：`{boundary}` — 不破判{_boundary_up(boundary, bias_cn)} · 跌破判{_boundary_down(boundary, bias_cn)}",
+        f"① 裁决：结构{structure_dir} · 引擎{engine_dir} · 订单流{flow_dir} — **{resonance}**",
+        f"② 强弱：空 {short_c:.2f} vs 多 {long_c:.2f} · {_anchor_txt}",
+        f"③ 分界：`{boundary}` — 上方偏多，下破偏空",
     ]
 
     # ═══ 四、操作 ═══
@@ -295,50 +275,50 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     ops = ["**四、操作**"]
     asset_confirm = _asset_confirm_text(symbol, bias_cn, cvd_dir)
     asset_risk = _asset_risk_text(symbol)
+    asset_risk_short = asset_risk.split("；")[0] if isinstance(asset_risk, str) else asset_risk
     asset_review = _asset_review_text(symbol)
+
     if status == "B等待" or direction == "wait":
         plan_a_bias = _primary_plan_bias(bias_cn)
         plan_b_bias = _opposite_bias(plan_a_bias)
         plan_a_dir = _dir_from_bias(plan_a_bias)
         plan_b_dir = _dir_from_bias(plan_b_bias)
         ops.append("")
-        ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（⚠ 当前B等待·等确认后优先）——")
+        ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（优先）——")
         ops.append(f"① 方向：{plan_a_dir}")
         ops.append(f"② 入场：`{_fmt_price(price).strip('`')}` · 限价")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
-        ops.append(f"   确认：15m收线确认 — 订单流须在关键位发生 — {asset_confirm}")
+        ops.append(f"   确认：15m收线 + 订单流配合")
         ops.append(f"③ 风控：{leverage_text}")
-        ops.append(f"   规则：{asset_risk}")
+        ops.append(f"   规则：{asset_risk_short}")
         stop_a = _plan_stop(klines, merged, price, plan_a_bias, symbol)
         tp1_a, tp2_a = _plan_targets(klines, price, plan_a_bias, symbol)
-        ops.append(f"   止损：`{stop_a}` — {_stop_reason(plan_a_bias)}")
-        ops.append(f"   止盈：`{tp1_a}` — {_tp_reason(1, tp1_a, price, plan_a_bias, symbol)}")
-        ops.append(f"   止盈：`{tp2_a}` — {_tp_reason(2, tp2_a, price, plan_a_bias, symbol)}")
+        ops.append(f"   止损：`{stop_a}`")
+        ops.append(f"   止盈1：`{tp1_a}`")
+        ops.append(f"   止盈2：`{tp2_a}`")
         ops.append(f"④ 仓位：`{_qty(price, meta, plan_a_bias, symbol)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"   名义：`{_notional(price, meta, plan_a_bias, symbol)}U`")
-        ops.append(f"⑤ 失效：{_plan_failure_by_bias(plan_a_bias)} — 取消预案A")
-        ops.append(f"⑥ 复查：入场后 15m×3根 — {asset_review}")
-        ops.append(f"⑦ 轨迹：{_trajectory(status, plan_a_bias, direction)}")
+        ops.append(f"⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}")
+        ops.append(f"⑥ 复查：15m×3根，不顺就撤")
+        ops.append(f"⑦ 轨迹：等确认 → 入场 → 移损/止盈")
         ops.append("")
-        ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}（备选 · 次优）——")
+        ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}——")
         ops.append(f"① 方向：{plan_b_dir}")
         ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}` · 限价")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
-        ops.append(f"   确认：反向结构接受 — 订单流不再背离 — {asset_confirm}")
+        ops.append(f"   确认：反向收线 + 订单流不背离")
         ops.append(f"③ 风控：{leverage_text}")
-        ops.append(f"   规则：{asset_risk}")
+        ops.append(f"   规则：{asset_risk_short}")
         stop_b = _plan_stop_b(klines, price, plan_a_bias, symbol)
         tp1_b, tp2_b = _plan_targets_b(klines, price, plan_a_bias, symbol)
-        ops.append(f"   止损：`{stop_b}` — 关键位外侧，反向接受则失败")
-        ops.append(f"   止盈：`{tp1_b}` — {_tp_reason_b(1, tp1_b, price, plan_a_bias, symbol)}")
-        ops.append(f"   止盈：`{tp2_b}` — {_tp_reason_b(2, tp2_b, price, plan_a_bias, symbol)}")
+        ops.append(f"   止损：`{stop_b}`")
+        ops.append(f"   止盈1：`{tp1_b}`")
+        ops.append(f"   止盈2：`{tp2_b}`")
         ops.append(f"④ 仓位：`{_qty_b(price, meta, plan_a_bias, symbol)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
-        ops.append(f"   名义：`{_notional_b(price, meta, plan_a_bias, symbol)}U`")
-        ops.append(f"⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)} — {plan_b_dir}失败")
-        ops.append(f"⑥ 复查：入场后 15m×3根 — {asset_review}")
-        ops.append(f"⑦ 轨迹：{_trajectory_b(status, plan_b_bias)}")
+        ops.append(f"⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}")
+        ops.append(f"⑥ 复查：15m×3根，不顺就撤")
+        ops.append(f"⑦ 轨迹：反向确认 → 入场 → 移损/止盈")
     else:
         plan_tag = " ⚠优先" if priority in ("A", "B") else ""
         ops.append(f"—— 预案{priority} · {dir_cn}{plan_tag} ——")
@@ -347,24 +327,22 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"   触发：{model_id} 形态在 5m/15m 收线确认")
         ops.append(f"   确认：{asset_confirm}")
         ops.append(f"③ 风控：{leverage_text}")
-        ops.append(f"   规则：{asset_risk}")
+        ops.append(f"   规则：{asset_risk_short}")
         ops.append(f"   止损：`{_plan_stop(klines, merged, price, bias_cn, symbol)}` — 结构反向突破")
         ops.append(f"   止盈：`{_plan_targets(klines, price, bias_cn, symbol)[0]}` — R:R底线1:2")
         ops.append(f"④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`")
         ops.append(f"   风险：`{meta.get('risk_usd',2)}U`")
         ops.append(f"⑤ 失效：关键结构位反向收复 — 触发后取消")
-        ops.append(f"⑥ 复查：入场后 15m×3根 — {asset_review}")
+        ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：{status} → 入场 → 复查 → 移损/止盈/失效")
 
     # ═══ 五、风控（精简） ═══
     rr1 = meta.get("rr1")
     risk = [
         "**五、风控**",
-        f"① 风险：单笔 `{meta.get('risk_usd',2)}U` · 日限 `10U` — 小本金默认轻仓",
-        f"② R:R：{'底线 1:2' if rr1 is None else f'1:{rr1}'} — 不够就不做",
-        f"③ 止损/移损：{_stop_pair(klines, merged, price, bias_cn, symbol)} · +1R保本",
-        f"④ 闸门：数据{_gate_data(data_grade)} · 事件{_gate_event(engine_data)} · 执行{_gate_exec(klines, price, status)}",
-        "⑤ 纪律：不追价 · 不复仇 · 入场/结果必须复盘",
+        f"① 风险：`{meta.get('risk_usd',2)}U` · 日限`10U` · R:R≥1:2",
+        f"② 闸门：数据{_gate_data(data_grade)} · 事件{_gate_event(engine_data)} · 执行{_gate_exec(klines, price, status)}",
+        "③ 纪律：不追价 · 不复仇 · 必复盘",
     ]
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]
