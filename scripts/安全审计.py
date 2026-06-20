@@ -49,9 +49,10 @@ def main() -> None:
         score -= min(20, len(high) * 3)
         findings.append("default profile 启用了高权限工具，建议后续拆 trading 专用 profile")
     cron = run([sys.executable, "-m", "hermes_cli.main", "cron", "list", "--all"])
-    if "信号巡检" not in cron or "no-agent" not in cron:
+    has_signal_job = ("持仓与信号" in cron or "信号巡检" in cron) and "no-agent" in cron
+    if not has_signal_job:
         score -= 12
-        findings.append("信号巡检 cron 非 no-agent 或未发现")
+        findings.append("持仓与信号/信号巡检 cron 非 no-agent 或未发现")
     if not (ts.ROOT / "hermes" / "secrets").exists():
         score -= 5
         findings.append("未发现 hermes/secrets 目录")
