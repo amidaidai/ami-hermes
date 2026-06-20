@@ -376,7 +376,7 @@ def _display_symbol(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(su)
     if ac == "gold":
-        return f"{su} · EXNESS"
+        return f"{su} · OANDA"
     if ac == "crypto":
         display = su if su.endswith(".P") else f"{su}.P"
         return f"{display} · BINANCE"
@@ -493,7 +493,7 @@ def _leverage_text(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(symbol)
     if ac == "gold":
-        return "Exness 1000x"
+        return "OANDA 1000x"
     if ac == "crypto":
         if su in ("BTCUSDT", "ETHUSDT"):
             return "Binance 100x"
