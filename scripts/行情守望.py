@@ -105,7 +105,7 @@ META_KEYS = {"updated", "analysis_cycle", "price_at_analysis", "symbol", "symbol
 def display_symbol(symbol: str) -> str:
     su = str(symbol).upper()
     if "XAU" in su or "GOLD" in su:
-        return f"{su} · TradingView"
+        return f"{su} · OANDA"
     if su.endswith("USDT") or "BTC" in su or "ETH" in su:
         display = su if su.endswith(".P") else f"{su}.P"
         return f"{display} · BINANCE"

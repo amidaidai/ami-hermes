@@ -86,7 +86,7 @@ TEMPLATES = {
         "symbol": "XAUUSD",
         "name": "黄金",
         "market": "贵金属",
-        "exchange": "OANDA/TradingView",
+        "exchange": "OANDA",
         "leverage": "1000x",
         "risk_usd": 10,
         "default_risk_usd": 2,

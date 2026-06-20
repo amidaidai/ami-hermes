@@ -376,7 +376,7 @@ def _display_symbol(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(su)
     if ac == "gold":
-        return f"{su} · TradingView"
+        return f"{su} · OANDA"
     if ac == "crypto":
         display = su if su.endswith(".P") else f"{su}.P"
         return f"{display} · BINANCE"
