@@ -240,80 +240,54 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"**⑩ 数据：{data_grade}** · {_source_count(engine_data)}源 · 多空{_grade_short(ls_data)}级 · Taker{_grade_short(taker_data)}级 · CVD {cvd_quality}级{_cvd_note(cvd_quality)}",
     ]
 
-    # ═══ 一、环境 ═══
-    env = ["**一、环境**"]
-    env.append(f"① 数据：{data_grade}级 · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}")
-    if "XAU" in symbol.upper():
-        env.append(f"② 衍生：黄金无 Funding/OI/Taker（非加密·不适用）— 替代：DXY {_nna(engine_data,'dxy')} · US10Y {_nna(engine_data,'us10y')} · 实际利率/避险情绪")
-        env.append(f"③ 主动成交：Binance 订单流不适用黄金 — 改看多源现货一致性（金十+gold-api+Yahoo）· CVD {cvd_dir} {cvd_quality}级（TV估算·仅参考）")
-    else:
-        env.append(f"② 衍生：Funding `{funding_rate}` · OI `{oi_latest}`{oi_trend} · 杠杆情绪{_lev_sentiment(funding_rate, ls_long)}")
-        env.append(f"③ 主动成交：Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir} {cvd_quality}级 — {_taker_cvd_read(taker_dir, cvd_dir, cvd_quality)}")
-    env.append(_env_walls_line(symbol, price, klines))
-    env.append(f"⑤ 宏观：DXY {_nna(engine_data,'dxy')} · US10Y {_nna(engine_data,'us10y')} · SPX {_nna(engine_data,'spx')} — {_macro_read(engine_data)}")
-    env.append(f"⑥ 催化：{_nna(engine_data,'catalyst','无')} · 等级{_nna(engine_data,'catalyst_grade','D')} — {_catalyst_impact(engine_data)}")
+    # ═══ 一、环境（精简速读） ═══
     fg_v = fg.get("value", "?") if fg else "?"
     fg_c = fg.get("classification", "?") if fg else "?"
-    env.append(f"⑦ 社区全景：恐慌贪婪 `{fg_v}`（{fg_c}）· CG情绪 {_cg_read(engine_data)} — 只作背景/仓位微调")
     _sent_src = "web源·非X实时" if search_sent else "未采集"
-    env.append(f"⑧ 情绪：{search_sent or '未采集'}（{_sent_src}）— 只验证/挑战结构·不覆盖方向{' ⚠与结构冲突' if _sent_conflict(search_sent, bias_cn) else ''}")
-    env.append(f"⑨ 数据缺口：{_gaps(engine_data)} — 缺失项不参与加分")
-    env.append(f"⑩ 风控：{_env_risk(data_grade, status)} · {_pos_level(data_grade, status)} · 最大风险 `{meta.get('risk_usd',2)}U` — {_risk_reason(status, bias_cn)}")
+    if "XAU" in symbol.upper():
+        flow_line = f"CVD {cvd_dir} {cvd_quality}级 · 黄金无Funding/OI — 看DXY `{_nna(engine_data,'dxy')}` / US10Y `{_nna(engine_data,'us10y')}`"
+    else:
+        flow_line = f"Funding `{funding_rate}` · OI `{oi_latest}`{oi_trend} · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir} {cvd_quality}级"
+    env = [
+        "**一、环境**",
+        f"① 数据：{data_grade}级 · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}",
+        f"② 资金/订单流：{flow_line}",
+        f"③ 宏观/催化：DXY `{_nna(engine_data,'dxy')}` · US10Y `{_nna(engine_data,'us10y')}` · {_nna(engine_data,'catalyst','无')} — {_catalyst_impact(engine_data)}",
+        f"④ 情绪：F&G `{fg_v}`（{fg_c}）· {_x_dir(search_sent)}（{_sent_src}）— 只验证，不盖过结构",
+        f"⑤ 结论：{_env_risk(data_grade, status)} · {_pos_level(data_grade, status)} · 风险 `{meta.get('risk_usd',2)}U` — {_risk_reason(status, bias_cn)}",
+    ]
 
-    # ═══ 二、结构 ═══
+    # ═══ 二、结构（只留可交易信息） ═══
     struct = ["**二、结构**"]
-    for tf_name, tf_key, tf_label in [("4h背景", "4h", "背景"), ("1h结构", "1h", "结构"), ("15m执行", "15m", "日内操作"), ("5m触发", "5m", "实时")]:
-        k = klines.get(tf_key) or {}
-        struct.append(f"**{tf_name}**")
-        struct.append(f"① 状态：{_kl_bias(k)} — {_kl_reason(tf_key, k, merged)}")
-        if tf_key == "4h":
-            struct.append(f"② 趋势：{_trend_4h(k)}")
-            struct.append(f"③ VWAP：S `{_vwap(k)}` · W `{_vwap(k, 'w')}` · M `{_vwap(k, 'm')}` — {_vwap_pos(k, price)}")
-            struct.append(f"④ 价值：VAH `{_value_area(k,'vah')}` · POC `{_value_area(k,'poc')}` · VAL `{_value_area(k,'val')}` — {_va_read(k, price)}")
-            struct.append(f"⑤ 流动性：上 `{_liq_level(k,'up',price)}` · 下 `{_liq_level(k,'down',price)}` — {_liq_direction(k, price)}")
-            struct.append(f"⑥ 失效线：`{_invalid_4h(k, merged)}` — {_invalid_reason_4h(merged)}")
-        elif tf_key in ("1h", "15m"):
-            struct.append(f"② 关键位：阻 `{_sr_level(k,'res',price)}` · 支 `{_sr_level(k,'sup',price)}`")
-            if tf_key == "15m":
-                atr_v = _atr_15m(klines)
-                dist = abs((float(price or 0) - float(klines.get('low_15m', price or 0)))) if price and klines.get('low_15m') else 0
-                struct.append(f"③ 禁追线：距关键位 `{dist:,.0f}` · ATR `~{atr_v:,.0f}` — {_chase_ok(dist, atr_v)}")
-        elif tf_key == "5m":
-            struct.append(f"② 触发：{_trigger_5m(k, merged, model_id)}")
-            struct.append(f"③ 噪音：{_noise_5m(k)}")
-        struct.append(f"④ 判断：{_tf_verdict(tf_key, k, merged)}")
-    # 三线汇总
-    struct.append("**三线汇总**")
-    struct.append(f"① 失效线：`{_invalid_4h(klines.get('4h',{}), merged)}` — 错了在哪里认错")
-    struct.append(f"② 执行线：`{_exec_line(klines, merged, status)}` — 确认后才动手")
-    struct.append(f"③ 禁追线：`{_no_chase_line(klines, price)}` — 离关键位过远不追")
+    struct.append(f"① 4h：{_kl_bias(k4h)} — {_kl_reason('4h', k4h, merged)} · 失效 `{_invalid_4h(k4h, merged)}`")
+    struct.append(f"② 1h：{_kl_bias(k1h)} — 阻 `{_sr_level(k1h,'res',price)}` · 支 `{_sr_level(k1h,'sup',price)}`")
+    atr_v = _atr_15m(klines)
+    dist = abs((float(price or 0) - float(klines.get('low_15m', price or 0)))) if price and klines.get('low_15m') else 0
+    struct.append(f"③ 15m：{_kl_bias(k15m)} — 执行线 `{_exec_line(klines, merged, status)}` · 禁追 {_chase_ok(dist, atr_v)}")
+    struct.append(f"④ 5m：{_kl_bias(k5m)} — {_trigger_5m(k5m, merged, model_id)}")
+    struct.append(f"⑤ 三线：失效 `{_invalid_4h(k4h, merged)}` · 执行 `{_exec_line(klines, merged, status)}` · 禁追 `{_no_chase_line(klines, price)}`")
 
-    # ═══ 三、博弈 ═══
-    game = ["**三、博弈**"]
-    game.append(f"① DMI：{bias_cn} — 背景{_dmi_bg(merged)} · 位置{_dmi_pos(klines, price)} · 量能{_dmi_vol(klines)} · 执行等待")
-    game.append(f"② 引擎：做空 {short_c:.3f} vs 做多 {long_c:.3f} — **{bias_cn}**")
+    # ═══ 三、博弈（合并裁决） ═══
     _near_lv = _near_key_level(klines, price)
-    _anchor_txt = "锚定关键位" if _near_lv else "未锚定(信号降噪)"
-    game.append(f"③ 订单流：CVD {cvd_dir} · Taker {taker_dir} · OI {oi_trend.replace('(','').replace(')','') if oi_trend else 'N/A'} — {_flow_confirm(cvd_dir, taker_dir, bias_cn)} · {_anchor_txt}")
-    game.append(f"③.① CVD背离：{_cvd_divergence(cvd_dir, klines, _near_lv)}")
+    _anchor_txt = "锚定关键位" if _near_lv else "未锚定·降噪"
     top_models = sorted([r for r in (results or []) if float(r.get("confidence") or 0) > 0.1], key=lambda r: float(r.get("confidence") or 0), reverse=True)
     strongest_long = next((r for r in top_models if r.get("direction") == "long"), None)
     strongest_short = next((r for r in top_models if r.get("direction") == "short"), None)
-    game.append(f"④ 最强多：{strongest_long['name'] if strongest_long else '无'} {float(strongest_long.get('confidence',0)):.2f}" if strongest_long else "④ 最强多：无 — 无有效做多模型匹配")
-    game.append(f"⑤ 最强空：{strongest_short['name'] if strongest_short else '无'} {float(strongest_short.get('confidence',0)):.2f}" if strongest_short else "⑤ 最强空：无 — 无有效做空模型匹配")
-    game.append(f"⑥ 社区：情绪 {_x_dir(search_sent)}（web源·非X实时）· CG {_cg_read(engine_data)} · F&G `{fg_v}` — {_community_read(fg, community)}")
-    game.append(f"⑦ 催化：{_nna(engine_data,'catalyst','无')} · 等级{_nna(engine_data,'catalyst_grade','D')} — {_catalyst_dir(engine_data)}")
     structure_dir = _structure_verdict(klines, merged)
     engine_dir = "偏空" if short_c > long_c else "偏多" if long_c > short_c else "中性"
     flow_dir = "偏空" if cvd_dir == "卖" else "偏多" if cvd_dir == "买" else "中性"
     resonance = "共振" if (structure_dir == engine_dir == flow_dir) or status.startswith("A") else "未共振"
-    game.append(f"⑧ 三源裁决：结构{structure_dir} + 引擎{engine_dir} + 订单流{flow_dir} — **{resonance}**")
-    game.append(f"⑨ 分歧处理：{_divergence_handling(resonance, status)}")
     gd = grok.get("grok_direction")
     gc = grok.get("grok_confidence", 0)
-    game.append(f"⑩ Grok验证：{'一致' if grok.get('agree') else '跳过' if grok.get('skipped') else '分歧'} — 方向{gd or '?'} · 置信{float(gc):.2f}{' · 分歧时置信上限3/5' if not grok.get('agree') and not grok.get('skipped') else ''}")
     boundary = _boundary(klines, merged, price)
-    game.append(f"⑪ 分界：`{boundary}` — 不破判{_boundary_up(boundary, bias_cn)} · 跌破判{_boundary_down(boundary, bias_cn)}")
+    game = [
+        "**三、博弈**",
+        f"① 裁决：结构{structure_dir} + 引擎{engine_dir} + 订单流{flow_dir} — **{resonance}**",
+        f"② 强弱：空 {short_c:.2f} vs 多 {long_c:.2f} — 最强空 {strongest_short['name'] if strongest_short else '无'} · 最强多 {strongest_long['name'] if strongest_long else '无'}",
+        f"③ 订单流：CVD {cvd_dir} · Taker {taker_dir} · {_anchor_txt} — {_flow_confirm(cvd_dir, taker_dir, bias_cn)}",
+        f"④ 分歧：{_divergence_handling(resonance, status)} · Grok {'一致' if grok.get('agree') else '跳过' if grok.get('skipped') else '分歧'} {gd or '?'} {float(gc):.2f}",
+        f"⑤ 分界：`{boundary}` — 不破判{_boundary_up(boundary, bias_cn)} · 跌破判{_boundary_down(boundary, bias_cn)}",
+    ]
 
     # ═══ 四、操作 ═══
     leverage_text = _leverage_text(symbol)
@@ -382,19 +356,16 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"⑥ 复查：入场后 15m×3根 — {asset_review}")
         ops.append(f"⑦ 轨迹：{status} → 入场 → 复查 → 移损/止盈/失效")
 
-    # ═══ 五、风控 ═══
-    risk = ["**五、风控**"]
-    risk.append(f"① 单笔：风险 `{meta.get('risk_usd',2)}U` — 小本金阶段默认轻仓，`10U`是上限不是常态")
-    risk.append(f"② 日限：已用 `0` / `10U` — 达线停止新仓")
+    # ═══ 五、风控（精简） ═══
     rr1 = meta.get("rr1")
-    risk.append(f"③ R:R：{'底线 1:2' if rr1 is None else f'1:{rr1}'} · 底线 1:2 — 不满足直接 X禁做")
-    risk.append(f"④ 止损：{_stop_pair(klines, merged, price, bias_cn, symbol)} — 不因止盈不足而放宽")
-    risk.append(f"⑤ 移损：+1R移至保本 — +2R保护利润")
-    risk.append(f"⑥ 数据闸门：{_gate_data(data_grade)} — 数据{data_grade}级 · 缺口{_gaps(engine_data)}")
-    risk.append(f"⑦ 事件闸门：{_gate_event(engine_data)} — 重大数据前后{'30' if _has_event(engine_data) else '0'}分钟")
-    risk.append(f"⑧ 执行闸门：{_gate_exec(klines, price, status)} — 入场距现价≤0.5ATR才可执行")
-    risk.append(f"⑨ 复盘：入场、止损、止盈、失效、结果必须本地记录 — 卡面只保留人读内容")
-    risk.append(f"⑩ 心态：禁追价 — 禁复仇 — 连亏后暂停")
+    risk = [
+        "**五、风控**",
+        f"① 风险：单笔 `{meta.get('risk_usd',2)}U` · 日限 `10U` — 小本金默认轻仓",
+        f"② R:R：{'底线 1:2' if rr1 is None else f'1:{rr1}'} — 不够就不做",
+        f"③ 止损/移损：{_stop_pair(klines, merged, price, bias_cn, symbol)} · +1R保本",
+        f"④ 闸门：数据{_gate_data(data_grade)} · 事件{_gate_event(engine_data)} · 执行{_gate_exec(klines, price, status)}",
+        "⑤ 纪律：不追价 · 不复仇 · 入场/结果必须复盘",
+    ]
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]
     return "\n\n".join(blocks) + "\n"
@@ -425,17 +396,17 @@ def _display_symbol(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(su)
     if ac == "gold":
-        return f"{su} · 交易所：EXNESS"
+        return f"{su} · EXNESS"
     if ac == "crypto":
         display = su if su.endswith(".P") else f"{su}.P"
-        return f"{display} · 交易所：BINANCE"
+        return f"{display} · BINANCE"
     if ac == "forex":
-        return f"{su} · 交易所：OANDA"
+        return f"{su} · OANDA"
     if ac == "stock":
-        return f"{su} · 交易所：NASDAQ"
+        return f"{su} · NASDAQ"
     if ac == "option":
-        return f"{su} · 交易所：OPRA"
-    return f"{su} · 交易所：待确认"
+        return f"{su} · OPRA"
+    return f"{su} · 待确认"
 
 
 def _leverage_text(symbol: str) -> str:
