@@ -221,9 +221,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
 
     # ═══ ⑩ 头部 ═══
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
+    display_symbol = _display_symbol(symbol)
     head = [
-        f"**① 品种：{symbol}.P:{'OANDA' if 'XAU' in symbol.upper() else 'BINANCE'}**",
-        f"**◷ 时间：{now.strftime('%Y-%m-%d %H:%M')} CST**",
+        f"**◷ {now.strftime('%Y-%m-%d %H:%M')} CST**",
+        f"**① 品种：{display_symbol}**",
         f"**② 周期：**（高周期定方向 → 低周期找入场）",
         f"**4h {_kl_summary(k4h, '背景')}** — 背景偏向",
         f"**1h {_kl_summary(k1h, '当前')}** — 趋势继承",
@@ -418,6 +419,23 @@ def _asset_class(symbol: str) -> str:
     if "CALL" in su or "PUT" in su or "OPTION" in su:
         return "option"
     return "other"
+
+
+def _display_symbol(symbol: str) -> str:
+    su = symbol.upper()
+    ac = _asset_class(su)
+    if ac == "gold":
+        return f"{su}.P:EXNESS"
+    if ac == "crypto":
+        return f"{su}.P:BINANCE"
+    if ac == "forex":
+        return f"{su}.P:OANDA"
+    if ac == "stock":
+        return f"{su}.P:NASDAQ"
+    if ac == "option":
+        return f"{su}.P:OPRA"
+    return f"{su}.P:交易所待确认"
+
 
 def _leverage_text(symbol: str) -> str:
     su = symbol.upper()
