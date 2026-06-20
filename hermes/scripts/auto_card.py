@@ -425,18 +425,17 @@ def _display_symbol(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(su)
     if ac == "gold":
-        return f"EXNESS:{su}"
+        return f"{su} · 交易所：EXNESS"
     if ac == "crypto":
-        if su.endswith(".P"):
-            return f"BINANCE:{su}"
-        return f"BINANCE:{su}.P"
+        display = su if su.endswith(".P") else f"{su}.P"
+        return f"{display} · 交易所：BINANCE"
     if ac == "forex":
-        return f"OANDA:{su}"
+        return f"{su} · 交易所：OANDA"
     if ac == "stock":
-        return f"NASDAQ:{su}"
+        return f"{su} · 交易所：NASDAQ"
     if ac == "option":
-        return f"OPRA:{su}"
-    return f"交易所待确认:{su}"
+        return f"{su} · 交易所：OPRA"
+    return f"{su} · 交易所：待确认"
 
 
 def _leverage_text(symbol: str) -> str:

@@ -105,19 +105,18 @@ META_KEYS = {"updated", "analysis_cycle", "price_at_analysis", "symbol", "symbol
 def display_symbol(symbol: str) -> str:
     su = str(symbol).upper()
     if "XAU" in su or "GOLD" in su:
-        return f"EXNESS:{su}"
+        return f"{su} · 交易所：EXNESS"
     if su.endswith("USDT") or "BTC" in su or "ETH" in su:
-        if su.endswith(".P"):
-            return f"BINANCE:{su}"
-        return f"BINANCE:{su}.P"
+        display = su if su.endswith(".P") else f"{su}.P"
+        return f"{display} · 交易所：BINANCE"
     forex_markers = ("EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF")
     if any(x in su for x in forex_markers) and not su.endswith("USDT"):
-        return f"OANDA:{su}"
+        return f"{su} · 交易所：OANDA"
     if "CALL" in su or "PUT" in su or "OPTION" in su or any(ch.isdigit() for ch in su) and (su.endswith("C") or su.endswith("P")):
-        return f"OPRA:{su}"
+        return f"{su} · 交易所：OPRA"
     if su.isalpha() and len(su) <= 5:
-        return f"NASDAQ:{su}"
-    return f"交易所待确认:{su}"
+        return f"{su} · 交易所：NASDAQ"
+    return f"{su} · 交易所：待确认"
 
 
 def now_local():
