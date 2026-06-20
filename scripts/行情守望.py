@@ -65,7 +65,10 @@ try:
             SEQ_NUMS,
         )
 except (ImportError, ModuleNotFoundError, AttributeError):
-    display_name = display_plan = format_level_block = lab = seq = situation_text = None
+    display_name = display_plan = format_level_block = lab = seq = None
+    SEQ_NUMS = list("①②③④⑤⑥⑦⑧⑨⑩")
+    def situation_text(tier):
+        return str(tier)
 
 DEFAULT_SYMBOL = "BTCUSDT"
 ROOT = Path("D:/Hermes agent")
@@ -97,6 +100,24 @@ MAX_STALE_SECONDS = 90
 MAX_PRICE_JUMP_PCT = {"BTCUSDT": 1.2, "XAUUSD": 0.6}
 DATA_FAILURE_LIMIT = 3
 META_KEYS = {"updated", "analysis_cycle", "price_at_analysis", "symbol", "symbols", "levels", "plan_id"}
+
+
+def display_symbol(symbol: str) -> str:
+    su = str(symbol).upper()
+    if "XAU" in su or "GOLD" in su:
+        return f"EXNESS:{su}"
+    if su.endswith("USDT") or "BTC" in su or "ETH" in su:
+        if su.endswith(".P"):
+            return f"BINANCE:{su}"
+        return f"BINANCE:{su}.P"
+    forex_markers = ("EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF")
+    if any(x in su for x in forex_markers) and not su.endswith("USDT"):
+        return f"OANDA:{su}"
+    if "CALL" in su or "PUT" in su or "OPTION" in su or any(ch.isdigit() for ch in su) and (su.endswith("C") or su.endswith("P")):
+        return f"OPRA:{su}"
+    if su.isalpha() and len(su) <= 5:
+        return f"NASDAQ:{su}"
+    return f"交易所待确认:{su}"
 
 
 def now_local():
@@ -1192,7 +1213,7 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
         _n[0] += 1
         return SEQ_NUMS[_n[0] - 1] if _n[0] <= len(SEQ_NUMS) else f"{_n[0]}."
     # 品种
-    lines.append(f"{_seq()} 品种：{symbol}.P:{'OANDA' if 'XAU' in symbol.upper() else 'BINANCE'}")
+    lines.append(f"{_seq()} 品种：{display_symbol(symbol)}")
     # 周期（监控触发周期描述）
     lines.append(f"{_seq()} 周期：{cycle}")
     # 现价

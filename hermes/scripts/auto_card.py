@@ -406,6 +406,8 @@ def _asset_class(symbol: str) -> str:
     su = symbol.upper()
     if "XAU" in su or "GOLD" in su:
         return "gold"
+    if "CALL" in su or "PUT" in su or "OPTION" in su or any(ch.isdigit() for ch in su) and (su.endswith("C") or su.endswith("P")):
+        return "option"
     # Forex pairs first (contain currency codes but not pure crypto)
     forex_markers = ["EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"]
     if any(x in su for x in forex_markers) and ("USDT" not in su and "USD" not in su[-4:]):
@@ -416,8 +418,6 @@ def _asset_class(symbol: str) -> str:
         return "crypto"
     if su in ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN"] or (su.isalpha() and len(su) <= 5):
         return "stock"
-    if "CALL" in su or "PUT" in su or "OPTION" in su:
-        return "option"
     return "other"
 
 
@@ -425,16 +425,18 @@ def _display_symbol(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(su)
     if ac == "gold":
-        return f"{su}.P:EXNESS"
+        return f"EXNESS:{su}"
     if ac == "crypto":
-        return f"{su}.P:BINANCE"
+        if su.endswith(".P"):
+            return f"BINANCE:{su}"
+        return f"BINANCE:{su}.P"
     if ac == "forex":
-        return f"{su}.P:OANDA"
+        return f"OANDA:{su}"
     if ac == "stock":
-        return f"{su}.P:NASDAQ"
+        return f"NASDAQ:{su}"
     if ac == "option":
-        return f"{su}.P:OPRA"
-    return f"{su}.P:交易所待确认"
+        return f"OPRA:{su}"
+    return f"交易所待确认:{su}"
 
 
 def _leverage_text(symbol: str) -> str:
