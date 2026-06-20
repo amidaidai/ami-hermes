@@ -284,7 +284,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append("")
         ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（优先）——")
         ops.append(f"**① 方向：{plan_a_dir}**")
-        ops.append(f"**② 入场：`{_fmt_price(price).strip('`')}`** · 限价")
+        ops.append(f"**② 入场：`{_plan_a_entry(klines, merged, price, plan_a_bias, symbol)}`** · 等待触发")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
         ops.append(f"   确认：15m收线 + {_asset_confirm_brief(symbol, 'follow')}")
         ops.append(f"③ 风控：{leverage_text}")
@@ -302,7 +302,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append("")
         ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}——")
         ops.append(f"**① 方向：{plan_b_dir}**")
-        ops.append(f"**② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}`** · 限价")
+        ops.append(f"**② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}`** · 等待触发")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
         ops.append(f"   确认：反向收线 + {_asset_confirm_brief(symbol, 'reverse')}")
         ops.append(f"③ 风控：{leverage_text}")
@@ -1036,16 +1036,6 @@ def _plan_targets(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT"):
 def _stop_reason(bias_cn: str) -> str:
     return "反弹高点上沿" if bias_cn == "偏空" else "支撑下方"
 
-def _tp_reason(n: int, tp: str, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
-    p = float(price or 0)
-    tp_v = float(tp.replace(",", ""))
-    stop_str = _plan_stop({}, {}, price, bias_cn, symbol)
-    stop_v = float(stop_str.replace(",", ""))
-    dist = abs(tp_v - p)
-    stop_dist = abs(stop_v - p)
-    rr = dist / stop_dist if stop_dist > 0 else 2.0
-    return f"${dist:,.0f}（1:{rr:.1f}）"
-
 def _qty(price, meta: dict, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     risk = float(meta.get("risk_usd", 2))
     p = float(price or 62000)
@@ -1119,23 +1109,32 @@ def _opposite_bias(bias_cn: str) -> str:
     mapping = {"偏空": "偏多", "偏多": "偏空", "空头": "偏多", "多头": "偏空"}
     return mapping.get(bias_cn, "观望")
 
-def _plan_b_entry(klines: dict, merged: dict, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
+def _plan_entry_offset(price, bias_cn: str, symbol: str, direction: str = "a") -> float:
+    """预案触发价偏移。预案A=主方向触发价（偏空→现价上方等反弹失败，偏多→现价下方等回踩）；
+    预案B=反向，方向相反。返回偏移后的绝对价格。"""
     p = float(price or 0)
     ac = _asset_class(symbol)
-    if ac == "gold":
-        offset = -8 if bias_cn == "偏空" else 8
-    elif ac == "forex":
-        offset = -0.0015 if bias_cn == "偏空" else 0.0015
-    elif ac == "stock":
-        offset = -2 if bias_cn == "偏空" else 2
-    elif ac == "option":
-        offset = -0.2 if bias_cn == "偏空" else 0.2
-    else:
-        offset = -200 if bias_cn == "偏空" else 200
-    value = p + offset
+    base = {"gold": 8, "forex": 0.0015, "stock": 2, "option": 0.2}.get(ac, 200)
+    # 预案A主方向：偏空挂上方(+)、偏多挂下方(-)；预案B反向取反
+    sign = (1 if bias_cn == "偏空" else -1)
+    if direction == "b":
+        sign = -sign
+    return p + sign * base
+
+
+def _fmt_entry(value: float, symbol: str) -> str:
+    ac = _asset_class(symbol)
     if ac in {"forex", "option"}:
         return f"{value:,.4f}"
     return f"{value:,.0f}"
+
+
+def _plan_a_entry(klines: dict, merged: dict, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
+    return _fmt_entry(_plan_entry_offset(price, bias_cn, symbol, "a"), symbol)
+
+
+def _plan_b_entry(klines: dict, merged: dict, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
+    return _fmt_entry(_plan_entry_offset(price, bias_cn, symbol, "b"), symbol)
 
 def _plan_b_trigger(model_id: str, klines: dict, merged: dict, bias_cn: str) -> str:
     if bias_cn == "偏空":
@@ -1147,14 +1146,6 @@ def _plan_stop_b(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT") -> 
 
 def _plan_targets_b(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT"):
     return _plan_targets(klines, price, _opposite_bias(bias_cn), symbol)
-
-def _tp_reason_b(n: int, tp: str, price, bias_cn: str, symbol: str = "BTCUSDT") -> str:
-    p = float(price or 0)
-    tp_v = float(tp.replace(",",""))
-    dist = abs(tp_v - p)
-    stop_v = float(_plan_stop_b({}, price, bias_cn, symbol).replace(",",""))
-    rr = dist / abs(stop_v - p) if abs(stop_v - p) > 0 else 2
-    return f"${dist:,.0f}（1:{rr:.1f}）"
 
 def _qty_b(price, meta: dict, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     risk = float(meta.get("risk_usd", 2))

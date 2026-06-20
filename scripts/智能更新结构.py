@@ -228,7 +228,7 @@ def update_symbol(raw: dict[str, Any], symbol: str, reasons: list[str] | None = 
     snap_quality = price_probe.get("quality")
     try:
         import json as _json
-        snap = _json.loads((DATA_DIR / "source_snapshot.json").read_text(encoding="utf-8"))
+        snap = _json.loads((DATA / "source_snapshot.json").read_text(encoding="utf-8"))
         snap_symbols = snap.get("symbols") if isinstance(snap.get("symbols"), dict) else {}
         if symbol in snap_symbols:
             snap_q = snap_symbols[symbol].get("quality", snap_quality)
