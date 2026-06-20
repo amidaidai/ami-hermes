@@ -418,18 +418,23 @@ def pid_alive(pid):
 
 def acquire_lock():
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if LOCK_FILE.exists():
+    payload = {"pid": os.getpid(), "started": now_local().isoformat(), "script": str(Path(__file__).resolve())}
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        write_heartbeat("start")
+        return True
+    except FileExistsError:
         try:
             lock = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
             old_pid = int(lock.get("pid") or 0)
-            old_started = lock.get("started")
         except (json.JSONDecodeError, OSError, ValueError, KeyError):
             try:
                 old_pid = int(LOCK_FILE.read_text(encoding="utf-8").strip() or "0")
-                old_started = None
             except (json.JSONDecodeError, OSError, ValueError, KeyError):
                 old_pid = 0
-                old_started = None
         if pid_alive(old_pid):
             log(f"已有监控运行: PID {old_pid}")
             return False
@@ -437,10 +442,15 @@ def acquire_lock():
             LOCK_FILE.unlink()
         except FileNotFoundError:
             pass
-    payload = {"pid": os.getpid(), "started": now_local().isoformat(), "script": str(Path(__file__).resolve())}
-    LOCK_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_heartbeat("start")
-    return True
+        try:
+            fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            write_heartbeat("start")
+            return True
+        except FileExistsError:
+            log("监控锁被并发创建，放弃启动")
+            return False
 
 
 def write_heartbeat(status="running", symbol=None):

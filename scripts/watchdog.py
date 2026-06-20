@@ -4,6 +4,7 @@
 30秒检查 monitor_heartbeat.json，心跳停滞>90秒则自动重启行情守望.py
 """
 
+import atexit
 import json, subprocess, sys, time, os
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -11,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 ROOT = Path("D:/Hermes agent")
 HEARTBEAT_FILE = ROOT / "data" / "monitor_heartbeat.json"
 LOCK_FILE = ROOT / "data" / "monitor.lock"
+WATCHDOG_LOCK_FILE = ROOT / "data" / "watchdog.lock"
 LOG_FILE = ROOT / "data" / "watchdog.log"
 GUARD_FILE = ROOT / "data" / "watchdog_guard.json"
 WATCHDOG_STATE_FILE = ROOT / "data" / "watchdog_state.json"
@@ -101,6 +103,45 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
+def acquire_watchdog_lock() -> bool:
+    WATCHDOG_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"pid": os.getpid(), "started": datetime.now(TZ).isoformat()}, ensure_ascii=False)
+    try:
+        fd = os.open(str(WATCHDOG_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+        return True
+    except FileExistsError:
+        try:
+            lock = json.loads(WATCHDOG_LOCK_FILE.read_text(encoding="utf-8"))
+            old_pid = int(lock.get("pid") or 0)
+        except Exception:
+            old_pid = 0
+        if old_pid and pid_alive(old_pid):
+            print(f"已有看门狗运行: PID {old_pid}", flush=True)
+            return False
+        try:
+            WATCHDOG_LOCK_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            fd = os.open(str(WATCHDOG_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            return True
+        except FileExistsError:
+            return False
+
+
+def release_watchdog_lock():
+    try:
+        lock = json.loads(WATCHDOG_LOCK_FILE.read_text(encoding="utf-8"))
+        if str(lock.get("pid")) == str(os.getpid()):
+            WATCHDOG_LOCK_FILE.unlink()
+    except Exception:
+        pass
+
+
 def start_monitor(emergency: bool = False) -> bool:
     """启动行情守望（含速率限制）
 
@@ -172,7 +213,10 @@ def start_monitor(emergency: bool = False) -> bool:
 
 
 def main():
-    log("看门狗启动 · 检查间隔30s · 超时90s")
+    if not acquire_watchdog_lock():
+        return
+    atexit.register(release_watchdog_lock)
+    log("看门狗启动 · 检查间隔45s · 超时180s")
     restart_count = 0
     
     while True:
