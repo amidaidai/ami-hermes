@@ -33,6 +33,25 @@ GOLD_KILL_ZONES = {
 BTC_ACTIVE_HOURS = None  # None = 24/7, BTC always tradeable
 
 
+# ═══ 黄金/外汇周末休市窗口 (UTC) ═══
+# 收盘: 周五 21:00 UTC (纽约盘结束)
+# 开盘: 周日 22:00 UTC (悉尼盘开始)
+# 期间(周六全天 + 周五晚 + 周日早)市场关闭，不应推送告警。
+def is_weekend_closed(dt: datetime = None) -> bool:
+    """黄金/外汇是否处于周末休市窗口 (UTC基准)。BTC不受影响。"""
+    if dt is None:
+        dt = datetime.now(TZ_UTC)
+    wd = dt.weekday()  # 周一=0 … 周五=4 周六=5 周日=6
+    hour = dt.hour
+    if wd == 5:                       # 周六全天休市
+        return True
+    if wd == 4 and hour >= 21:        # 周五 21:00 UTC 后收盘
+        return True
+    if wd == 6 and hour < 22:         # 周日 22:00 UTC 前未开盘
+        return True
+    return False
+
+
 @dataclass
 class SessionConfig:
     """时段配置"""
@@ -51,6 +70,10 @@ def get_active_sessions(asset: str = "XAUUSD", dt: datetime = None) -> list[str]
     
     if asset.upper() in ("BTCUSDT", "BTC", "ETHUSDT"):
         return ["24/7"]
+    
+    # 黄金/外汇周末休市 → 直接 closed，不按小时判时段
+    if is_weekend_closed(dt):
+        return ["closed"]
     
     active = []
     for name, (start, end) in GOLD_SESSIONS.items():
