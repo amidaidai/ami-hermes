@@ -228,24 +228,21 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"**② 周期：4h {_kl_summary(k4h, '背景')} · 1h {_kl_summary(k1h, '当前')} · 15m {_kl_summary(k15m, '当前')} · 5m {_kl_summary(k5m, '当前')}**",
         f"**③ 现价：{_fmt_price(price)}** · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
         f"**④ 状态：{status}** · **⑤ 模型：{model_id}**",
-        f"**⑥ 评分：{_score13(merged, results, status)}**",
+        f"**⑥ 评分：{_score13(merged, results, status, symbol)}**",
         f"**⑦ 决策：{_decision_text(merged, status)}** · 置信 {n5}/5",
         f"**⑧ 仓位：{_pos_level(data_grade, status)}** · 风险 `{meta.get('risk_usd',2)}U`",
         f"**⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}**",
-        f"**⑩ 数据：{data_grade}** · {_source_count(engine_data)}源 · Taker{_grade_short(taker_data)} · CVD {cvd_quality}",
+        f"**⑩ 数据：{data_grade}** · {_source_count(engine_data)}源 · {_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
     ]
 
     # ═══ 一、环境（1500字版） ═══
     fg_v = fg.get("value", "?") if fg else "?"
-    if "XAU" in symbol.upper():
-        flow_line = f"CVD {cvd_dir}{cvd_quality} · DXY `{_nna(engine_data,'dxy')}` · US10Y `{_nna(engine_data,'us10y')}`"
-    else:
-        flow_line = f"Funding `{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
+    flow_line = _asset_flow_line(symbol, engine_data, funding_rate, taker_dir, taker_ratio, cvd_dir, cvd_quality)
     env = [
         "**一、环境**",
         f"① 数据：{data_grade} · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}",
         f"② 资金：{flow_line}",
-        f"③ 催化/情绪：{_nna(engine_data,'catalyst','无')} · F&G `{fg_v}` · {_x_dir(search_sent)}",
+        f"③ 催化/情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)}",
     ]
 
     # ═══ 二、结构（1500字版） ═══
@@ -259,12 +256,13 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     _anchor_txt = "锚定" if _near_lv else "未锚定"
     structure_dir = _structure_verdict(klines, merged)
     engine_dir = "偏空" if short_c > long_c else "偏多" if long_c > short_c else "中性"
-    flow_dir = "偏空" if cvd_dir == "卖" else "偏多" if cvd_dir == "买" else "中性"
+    flow_dir = _asset_flow_bias(symbol, cvd_dir, engine_data)
+    flow_label = _asset_flow_label(symbol)
     resonance = "共振" if (structure_dir == engine_dir == flow_dir) or status.startswith("A") else "未共振"
     boundary = _boundary(klines, merged, price)
     game = [
         "**三、博弈**",
-        f"① 裁决：结构{structure_dir} · 引擎{engine_dir} · 订单流{flow_dir} — **{resonance}**",
+        f"① 裁决：结构{structure_dir} · 引擎{engine_dir} · {flow_label}{flow_dir} — **{resonance}**",
         f"② 强弱：空 {short_c:.2f} vs 多 {long_c:.2f} · {_anchor_txt}",
         f"③ 分界：`{boundary}` — 上方偏多，下破偏空",
     ]
@@ -288,7 +286,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"① 方向：{plan_a_dir}")
         ops.append(f"② 入场：`{_fmt_price(price).strip('`')}` · 限价")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
-        ops.append(f"   确认：15m收线 + 订单流配合")
+        ops.append(f"   确认：15m收线 + {_asset_confirm_brief(symbol, cvd_dir)}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
         stop_a = _plan_stop(klines, merged, price, plan_a_bias, symbol)
@@ -306,7 +304,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"① 方向：{plan_b_dir}")
         ops.append(f"② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}` · 限价")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
-        ops.append(f"   确认：反向收线 + 订单流不背离")
+        ops.append(f"   确认：反向收线 + {_asset_confirm_brief(symbol, cvd_dir)}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
         stop_b = _plan_stop_b(klines, price, plan_a_bias, symbol)
@@ -385,6 +383,106 @@ def _display_symbol(symbol: str) -> str:
     if ac == "option":
         return f"{su} · OPRA"
     return f"{su} · 待确认"
+
+
+def _asset_data_line(symbol: str, engine_data: dict, taker_data: dict, cvd_quality: str) -> str:
+    ac = _asset_class(symbol)
+    if ac == "crypto":
+        return f"Taker{_grade_short(taker_data)} · CVD {cvd_quality}"
+    if ac == "gold":
+        return f"Spot/美元/美债 · CVD {cvd_quality}"
+    if ac == "forex":
+        return "美元腿/利差/事件"
+    if ac == "stock":
+        return "指数/板块/成交量"
+    if ac == "option":
+        return "IV/希腊值/流动性"
+    return "专用数据待接入"
+
+
+def _asset_flow_line(symbol: str, engine_data: dict, funding_rate, taker_dir, taker_ratio, cvd_dir, cvd_quality: str) -> str:
+    ac = _asset_class(symbol)
+    if ac == "crypto":
+        return f"Funding `{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
+    if ac == "gold":
+        return f"CVD {cvd_dir}{cvd_quality} · DXY `{_nna(engine_data,'dxy')}` · US10Y `{_nna(engine_data,'us10y')}`"
+    if ac == "forex":
+        return f"DXY `{_nna(engine_data,'dxy')}` · 利差 `{_nna(engine_data,'rate_diff')}` · 央行 `{_nna(engine_data,'central_bank','无')}`"
+    if ac == "stock":
+        return f"指数 `{_nna(engine_data,'index_bias','N/A')}` · 板块 `{_nna(engine_data,'sector_bias','N/A')}` · 量能 `{_nna(engine_data,'volume_state','N/A')}`"
+    if ac == "option":
+        return f"Delta `{_nna(engine_data,'delta','N/A')}` · Theta `{_nna(engine_data,'theta','N/A')}` · IV `{_nna(engine_data,'iv_rank','N/A')}`"
+    return f"结构 `{_nna(engine_data,'structure','N/A')}` · 量价 `{_nna(engine_data,'volume_state','N/A')}`"
+
+
+def _asset_catalyst_line(symbol: str, engine_data: dict, fg_v, search_sent) -> str:
+    ac = _asset_class(symbol)
+    catalyst = _nna(engine_data, 'catalyst', '无')
+    if ac == "crypto":
+        return f"{catalyst} · F&G `{fg_v}` · {_x_dir(search_sent)}"
+    if ac == "gold":
+        return f"{catalyst} · 数据窗口 `{_nna(engine_data,'macro_window','无')}` · {_x_dir(search_sent)}"
+    if ac == "forex":
+        return f"{catalyst} · 央行/通胀窗口 `{_nna(engine_data,'macro_window','无')}`"
+    if ac == "stock":
+        return f"{catalyst} · 财报 `{_nna(engine_data,'earnings','无')}` · 大盘 `{_nna(engine_data,'index_bias','N/A')}`"
+    if ac == "option":
+        return f"{catalyst} · 财报 `{_nna(engine_data,'earnings','无')}` · IV事件 `{_nna(engine_data,'iv_event','无')}`"
+    return catalyst
+
+
+def _asset_flow_label(symbol: str) -> str:
+    ac = _asset_class(symbol)
+    return {
+        "crypto": "订单流",
+        "gold": "美元/订单流",
+        "forex": "美元腿",
+        "stock": "指数/板块",
+        "option": "希腊值/IV",
+    }.get(ac, "量价")
+
+
+def _asset_flow_bias(symbol: str, cvd_dir: str, engine_data: dict) -> str:
+    ac = _asset_class(symbol)
+    if ac in {"crypto", "gold"}:
+        return "偏空" if cvd_dir == "卖" else "偏多" if cvd_dir == "买" else "中性"
+    if ac == "forex":
+        value = str(engine_data.get("usd_leg_bias") or engine_data.get("dxy_bias") or "中性")
+    elif ac == "stock":
+        value = str(engine_data.get("sector_bias") or engine_data.get("index_bias") or "中性")
+    elif ac == "option":
+        value = str(engine_data.get("greeks_bias") or engine_data.get("iv_bias") or "中性")
+    else:
+        value = str(engine_data.get("flow_bias") or "中性")
+    if "空" in value or "弱" in value:
+        return "偏空"
+    if "多" in value or "强" in value:
+        return "偏多"
+    return "中性"
+
+
+def _asset_confirm_brief(symbol: str, cvd_dir: str) -> str:
+    ac = _asset_class(symbol)
+    if ac == "crypto":
+        return "订单流配合"
+    if ac == "gold":
+        return "美元/美债不反向"
+    if ac == "forex":
+        return "美元腿配合"
+    if ac == "stock":
+        return "指数/板块配合"
+    if ac == "option":
+        return "Delta/IV可接受"
+    return "量价配合"
+
+
+def _fmt_asset_price(value: float, symbol: str) -> str:
+    ac = _asset_class(symbol)
+    if ac in {"forex", "option"}:
+        return f"{value:,.4f}"
+    if ac == "stock":
+        return f"{value:,.2f}"
+    return f"{value:,.0f}"
 
 
 def _leverage_text(symbol: str) -> str:
@@ -475,7 +573,7 @@ def _kl_summary(k: dict, role: str) -> str:
     desc = k.get("description") or k.get("state") or ""
     return desc if desc else f"{role}数据待采集"
 
-def _score13(merged: dict, results: list[dict], status: str) -> str:
+def _score13(merged: dict, results: list[dict], status: str, symbol: str = "BTCUSDT") -> str:
     struct_s = 2 if any(r.get("name") in FIXED_MODELS for r in (results or [])) else 1
     cycle_s = 1
     flow_s = 1
@@ -484,7 +582,10 @@ def _score13(merged: dict, results: list[dict], status: str) -> str:
     risk_s = 1 if status != "X禁做" else 0
     sent_s = 1
     total = struct_s + cycle_s + flow_s + deriv_s + cat_s + risk_s + sent_s
-    return f"{total}/13 — 结构+{struct_s}·周期+{cycle_s}·订单流+{flow_s}·衍生+{deriv_s}·催化+{cat_s}·风控+{risk_s}·情绪+{sent_s}"
+    ac = _asset_class(symbol)
+    flow_name = {"crypto": "订单流", "gold": "流动性", "forex": "美元腿", "stock": "板块量", "option": "希腊值"}.get(ac, "量价")
+    deriv_name = "衍生" if ac in {"crypto", "option"} else "宏观" if ac in {"gold", "forex"} else "市场"
+    return f"{total}/13 — 结构+{struct_s}·周期+{cycle_s}·{flow_name}+{flow_s}·{deriv_name}+{deriv_s}·催化+{cat_s}·风控+{risk_s}·情绪+{sent_s}"
 
 def _decision_text(merged: dict, status: str) -> str:
     bias = str(merged.get("bias") or "?")
@@ -885,22 +986,21 @@ def _plan_stop(klines: dict, merged: dict, price, bias_cn: str, symbol: str = "B
     hi = float(k4h.get("high") or p * 1.015)
     lo = float(k4h.get("low") or p * 0.985)
     ac = _asset_class(symbol)
-    # Use reasonable distance: ~1.5% for crypto, smaller for others or key level
+    # Use reasonable distance by asset; options are premium prices and must stay positive.
     if ac == "crypto":
         dist = max(hi - p, p - lo, p * 0.012)
-        if bias_cn == "偏空":
-            return f"{p + dist:,.0f}"
-        return f"{p - dist:,.0f}"
     elif ac == "gold":
         dist = 12
-        if bias_cn == "偏空":
-            return f"{p + dist:,.0f}"
-        return f"{p - dist:,.0f}"
+    elif ac == "forex":
+        dist = max((hi - lo) * 0.6, p * 0.0012)
+    elif ac == "stock":
+        dist = max((hi - lo) * 0.6, p * 0.012)
+    elif ac == "option":
+        dist = max(p * 0.18, 0.15)
     else:
-        dist = (hi - lo) * 0.6 or p * 0.01
-        if bias_cn == "偏空":
-            return f"{p + dist:,.0f}"
-        return f"{p - dist:,.0f}"
+        dist = max((hi - lo) * 0.6, p * 0.01)
+    stop = p + dist if bias_cn == "偏空" else max(p - dist, 0.01)
+    return _fmt_asset_price(stop, symbol)
 
 def _plan_targets(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT"):
     p = float(price or 0)
@@ -908,17 +1008,30 @@ def _plan_targets(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT"):
         p = 63000
     stop = float(_plan_stop(klines, {}, price, bias_cn, symbol).replace(",", ""))
     stop_dist = abs(stop - p)
-    if stop_dist < 10:  # fallback
-        stop_dist = p * 0.012 if "BTC" in str(symbol).upper() else 15
+    ac = _asset_class(symbol)
+    min_dist = 0.10 if ac == "option" else (p * 0.0005 if ac == "forex" else 10)
+    if stop_dist < min_dist:
+        if ac == "crypto":
+            stop_dist = p * 0.012
+        elif ac == "gold":
+            stop_dist = 12
+        elif ac == "forex":
+            stop_dist = p * 0.0012
+        elif ac == "stock":
+            stop_dist = max(p * 0.012, 1.0)
+        elif ac == "option":
+            stop_dist = max(p * 0.18, 0.15)
+        else:
+            stop_dist = p * 0.01
     rr1 = 2.0
     rr2 = 3.0
     if bias_cn == "偏空":
-        tp1 = p - (stop_dist * rr1)
-        tp2 = p - (stop_dist * rr2)
+        tp1 = max(p - (stop_dist * rr1), 0.01)
+        tp2 = max(p - (stop_dist * rr2), 0.01)
     else:
         tp1 = p + (stop_dist * rr1)
         tp2 = p + (stop_dist * rr2)
-    return f"{tp1:,.0f}", f"{tp2:,.0f}"
+    return _fmt_asset_price(tp1, symbol), _fmt_asset_price(tp2, symbol)
 
 def _stop_reason(bias_cn: str) -> str:
     return "反弹高点上沿" if bias_cn == "偏空" else "支撑下方"
@@ -947,10 +1060,10 @@ def _qty(price, meta: dict, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     elif ac == "stock":
         stop_dist = 3.0
     elif ac == "option":
-        stop_dist = 150   # premium points
+        stop_dist = max(p * 0.18, 0.15)
     else:
         stop_dist = 50
-    qty = risk / max(stop_dist, 1)
+    qty = risk / max(stop_dist, 0.01)
     if ac == "crypto":
         return f"{qty:.5f}"
     if ac == "gold":
@@ -1051,7 +1164,7 @@ def _qty_b(price, meta: dict, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     elif ac == 'forex': stop_dist = 0.0012
     elif ac == 'stock': stop_dist = 2.5
     else: stop_dist = 40
-    qty = risk / max(stop_dist, 1)
+    qty = risk / max(stop_dist, 0.01)
     if ac == 'crypto': return f'{qty:.5f}'
     if ac == 'gold': return f'{qty:.3f}'
     if ac == 'stock': return f'{int(max(qty,1))}'
