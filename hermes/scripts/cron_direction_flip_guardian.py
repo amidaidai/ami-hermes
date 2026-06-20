@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 棠溪 · 多模型方向翻转守护 v1.0
-每 30 分钟检查 12 引擎方向是否翻转，翻转则推 Telegram + Discord
+# 每 30 分钟检查 12 引擎方向是否翻转，翻转则推 Telegram（Feishu sidecar 另配）
 """
 import json, sys, time, os
 from datetime import datetime, timezone, timedelta

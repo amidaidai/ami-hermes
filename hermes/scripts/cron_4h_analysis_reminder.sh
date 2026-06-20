@@ -1,6 +1,6 @@
 #!/bin/bash
 # 棠溪 · 4h 分析提醒 cron 脚本
-# 在 4h K 线收线后 2 分钟触发，推送分析提醒到 Telegram + Discord
+# 在 4h K 线收线后 2 分钟触发，推送分析提醒到 Telegram（Feishu sidecar 另配）
 # Cron 调用：bash hermes/scripts/cron_4h_analysis_reminder.sh
 
 LOG_DIR="D:/Hermes agent/data"
