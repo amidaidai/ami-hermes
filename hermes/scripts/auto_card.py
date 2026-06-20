@@ -633,17 +633,23 @@ def _compute_perfect_signals(engine_data: dict, symbol: str, price: float) -> di
     is_xau = "XAU" in su
     is_btc = "BTC" in su
 
-    # Kill Zone (XAU priority, community consensus)
-    from datetime import datetime, timedelta
+    # Kill Zone / Session (community multi-asset adaptation)
+    from datetime import datetime
     now = datetime.now()
     hour = now.hour
     if is_xau:
-        if 2 <= hour < 5 or 7 <= hour < 10:  # London/NY approx CST
+        if 2 <= hour < 5 or 7 <= hour < 10:
             kill_zone = "London/NY Kill Zone — 内 · 高优先"
         else:
             kill_zone = "非Kill Zone — 静默或降级"
+    elif is_btc or "ETH" in su:
+        kill_zone = "全时段 (加密24/7) · 优先高流动性窗口"
     else:
-        kill_zone = "全时段优先高流动性"
+        # forex/stock default community practice
+        if 2 <= hour < 5 or 7 <= hour < 11:  # London + NY open
+            kill_zone = "主要交易时段 — London/NY优先"
+        else:
+            kill_zone = "低流动性时段 — 降级或观察"
 
     # Liquidity Sweep + CVD (core from community)
     sweep = "无"
