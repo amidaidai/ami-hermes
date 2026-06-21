@@ -2028,17 +2028,83 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     wd_tag = "⚠周末 " if _dt.now().weekday() >= 5 else ""
     dist_pct = abs(p - nearest_level) / p * 100
     near_str = f"← 价踩在这 · {dist_pct:.1f}%" if dist_pct < 0.5 else f"← 距{abs(p - nearest_level):.0f}点"
+    
+    # ── 日内止损止盈：ATR夹层 + 关键位锚定 ──
+    atr_15m = float(k15m.get("atr", 0) or 0)
+    if atr_15m <= 0:
+        atr_15m = p * 0.002  # fallback: 0.2% ATR
+    
+    MIN_MOVE_PCT = 0.003  # 0.3%以内算噪音，跳过
+    
+    def _meaningful_level_above(price_val: float) -> float:
+        """找价格上方第一个有意义的结构位（≥0.3%距离）"""
+        best = None
+        for tf in ("15m", "1h", "4h"):
+            k = klines.get(tf, {})
+            for key in ("vah", "vwap", "high", "poc", "ema21"):
+                v = k.get(key)
+                if v:
+                    try:
+                        fv = float(v)
+                        if fv > price_val * (1 + MIN_MOVE_PCT):
+                            if best is None or fv < best:
+                                best = fv
+                    except (TypeError, ValueError):
+                        pass
+        return best or (price_val * 1.008)  # 0.8% 兜底
+    
+    def _meaningful_level_below(price_val: float) -> float:
+        """找价格下方第一个有意义的结构位（≥0.3%距离）"""
+        best = None
+        for tf in ("15m", "1h", "4h"):
+            k = klines.get(tf, {})
+            for key in ("val", "low", "npoc", "poc"):
+                v = k.get(key)
+                if v:
+                    try:
+                        fv = float(v)
+                        if fv < price_val * (1 - MIN_MOVE_PCT):
+                            if best is None or fv > best:
+                                best = fv
+                    except (TypeError, ValueError):
+                        pass
+        return best or (price_val * 0.992)  # 0.8% 兜底
+    
     bearish = (cvd_dir == "卖" or taker_dir == "sell")
+    atr_stop = max(atr_15m * 2.0, p * 0.003)  # 2x ATR，最少0.3%（日内底线）
+    
     if bearish:
-        stop_a = nearest_level * 1.005; tp_a = nearest_level * 0.97
-        stop_b = nearest_level * 0.995; tp_b = nearest_level * 1.03
+        # Plan A: 空头
+        raw_stop_a = p + atr_stop
+        level_above = _meaningful_level_above(p)
+        stop_a = max(raw_stop_a, level_above)
+        tp_a = _meaningful_level_below(p)
+        # Plan B: 多头（备选）
+        raw_stop_b = p - atr_stop
+        level_below_b = _meaningful_level_below(p)
+        stop_b = min(raw_stop_b, level_below_b)
+        tp_b = _meaningful_level_above(p)
     else:
-        stop_a = nearest_level * 0.995; tp_b = nearest_level * 1.03
-        stop_b = nearest_level * 1.005; tp_a = nearest_level * 0.97
+        # Plan A: 多头
+        raw_stop_a = p - atr_stop
+        level_below = _meaningful_level_below(p)
+        stop_a = min(raw_stop_a, level_below)
+        tp_a = _meaningful_level_above(p)
+        # Plan B: 空头（备选）
+        raw_stop_b = p + atr_stop
+        level_above_b = _meaningful_level_above(p)
+        stop_b = max(raw_stop_b, level_above_b)
+        tp_b = _meaningful_level_below(p)
+    
     rr_a = abs(tp_a - p) / abs(stop_a - p) if abs(stop_a - p) > 0 else 1
     rr_b = abs(tp_b - p) / abs(stop_b - p) if abs(stop_b - p) > 0 else 1
-    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}"
-    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}"
+    
+    # R:R 底线检查
+    rr_a_note = "" if rr_a >= 2.0 else " ⚠R:R不足"
+    rr_b_note = "" if rr_b >= 2.0 else " ⚠R:R不足"
+    
+    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}{rr_a_note}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}{rr_a_note}"
+    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}{rr_b_note}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}{rr_b_note}"
     
     # 社区共识标签
     fg_val = fg.get("value", "?") if isinstance(fg, dict) else "?"
