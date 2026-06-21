@@ -25,9 +25,10 @@ DATA = ROOT / "data"
 
 
 def position_size(entry: float, stop: float, risk_usd: float,
-                   leverage: int = 100, account_balance: float = 67.52) -> dict:
+                   leverage: int = 100, account_balance: float = 67.52,
+                   atr_value: float = None) -> dict:
     """
-    仓位计算 · 基于风险金额
+    仓位计算 · 基于风险金额 + ATR自适应（v2.0社区增强）
     
     Returns:
         {
@@ -36,16 +37,42 @@ def position_size(entry: float, stop: float, risk_usd: float,
             "margin": float,          # 保证金
             "risk_pct": float,        # 风险占本金%
             "liquidation_approx": float,  # 预估强平价
+            "atr_clamped": bool,      # ATR是否修正了止损
+            "original_stop": float,   # 原始结构止损
         }
     """
     if entry <= 0 or stop <= 0 or risk_usd <= 0:
         return {"error": "无效参数"}
     
     distance = abs(entry - stop)
+    original_stop = stop
+    atr_clamped = False
+    
+    # ATR夹层修正：止损必须在 0.5×ATR ~ 2.5×ATR 之间
+    if atr_value and atr_value > 0:
+        min_dist = 0.5 * atr_value
+        max_dist = 2.5 * atr_value
+        if distance < min_dist:
+            # 噪音止损 → 推远到0.5×ATR
+            if stop < entry:  # long stop below entry
+                stop = entry - min_dist
+            else:  # short stop above entry
+                stop = entry + min_dist
+            distance = abs(entry - stop)
+            atr_clamped = True
+        elif distance > max_dist:
+            # 风险过大 → 拉近到2.5×ATR
+            if stop < entry:
+                stop = entry - max_dist
+            else:
+                stop = entry + max_dist
+            distance = abs(entry - stop)
+            atr_clamped = True
+    
     if distance <= 0:
         return {"error": "入场=止损，无距离"}
     
-    # 每张合约价值 (BTCUSDT: 1 contract = 1 BTC worth)
+    # 每张合约价值
     risk_per_contract = distance
     
     # 张数 = 风险金额 / 每张风险
@@ -78,6 +105,9 @@ def position_size(entry: float, stop: float, risk_usd: float,
         "risk_pct": round(risk_pct, 2),
         "risk_per_contract": round(risk_per_contract, 1),
         "liquidation_approx": round(liquidation_approx, 1),
+        "atr_clamped": atr_clamped,
+        "original_stop": original_stop,
+        "final_stop": stop,
     }
 
 

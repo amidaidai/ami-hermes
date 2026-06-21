@@ -23,30 +23,38 @@ TZ = timezone(timedelta(hours=8))
 ROOT = Path("D:/Hermes agent")
 DATA_DIR = ROOT / "data"
 
-# ═══ 宪法常量（可调） ═══
+# ═══ 宪法常量（可调 · v2.0 社区2026共识值） ═══
+# 源：Freqtrade Protections + X/Reddit 1%黄金标准 + NautilusTrader pre-trade
 CONSTITUTION = {
-    "MAX_RISK_PER_TRADE_PCT": 0.03,       # 单笔最大 3% 本金
-    "MAX_DAILY_DRAWDOWN_PCT": 0.05,       # 日回撤 5% 暂停（默认保守模式）
+    "MAX_RISK_PER_TRADE_PCT": 0.01,        # 单笔最大 1% 本金（社区2026共识：0.5-1%）
+    "MAX_DAILY_DRAWDOWN_PCT": 0.05,        # 日回撤 5% 暂停（默认保守模式）
     "MAX_DAILY_DRAWDOWN_PCT_AGGRESSIVE": 0.05,  # 激进模式 5%
     "MAX_DAILY_DRAWDOWN_PCT_CONSERVATIVE": 0.02,  # 保守模式 2%（Reddit共识）
-    "DRAWDOWN_MODE": "conservative",      # conservative(2%) / aggressive(5%)
-    "MAX_WEEKLY_DRAWDOWN_PCT": 0.10,      # 周回撤 10% 暂停
-    "MAX_CONSECUTIVE_LOSSES": 3,          # 连续亏损 3 笔暂停
-    "NEWS_BLOCK_MINUTES_BEFORE": 60,      # 新闻前60m禁做
-    "NEWS_BLOCK_MINUTES_AFTER": 30,       # 新闻后30m禁做
-    "KELLY_FRACTION": 0.25,              # Kelly分数 (保守=0.25)
-    "VOLATILITY_BAN_BTC": 0.05,           # BTC波动>5%禁做
-    "VOLATILITY_BAN_XAU": 0.01,           # XAU波动>1%禁做
-    "REQUIRED_RR_RATIO": 2.0,             # R:R底线 1:2
-    "MIN_STOP_ATR_RATIO": 0.5,            # 止损 ≥ 0.5×ATR
-    # P2+: 社区建议增强（3Commas 2025指南）
-    "MAX_TRADES_PER_DAY": 10,             # 每日最大交易次数（3Commas建议）
-    "TRADE_COOLDOWN_MINUTES": 15,         # 止损后冷却时间（分钟）
-    "VOLATILITY_TARGET_BASE": 0.02,       # 基准波动率2% — Volatility Targeting
-    "VOLATILITY_TARGET_MIN_MULT": 0.3,    # 高波动最低仓位倍数（不减到0）
-    "VOLATILITY_TARGET_MAX_MULT": 1.5,    # 低波动最大仓位倍数
-    "BB_WIDTH_VOLATILE": 0.03,            # BB宽度>3%判定为高波动
-    "BB_WIDTH_CALM": 0.01,                # BB宽度<1%判定为低波动
+    "DRAWDOWN_MODE": "conservative",       # conservative(2%) / aggressive(5%)
+    "MAX_WEEKLY_DRAWDOWN_PCT": 0.10,       # 周回撤 10% 暂停
+    "MAX_CONSECUTIVE_LOSSES": 3,           # 连续亏损 3 笔暂停
+    "NEWS_BLOCK_MINUTES_BEFORE": 60,       # 新闻前60m禁做
+    "NEWS_BLOCK_MINUTES_AFTER": 30,        # 新闻后30m禁做
+    "KELLY_FRACTION": 0.20,               # Kelly分数 (保守=0.20, v2.0更保守)
+    "VOLATILITY_BAN_BTC": 0.05,            # BTC波动>5%禁做
+    "VOLATILITY_BAN_XAU": 0.01,            # XAU波动>1%禁做
+    "REQUIRED_RR_RATIO": 2.0,              # R:R底线 1:2
+    "MIN_STOP_ATR_RATIO": 0.5,             # 止损 ≥ 0.5×ATR（下限）
+    "MAX_STOP_ATR_RATIO": 2.5,             # 止损 ≤ 2.5×ATR（上限·v2.0新增·防风险过大）
+    # Freqtrade-style Protections（v2.0 社区增强）
+    "STOPLOSS_GUARD_LOOKBACK": 12,         # 止损后12根K线冷却（防复仇）
+    "COOLDOWN_AFTER_LOSS": 3,              # 亏损后3根K线暂停
+    "MAX_DAILY_DRAWDOWN_HARD": 0.10,       # 日回撤10%全停·不可恢复（社区共识）
+    "MAX_WEEKLY_DRAWDOWN_HARD": 0.15,      # 周回撤15%全停（社区共识）
+    # 交易频率与冷却
+    "MAX_TRADES_PER_DAY": 10,              # 每日最大交易次数
+    "TRADE_COOLDOWN_MINUTES": 15,          # 止损后冷却时间（分钟）
+    # Volatility Targeting（3Commas 2025指南）
+    "VOLATILITY_TARGET_BASE": 0.02,        # 基准波动率2%
+    "VOLATILITY_TARGET_MIN_MULT": 0.3,     # 高波动最低仓位倍数（不减到0）
+    "VOLATILITY_TARGET_MAX_MULT": 1.5,     # 低波动最大仓位倍数
+    "BB_WIDTH_VOLATILE": 0.03,             # BB宽度>3%判定为高波动
+    "BB_WIDTH_CALM": 0.01,                 # BB宽度<1%判定为低波动
 }
 
 
@@ -171,11 +179,13 @@ def check_constitution(symbol: str,
             else:
                 reasons.append(f"R:R {rr:.1f}:1 ✓")
     
-    # ═══ 检查3: 止损 ≥ 0.5×ATR ═══
+    # ═══ 检查3: 止损夹层 — 0.5×ATR ≤ 止损距离 ≤ 2.5×ATR ═══
     if entry_price and stop_price and atr_value:
         stop_distance = abs(entry_price - stop_price)
         if stop_distance < CONSTITUTION["MIN_STOP_ATR_RATIO"] * atr_value:
-            violations.append(f"止损{stop_distance:.0f} < {CONSTITUTION['MIN_STOP_ATR_RATIO']:.1f}×ATR{atr_value:.0f}")
+            violations.append(f"止损{stop_distance:.0f} < {CONSTITUTION['MIN_STOP_ATR_RATIO']:.1f}×ATR{atr_value:.0f}·噪音止损风险")
+        if stop_distance > CONSTITUTION["MAX_STOP_ATR_RATIO"] * atr_value:
+            violations.append(f"止损{stop_distance:.0f} > {CONSTITUTION['MAX_STOP_ATR_RATIO']:.1f}×ATR{atr_value:.0f}·风险过大")
     
     # ═══ 检查4: 日回撤熔断 · P2-8 可配置模式 ═══
     if state and state.daily_starting_balance > 0:
@@ -260,6 +270,111 @@ def check_constitution(symbol: str,
         "risk_tier": risk_tier,
         "max_risk_usd": round(max_risk_usd, 2),
         "cooldown_minutes": 60 if has_hard_violation else 0,
+    }
+
+
+# ═══ Freqtrade-style Protections v2.0（社区2026共识） ═══
+
+@dataclass
+class Protections:
+    """Freqtrade-style 自动防护层 — StoplossGuard + Cooldown + MaxDrawdown"""
+    # StoplossGuard: 止损后N根K线内不重入同品种
+    stoploss_guard: dict = field(default_factory=lambda: {})  # {symbol: last_stoploss_bar}
+    stoploss_guard_lookback: int = 12  # 默认12根K线
+    
+    # CooldownPeriod: 亏损后N根K线暂停
+    cooldown_active: bool = False
+    cooldown_bars_remaining: int = 0
+    cooldown_after_loss: int = 3  # 默认3根K线
+    
+    # MaxDrawdown: 硬上限熔断
+    daily_drawdown_pct: float = 0.0
+    max_daily_drawdown_hard: float = 0.10
+    weekly_drawdown_pct: float = 0.0
+    max_weekly_drawdown_hard: float = 0.15
+    
+    # State
+    suspended: bool = False
+    suspend_reason: str = ""
+    
+    def check_stoploss_guard(self, symbol: str, current_bar: int) -> tuple[bool, str]:
+        """止损守卫：止损后N根K线内禁止同品种再入场"""
+        last = self.stoploss_guard.get(symbol.upper())
+        if last is not None and (current_bar - last) < self.stoploss_guard_lookback:
+            remaining = self.stoploss_guard_lookback - (current_bar - last)
+            return False, f"StoplossGuard: {symbol}止损后冷却中·还需{remaining}根K线"
+        return True, ""
+    
+    def check_cooldown(self) -> tuple[bool, str]:
+        """冷却检查：亏损后N根K线内暂停所有交易"""
+        if self.cooldown_active and self.cooldown_bars_remaining > 0:
+            return False, f"CooldownPeriod: 亏损冷却中·还需{self.cooldown_bars_remaining}根K线"
+        return True, ""
+    
+    def check_max_drawdown(self) -> tuple[bool, str]:
+        """最大回撤硬熔断"""
+        if self.daily_drawdown_pct >= self.max_daily_drawdown_hard:
+            return False, f"MaxDrawdown: 日回撤{self.daily_drawdown_pct:.1%} ≥ {self.max_daily_drawdown_hard:.0%}·全停"
+        if self.weekly_drawdown_pct >= self.max_weekly_drawdown_hard:
+            return False, f"MaxDrawdown: 周回撤{self.weekly_drawdown_pct:.1%} ≥ {self.max_weekly_drawdown_hard:.0%}·全停"
+        return True, ""
+    
+    def on_stoploss(self, symbol: str, current_bar: int):
+        """止损触发时记录"""
+        self.stoploss_guard[symbol.upper()] = current_bar
+    
+    def on_loss(self, current_bar: int):
+        """亏损触发时启动冷却"""
+        self.cooldown_active = True
+        self.cooldown_bars_remaining = self.cooldown_after_loss
+        self.stoploss_guard["_last_loss_bar"] = current_bar
+    
+    def advance_bar(self):
+        """每根新K线推进所有计时器"""
+        if self.cooldown_active and self.cooldown_bars_remaining > 0:
+            self.cooldown_bars_remaining -= 1
+            if self.cooldown_bars_remaining <= 0:
+                self.cooldown_active = False
+    
+    def check_all(self, symbol: str, current_bar: int) -> tuple[bool, list[str]]:
+        """全量检查所有防护层，返回 (通过?, [违规原因])"""
+        violations = []
+        
+        ok, reason = self.check_max_drawdown()
+        if not ok:
+            violations.append(reason)
+            self.suspended = True
+            self.suspend_reason = reason
+            return False, violations
+        
+        ok, reason = self.check_cooldown()
+        if not ok:
+            violations.append(reason)
+        
+        ok2, reason2 = self.check_stoploss_guard(symbol, current_bar)
+        if not ok2:
+            violations.append(reason2)
+        
+        return len(violations) == 0, violations
+
+
+def apply_protections(symbol: str, current_bar: int = None,
+                      protections: Protections = None) -> dict:
+    """便捷入口：Protections.check_all() 的 dict 返回"""
+    if protections is None:
+        return {"passed": True, "violations": [], "suspended": False, "reason": ""}
+    
+    if current_bar is None:
+        from datetime import datetime
+        current_bar = int(datetime.now().timestamp() // 300)  # 5m bar proxy
+    
+    passed, violations = protections.check_all(symbol, current_bar)
+    
+    return {
+        "passed": passed,
+        "violations": violations,
+        "suspended": protections.suspended,
+        "reason": protections.suspend_reason if protections.suspended else "",
     }
 
 

@@ -458,10 +458,10 @@ class TestTradeFrequencyCap:
         assert any("上限" in v for v in result["violations"])
 
     def test_trade_frequency_below_cap(self):
-        """测试未达上限正常"""
+        """测试未达上限正常 — v2.0: risk_usd调整为1%以下避风险违例"""
         from risk_constitution import check_constitution, RiskState, CONSTITUTION
         state = RiskState(trades_today=3)
-        result = check_constitution(symbol="BTCUSDT", risk_usd=3.0, account_balance=100.0, state=state)
+        result = check_constitution(symbol="BTCUSDT", risk_usd=0.5, account_balance=100.0, state=state)
         # 不应该因频率被禁
         assert "上限" not in " ".join(result.get("violations", []))
 
@@ -473,7 +473,7 @@ class TestTradeFrequencyCap:
         # 5分钟前止损
         recent_loss = (datetime.now(TZ) - timedelta(minutes=5)).isoformat()
         state = RiskState(last_loss_time=recent_loss)
-        result = check_constitution(symbol="BTCUSDT", risk_usd=3.0, account_balance=100.0, state=state)
+        result = check_constitution(symbol="BTCUSDT", risk_usd=0.5, account_balance=100.0, state=state)
         assert any("冷却" in v for v in result.get("violations", []))
 
 
