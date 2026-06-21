@@ -1290,78 +1290,62 @@ def _cvd_display(cvd, cvd_quality):
 
 
 def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None, cvd_quality=None, reason=None, tier="info", risk_text=None, derivatives_text=None, ls_text=None, taker_text=None, conflict_text=None, model_dir_text=None, setup=None, all_levels=None, macro_text=None):
-    """v7.0 精简警报：4-8行 · 社区驱动。
-
-    模板：
-    🚨 {品种} {状态} · 现价 `{price}` · 4h{方向}
-    VWAP/EMA/CVD 三合一 · Taker · 多空 · 引擎
-    {触发位} `{level}` · 距 {dist}%
-    预案A：入场 · 止损 · 止盈 — 1:{rr}
-    预案B：入场 · 止损 · 止盈 — 1:{rr}
-    风控：{risk}U · {杠杆} · 失效 · {闸门}
-    —— 决策：你来选方向——
-    """
+    """v7.1 精简警报 · 手机适配（≤6行·≤38字符）"""
     setup = setup or {}
     lines = []
     
-    # ── 标题行 ──
+    # ── 🚨 标题行 ──
     raw_status = setup.get("status") or setup.get("direction")
     status_zh = STATUS_ZH.get(str(raw_status), situation_text(tier))
-    lines.append(f"🚨 {head} · {status_zh} · 现价 `{_fmt_price(symbol, price)}`")
+    lines.append(f"🚨 {head} {status_zh} `{_fmt_price(symbol, price)}`")
     
-    # ── 指标行：VWAP/EMA/CVD+Taker+多空+引擎 ──
-    indicator_parts = []
+    # ── 指标行 ──
+    ind_parts = []
     if cvd is not None:
-        indicator_parts.append(f"CVD {_cvd_display(cvd, cvd_quality)}")
+        ind_parts.append(f"CVD{_cvd_display(cvd, cvd_quality)}")
     if taker_text:
-        indicator_parts.append(f"Taker {taker_text}")
-    if ls_text:
-        indicator_parts.append(f"多空 {ls_text}")
+        ind_parts.append(f"Taker{taker_text}")
     if model_dir_text:
-        indicator_parts.append(f"引擎 {model_dir_text}")
-    # macro_text 可能包含 VWAP/EMA 数据
+        ind_parts.append(f"引擎{model_dir_text}")
     if macro_text and macro_text != "无":
-        indicator_parts.append(macro_text[:60])  # 截断超长
-    if indicator_parts:
-        lines.append(" · ".join(indicator_parts))
+        ind_parts.append(macro_text[:50])
+    if ind_parts:
+        lines.append(" ".join(ind_parts))
     
-    # ── 触发位 ──
+    # ── 触发位（最多2个·含距）──
     if hits:
-        for item in hits[:2]:  # 最多2个触发位
+        for item in hits[:2]:
             name = item.get("name", "?")
             lvl = item.get("price", item.get("level", "?"))
-            dist_pct = ""
+            dist_str = ""
             if isinstance(lvl, (int, float)) and isinstance(price, (int, float)) and price > 0:
-                dist_pct = f" · 距 {abs(float(lvl) - float(price)) / float(price) * 100:.1f}%"
-            lines.append(f"{name} `{_fmt_price(symbol, lvl)}`{dist_pct}")
+                d = abs(float(lvl) - float(price)) / float(price) * 100
+                dist_str = f" 距{d:.1f}%"
+            lines.append(f"{name} `{_fmt_price(symbol, lvl)}`{dist_str}")
     
-    # ── 全景简表（最多2行）─
+    # ── 全景 ○/● 最多4个 ──
     if all_levels:
         panorama = sort_levels_panorama(all_levels)
         hit_names = {h.get("name") for h in (hits or [])}
-        brief_levels = []
+        briefs = []
         for item in panorama[:4]:
-            name = item.get("name", "")
-            lvl = item.get("price", item.get("level", 0))
-            mark = "●" if name in hit_names else "○"
-            brief_levels.append(f"{mark}{name} `{_fmt_price(symbol, lvl)}`")
-        if brief_levels:
-            lines.append(" · ".join(brief_levels))
+            n = item.get("name", "")
+            l = item.get("price", item.get("level", 0))
+            m = "●" if n in hit_names else "○"
+            briefs.append(f"{m}{n}`{_fmt_price(symbol, l)}`")
+        if briefs:
+            lines.append(" ".join(briefs))
     
-    # ── 风控闸门 ──
-    risk_line = []
+    # ── 风控 ──
+    risk_parts = []
     if risk_text:
-        risk_line.append(risk_text)
+        risk_parts.append(risk_text)
     if conflict_text:
-        risk_line.append(f"⚠{conflict_text}")
-    if urgency and urgency not in ("无", "暂无动作", ""):
-        risk_line.append(urgency[:30])
-    if risk_line:
-        lines.append("风控：" + " · ".join(risk_line))
+        risk_parts.append(f"⚠{conflict_text}")
+    if risk_parts:
+        lines.append("风控 " + " ".join(risk_parts))
     
-    # ── 决策线 ──
-    lines.append("—— 决策：你来选方向——")
-    
+    lines.append("—— 你来选方向 ——")
     return "\n".join(lines) + "\n"
 
 

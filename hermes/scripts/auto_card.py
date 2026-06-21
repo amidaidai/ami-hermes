@@ -489,59 +489,83 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     rr_a_note = "" if rr_a >= 2.0 else " ⚠R:R不足"
     rr_b_note = "" if rr_b >= 2.0 else " ⚠R:R不足"
 
-    # ── 组装 ──
+    # ── v7.1 手机适配 组装（每行≤38字符）──
     display_symbol = _display_symbol(symbol)
+    _r = _fmt_price
     card_lines = [
-        f"◷ {now.strftime('%m-%d %H:%M')} · {display_symbol} · {'BINANCE' if 'BTC' in symbol else 'EXNESS'} · 数据{data_grade} · {_source_count(engine_data)}源",
+        f"◷ {now.strftime('%m-%d %H:%M')} · {display_symbol} · {data_grade}",
         "",
-        f"① {status} · {model_id} · {n5}/13 · 置信 {eng_conf}/5",
-        f"   理由：{one_reason}",
+        f"① {status} · {model_id} · {n5}/13 · 置信{eng_conf}/5",
+        f"   {one_reason}",
         "",
-        f"② 现价 `{_fmt_price(price)}` · 高 `{_fmt_price(high)}` · 低 `{_fmt_price(low)}` · 日 `{float(chg or 0):+.2f}%`",
+        f"② 现价 `{_r(price)}`",
+        f"   高 `{_r(high)}` 低 `{_r(low)}` 日{float(chg or 0):+.2f}%",
         f"   {tf_lines}",
-        "",
-        f"③ {v3_str}",
-        "",
-        f"④ 关键位：阻 `{_fmt_price(res)}` · POC `{_fmt_price(k15m.get('poc'))}` · VAH `{_fmt_price(k15m.get('vah'))}` · VAL `{_fmt_price(k15m.get('val'))}` · 支 `{_fmt_price(sup)}`",
-        f"   三线：失效 `{_fmt_price(inv_line)}` · 执行 `{exec_line}` · 禁追 `{chase_line}`",
         "",
     ]
 
+    # ── ③ VWAP/EMA/CVD（拆2行）──
+    if vwap_ema.get("available"):
+        v = vwap_ema.get("vwap")
+        ec = vwap_ema.get("ema_cloud")
+        if v.get("vwap"):
+            card_lines.append(f"③ VWAP `{v['vwap']}` {v.get('price_vs_vwap','?')}·{v.get('in_band','?')}")
+        if ec:
+            card_lines.append(f"   EMA 快{ec.get('fast_cloud','?')}·慢{ec.get('slow_cloud','?')}·{ec.get('trend_strength','?')[:8]}")
+    card_lines.append(f"   CVD {cvd_dir} · Taker {taker_dir} · FG {fg_v}")
+    card_lines.append("")
+
+    # ── ④ 关键位（拆3行）──
+    _poc = _r(k15m.get('poc'))
+    _vah = _r(k15m.get('vah'))
+    _val = _r(k15m.get('val'))
+    card_lines.extend([
+        f"④ 阻 `{_r(res)}` POC `{_poc}`",
+        f"   VAH `{_vah}` VAL `{_val}`",
+        f"   支 `{_r(sup)}`",
+        f"   失效 `{_r(inv_line)}` 执行 `{exec_line}`",
+        "",
+    ])
+
     # ── 预案A ──
     if status in ("B等待", "C等待", "X禁做") or direction == "wait":
-        plan_a_label = "预案A · 主方向" 
-        plan_a_entry = f"`{_fmt_price(st_a['stop'])}-{_fmt_price(st_a['target'])}`"
+        plan_a_label = "预案A · 主方向"
+        plan_a_entry = f"`{_r(st_a['stop'])}-{_r(st_a['target'])}`"
+        plan_a_note = "等触发"
     else:
-        plan_a_label = f"预案A · {'空' if bearish else '多'}（{'⚠优先' if resonance == '共振' else '备选'}）"
-        plan_a_entry = f"`{_fmt_price(price)}`" if status.startswith("A") else f"`{_fmt_price(st_a['stop'])}-{_fmt_price(st_a['target'])}`"
+        plan_a_label = f"预案A · {'空' if bearish else '多'}{'⚠优先' if resonance == '共振' else ''}"
+        plan_a_entry = f"`{_r(price)}`" if status.startswith("A") else f"`{_r(st_a['stop'])}-{_r(st_a['target'])}`"
+        plan_a_note = "限价" if status.startswith("A") else "条件触发"
+    _pos = _pos_level(data_grade, status)
 
     card_lines.extend([
         f"—— {plan_a_label} ——",
-        f"⑤ 入场：{plan_a_entry} · {'限价' if status.startswith('A') else '条件触发'}",
-        f"⑥ 止损：`{_fmt_price(st_a['stop'])}` — {'结构位' if st_a.get('stop_reason') else 'ATR×2'} · 止盈：`{_fmt_price(st_a['target'])}` `{_fmt_price(st_a['target'])}` — 1:{rr_a:.1f}{rr_a_note}",
-        f"⑦ 仓位：{_pos_level(data_grade, status)} · 风险 `{risk_amt:.2f}U` · 杠杆 {leverage_text}",
-        f"⑧ 失效：`{_fmt_price(inv_line)}` — 触发后取消·复查 {3}×15m",
+        f"⑤ 入场 {plan_a_entry} {plan_a_note}",
+        f"⑥ 止损 `{_r(st_a['stop'])}` 结构位",
+        f"   止盈 `{_r(st_a['target'])}` `{_r(st_a['target'])}` 1:{rr_a:.1f}{rr_a_note}",
+        f"⑦ 仓位 {_pos} 风险{risk_amt:.2f}U {leverage_text}",
+        f"⑧ 失效 `{_r(inv_line)}` 复查3×15m",
         "",
     ])
 
     # ── 预案B ──
-    plan_b_label = f"预案B · {'多' if bearish else '空'}（备选）"
+    plan_b_label = f"预案B · {'多' if bearish else '空'}备选"
     card_lines.extend([
         f"—— {plan_b_label} ——",
-        f"⑨ 入场：`{_fmt_price(st_b['stop'])}` · 止损 `{_fmt_price(st_b['stop'])}` · 止盈 `{_fmt_price(st_b['target'])}` — 1:{rr_b:.1f}{rr_b_note}",
-        f"   仓位：{_pos_level(data_grade, status)} · 风险 `{risk_amt:.2f}U`",
+        f"⑨ 入场 `{_r(st_b['stop'])}` 止损 `{_r(st_b['stop'])}`",
+        f"   止盈 `{_r(st_b['target'])}` 1:{rr_b:.1f}{rr_b_note}",
+        f"   仓位 {_pos} 风险{risk_amt:.2f}U",
         "",
     ])
 
     # ── ⑩ 闸门 ──
-    gate_parts = [
-        f"数据{_gate_data(data_grade)}",
-        f"风控{prot_status}",
-        f"执行{_gate_exec(klines, price, status)}",
-        f"心态{'✅' if status != 'X禁做' else '⛔禁做'}",
-    ]
-    card_lines.append(f"⑩ 闸门：{' · '.join(gate_parts)} — 不到不执行")
-    card_lines.append(f"   决策：你来选方向——")
+    _gates = f"数据{_gate_data(data_grade)} 风控{prot_status} 执行{_gate_exec(klines, price, status)}"
+    _mind = "✓" if status != "X禁做" else "⛔"
+    card_lines.extend([
+        f"⑩ 闸门：{_gates}",
+        f"   心态{_mind} · 不到不执行",
+        f"   决策：你来选方向——",
+    ])
 
     full = "\n".join(card_lines) + "\n"
     
@@ -2502,9 +2526,10 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
             vwap_line = f"VWAP `{v['vwap']}` {v.get('price_vs_vwap','?')}·{ec.get('fast_cloud','?')}·{ec.get('trend_strength','?')[:8]}"
 
     lines = [
-        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {header_4h} · {bias}{' ' + grade_line if grade_line else ''}",
-        f"③ {_fmt_price(price)} · 高 {hi} · 低 {lo}",
-        f"{nearest_name} {nl_fmt} {near_str}",
+        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {bias}{' ' + grade_line if grade_line else ''}",
+        "",
+        f"现价 `{_fmt_price(price)}` 高 `{hi}` 低 `{lo}`",
+        f"{nearest_name} `{nl_fmt}` 距 {dist_pct:.1f}%",
         f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
         trigger_line,
     ]

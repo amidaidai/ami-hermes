@@ -50,9 +50,9 @@ def test_render_card_locked_has_speed_read_block():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v7.0: 速读区压缩为①②③④四行（状态/现价/指标/关键位）+预案AB+闸门
-    for marker in ["① ", "② 现价", "③ ", "④ 关键位", "预案A", "预案B", "闸门"]:
-        assert marker in card, f"v7.0卡缺少 {marker}"
+    # v7.1: 速读①②③④四块 + 预案AB + 闸门（③仅在有VWAP/EMA数据时出现）
+    for marker in ["① ", "② 现价", "④ 阻", "预案A", "预案B", "闸门"]:
+        assert marker in card, f"v7.1卡缺少 {marker}"
 
 
 def test_render_card_locked_has_five_sections():
