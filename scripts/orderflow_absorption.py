@@ -149,6 +149,129 @@ def absorption_line(symbol: str, current_price: float,
     return f"订单流正常·无异常吸收 | {r['summary']}"
 
 
+# ═══ 模式5: CVD 趋势线突破预警（X社区2026共识·LEADING信号）═══
+# CVD趋势线突破是"领先信号"——CVD趋势转变往往早于价格结构转变
+# 当CVD跌破自身趋势线而价格尚未破结构 = 多头撤离预警
+# 当CVD突破自身趋势线而价格尚未破结构 = 空头撤离预警
+
+import numpy as np
+
+def detect_cvd_trendline_break(
+    cvd_series: list[float],
+    window: int = 20,
+    break_threshold_pct: float = 0.02,  # 突破阈值：2%偏离算有效突破
+    min_points: int = 10,
+) -> dict:
+    """
+    CVD趋势线突破检测 — 领先于价格结构转变的预警信号。
+    
+    社区共识（X/ICT 2026）：
+    "CVD trendline breaks as LEADING signals of position unwinding by 
+    large players, often BEFORE price fully breaks structure."
+    
+    Args:
+        cvd_series: CVD累积增量序列（按时间）
+        window: 趋势线计算窗口（默认20根K线）
+        break_threshold_pct: 偏离趋势线百分比阈值
+        min_points: 最少数据点数
+        
+    Returns:
+        {
+            "trendline_broken": bool,
+            "direction": "上破/下破/未破",
+            "signal": str,           # 预警描述
+            "confidence": int,        # 0-100
+            "trend_slope": float,    # 趋势线斜率
+            "deviation_pct": float,  # 当前偏离百分比
+        }
+    """
+    n = len(cvd_series)
+    if n < min_points:
+        return {
+            "trendline_broken": False,
+            "direction": "未破",
+            "signal": f"CVD数据不足({n}<{min_points})·无法拟合趋势线",
+            "confidence": 0,
+            "trend_slope": 0.0,
+            "deviation_pct": 0.0,
+        }
+    
+    # 用 window 内数据做线性回归找趋势线
+    use_n = min(n, window)
+    x = np.arange(use_n, dtype=float)
+    y = np.array(cvd_series[-use_n:], dtype=float)
+    
+    # 简单线性回归 y = slope * x + intercept
+    x_mean = np.mean(x)
+    y_mean = np.mean(y)
+    slope = np.sum((x - x_mean) * (y - y_mean)) / max(np.sum((x - x_mean) ** 2), 1e-9)
+    intercept = y_mean - slope * x_mean
+    
+    # 趋势线预测值
+    trendline_y = slope * x + intercept
+    
+    # 最新点的偏离
+    latest_actual = y[-1]
+    latest_predicted = trendline_y[-1]
+    deviation = latest_actual - latest_predicted
+    
+    # 偏离百分比（相对趋势线范围）
+    y_range = max(np.ptp(y), abs(y_mean) * 0.01, 1.0)
+    deviation_pct = deviation / y_range if y_range > 0 else 0.0
+    
+    # 突破判定
+    broken = abs(deviation_pct) >= break_threshold_pct
+    direction = "未破"
+    signal = "CVD沿趋势运行·未突破趋势线"
+    conf = 0
+    
+    if broken:
+        if deviation_pct < 0 and slope > 0:
+            # CVD原上升趋势 → 跌破趋势线 = 多头撤离
+            direction = "下破"
+            conf = min(90, int(abs(deviation_pct) * 200))
+            signal = (f"CVD趋势线下破·原上升CVD跌破趋势({deviation_pct:+.1%})"
+                      f"·多头可能正在退出·价格尚未反应")
+        elif deviation_pct > 0 and slope < 0:
+            # CVD原下降趋势 → 突破趋势线 = 空头撤离
+            direction = "上破"
+            conf = min(90, int(abs(deviation_pct) * 200))
+            signal = (f"CVD趋势线上破·原下降CVD突破压制({deviation_pct:+.1%})"
+                      f"·空头可能正在撤退·价格尚未反应")
+        elif deviation_pct < 0 and slope <= 0:
+            # 下降趋势加速下跌 = 空头加强
+            direction = "下破"
+            conf = min(70, int(abs(deviation_pct) * 150))
+            signal = f"CVD加速下行({deviation_pct:+.1%})·空头力量加强"
+        elif deviation_pct > 0 and slope >= 0:
+            # 上升趋势加速上涨 = 多头加强
+            direction = "上破"
+            conf = min(70, int(abs(deviation_pct) * 150))
+            signal = f"CVD加速上行({deviation_pct:+.1%})·多头力量加强"
+    
+    return {
+        "trendline_broken": broken,
+        "direction": direction,
+        "signal": signal,
+        "confidence": conf,
+        "trend_slope": round(slope, 6),
+        "deviation_pct": round(deviation_pct, 4),
+    }
+
+
+def cvd_trendline_alert_line(
+    symbol: str,
+    cvd_series: list[float],
+    window: int = 20,
+) -> str:
+    """一行式CVD趋势线预警文本（嵌入分析卡博弈段）"""
+    result = detect_cvd_trendline_break(cvd_series, window=window)
+    if result["trendline_broken"]:
+        direction_mark = "⚠" if result["direction"] in ("下破", "上破") else "📉"
+        return f"{direction_mark} CVD趋势线{result['direction']}·{result['signal']} | 置信{result['confidence']}"
+    return f"CVD趋势线稳固·{result['signal']}"
+
+
 # ═══ CLI ═══
 if __name__ == "__main__":
     import sys

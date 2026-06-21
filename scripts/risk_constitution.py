@@ -574,6 +574,128 @@ def adaptive_risk_usd(account_balance: float, atr_pct: float,
     }
 
 
+# ═══ 动态回撤降级 v2.1（X社区2026机构共识·渐进式风控）═══
+# 源：X/Twitter 2026 institutional consensus + Reddit r/algotrading
+# 共识：纯固定1%不够 → 必须根据当前回撤层级自动降险
+#   DD > 5-8% → 风险降至 0.5%/笔
+#   DD > 10-12% → 风险降至 0.25%/笔
+#   DD > 15-20% → 暂停所有新仓
+
+def dynamic_drawdown_scaling(
+    current_drawdown_pct: float,
+    base_risk_pct: float = None,
+) -> dict:
+    """
+    基于当前回撤的动态风险缩放。
+    
+    与 MaxDrawdown 硬熔断不同：这里是渐进式降级，而非一刀切停。
+    
+    Args:
+        current_drawdown_pct: 当前回撤百分比（正数，如0.08=8%）
+        base_risk_pct: 基准风险%，默认1%
+        
+    Returns:
+        {
+            "scaled_risk_pct": float,    # 缩放后风险%
+            "tier": str,                  # 层级：full/half/quarter/paused
+            "multiplier": float,          # 相对基准的倍数
+            "threshold_breached": list,   # 触发的阈值
+            "message": str,               # 人类可读描述
+        }
+    """
+    if base_risk_pct is None:
+        base_risk_pct = CONSTITUTION["MAX_RISK_PER_TRADE_PCT"]
+    
+    dd = abs(current_drawdown_pct)
+    thresholds = []
+    
+    # 渐进式降级（社区共识）
+    if dd >= 0.20:
+        scaled = 0.0
+        tier = "paused"
+        thresholds.append("DD≥20%")
+        msg = "回撤≥20% · 暂停所有新仓 · 等待恢复"
+    elif dd >= 0.15:
+        scaled = base_risk_pct * 0.10
+        tier = "micro"
+        thresholds.append("DD≥15%")
+        msg = f"回撤{dd:.1%}≥15% · 降至{scaled:.2%} · 基本暂停"
+    elif dd >= 0.12:
+        scaled = base_risk_pct * 0.25
+        tier = "quarter"
+        thresholds.append("DD≥12%")
+        msg = f"回撤{dd:.1%}≥12% · 降至{scaled:.2%}(1/4仓)"
+    elif dd >= 0.08:
+        scaled = base_risk_pct * 0.50
+        tier = "half"
+        thresholds.append("DD≥8%")
+        msg = f"回撤{dd:.1%}≥8% · 降至{scaled:.2%}(1/2仓)"
+    elif dd >= 0.05:
+        scaled = base_risk_pct * 0.75
+        tier = "reduced"
+        thresholds.append("DD≥5%")
+        msg = f"回撤{dd:.1%}≥5% · 降至{scaled:.2%}(3/4仓)"
+    else:
+        scaled = base_risk_pct
+        tier = "full"
+        msg = f"回撤{dd:.1%}<5% · 维持全仓{scaled:.2%}"
+    
+    multiplier = scaled / base_risk_pct if base_risk_pct > 0 else 1.0
+    
+    return {
+        "scaled_risk_pct": round(scaled, 5),
+        "tier": tier,
+        "multiplier": round(multiplier, 3),
+        "threshold_breached": thresholds,
+        "message": msg,
+    }
+
+
+def combined_risk_check(
+    account_balance: float,
+    atr_pct: float,
+    current_drawdown_pct: float,
+    max_risk_usd_abs: float = 10.0,
+) -> dict:
+    """
+    组合风险检查：波动率自适应 + 回撤降级 = 最终单笔风险。
+    
+    优先级：回撤降级分母 → 波动率自适应分子 → 硬上限兜底。
+    
+    Returns: 最终 risk_usd + 各层详情
+    """
+    # 层1：回撤降级
+    dd = dynamic_drawdown_scaling(current_drawdown_pct)
+    
+    # 层2：波动率自适应
+    vol = adaptive_risk_usd(account_balance, atr_pct)
+    
+    # 组合：用回撤降级后的风险% × 波动率倍数
+    combined_risk_pct = dd["scaled_risk_pct"] * vol["multiplier"]
+    raw_risk_usd = account_balance * combined_risk_pct
+    
+    # 层3：硬上限
+    hard_cap = min(account_balance * 0.10, max_risk_usd_abs)
+    final_risk_usd = min(raw_risk_usd, hard_cap)
+    capped = raw_risk_usd > hard_cap
+    
+    return {
+        "risk_usd": round(final_risk_usd, 2),
+        "risk_pct": round(combined_risk_pct, 5),
+        "drawdown_tier": dd["tier"],
+        "drawdown_mult": dd["multiplier"],
+        "volatility_mult": vol["multiplier"],
+        "volatility_regime": vol["regime"],
+        "capped": capped,
+        "reason": (
+            f"回撤{dd['tier']}(×{dd['multiplier']})"
+            f" · 波动{vol['regime']}(×{vol['multiplier']})"
+            f" · 风险`{final_risk_usd}`U"
+            + ("（触上限）" if capped else "")
+        ),
+    }
+
+
 # ═══ CLI ═══
 if __name__ == "__main__":
     # Demo
