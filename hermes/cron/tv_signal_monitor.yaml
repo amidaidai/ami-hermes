@@ -2,7 +2,7 @@
 # cron agent: 需要LLM推理来读取TradingView MCP数据
 # 逻辑: 读TV DMI → 判断等级 → A级/关键位触发时生成卡+推送
 name: "TV信号监控·智能推送"
-cron: "*/30 * * * *"
+cron: "*/15 * * * *"
 no_agent: false
 instructions: |
   你是TV缓存维护员。每30分钟读一次TradingView MCP，写入data/tv_dmi_cache.json。
