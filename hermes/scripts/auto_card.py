@@ -1469,7 +1469,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
     results = []
     try:
         from multi_model_engine import run_all_models, merge_directions, check_event_ban, call_grok_validation
-        results = run_all_models(engine_data)
+        results = run_all_models(engine_data, symbol)
         banned, ban_reason = check_event_ban(engine_data, symbol)
         merged = merge_directions(results, event_ban=banned, event_ban_reason=ban_reason)
         print(f"  ✅ Bias: {merged['bias']} | Conf: {merged['global_confidence']:.3f} | n/5: {merged.get('confidence_5','?')}")

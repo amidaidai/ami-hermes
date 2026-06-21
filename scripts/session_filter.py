@@ -193,6 +193,19 @@ def require_liquidity_for_gold(dt: datetime = None) -> bool:
     sessions = get_active_sessions("XAUUSD", dt)
     return any(s in sessions for s in ["london", "ny", "overlap"])
 
+def has_min_liquidity(symbol: str, snapshot: dict = None) -> bool:
+    """F轮简单流动性门槛：crypto 优先高量，gold/forex 用时段，stock 用美股时段。"""
+    ac = get_asset_class(symbol)
+    if ac == "crypto":
+        # 简单：如果有 snapshot 且 quality 好
+        if snapshot:
+            q = snapshot.get("quality", "B")
+            return q in ("A", "A-", "B+")
+        return True  # 默认允许
+    if ac == "gold":
+        return require_liquidity_for_gold()
+    return True  # 其他由 should_trade 控制
+
 def should_trade(asset: str = "XAUUSD", 
                  require_kill_zone: bool = False,
                  dt: datetime = None) -> tuple[bool, str]:

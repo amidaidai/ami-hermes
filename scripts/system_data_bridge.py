@@ -247,7 +247,7 @@ def dir_flip(sym: str) -> tuple:
             _sys.path.insert(0, eng_dir)
         from multi_model_engine import run_all_models, merge_directions
         s = snapshot(sym)
-        r = run_all_models(s)
+        r = run_all_models(s, sym)
         m = merge_directions(r)
         nd = m["bias"]
         # 每轮记录预测，4h 后由 行情守望._verify_predictions_if_needed 回验

@@ -1216,10 +1216,11 @@ def _cvd_display(cvd, cvd_quality):
     return f"{cvd} · {cvd_quality or 'C级'}"
 
 
-def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None, cvd_quality=None, reason=None, tier="info", risk_text=None, derivatives_text=None, ls_text=None, taker_text=None, conflict_text=None, model_dir_text=None, setup=None, all_levels=None):
+def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None, cvd_quality=None, reason=None, tier="info", risk_text=None, derivatives_text=None, ls_text=None, taker_text=None, conflict_text=None, model_dir_text=None, setup=None, all_levels=None, macro_text=None):
     """v7.4: 序号语义对齐分析卡 v6.8。
     ①品种 ②周期 ③现价 ④状态(A/B/X) ⑤模型 ⑥触发位 ⑦订单流 ⑧衍生 ⑨引擎/冲突 ⑩风控。
-    实时触发瞬间无完整分析，④状态/⑤模型 从 latest_setup 读取，缺失则降级文案。"""
+    实时触发瞬间无完整分析，④状态/⑤模型 从 latest_setup 读取，缺失则降级文案。
+    F轮增强：支持 macro_text (DXY/US10Y/财报) 注入到衍生区。"""
     setup = setup or {}
     lines = [head, ""]
     # 全卡统一圈号计数器：头部字段与衍生区共用，全程连续不撞不跳。
@@ -1255,7 +1256,6 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
         if reason:
             lines.append(f"   原因：{reason}")
     # v7.5: 关键位全景 — 始终列出全部近端阻力/支撑，触发位高亮，未触发位单行简略。
-    # 让你在任一位触发时也能看到阻1/阻2/支1/支2 完整结构和各自距离。
     if all_levels:
         hit_names = {h.get("name") for h in (hits or [])}
         panorama = sort_levels_panorama(all_levels)
@@ -1275,6 +1275,7 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
         ("引擎", model_dir_text or None),
         ("冲突", conflict_text or None),
         ("风控", risk_text or None),
+        ("宏观", macro_text or None),  # F轮新增
     ]
     for label, val in extras:
         if val:
@@ -1310,6 +1311,16 @@ def process_block(raw, symbol, block, state):
                 return raw, False
     except ImportError:
         pass  # 降级
+
+    # F轮: 额外流动性门槛 (使用 snapshot 或默认)
+    try:
+        from session_filter import has_min_liquidity
+        snap = raw.get("_macro") or {}
+        if not has_min_liquidity(symbol, snap):
+            log(f"流动性不足 {symbol} — 静默")
+            return raw, False
+    except:
+        pass
 
     # 事件禁做 + 数据桥宏观增强（DXY / 财报）
     if _HAS_BRIDGE:
@@ -1363,6 +1374,22 @@ def process_block(raw, symbol, block, state):
     except Exception:
         pass  # 宪法模块不可用时退化到原风控
     derivatives_text = bridge_deriv(symbol) if _HAS_BRIDGE else derivatives_line(snapshot)
+    # F轮: 监控警报注入宏观 (DXY/US10Y/财报)
+    macro_text = ""
+    if _HAS_BRIDGE:
+        try:
+            from system_data_bridge import asset_macro_enrich
+            m = asset_macro_enrich(symbol)
+            parts = []
+            if m.get("dxy"):
+                parts.append(f"DXY `{m['dxy']:.2f}`")
+            if m.get("us10y"):
+                parts.append(f"US10Y `{m['us10y']:.2f}`")
+            if m.get("event_flag") and "财报" in str(m.get("event_flag", "")):
+                parts.append("财报窗口注意")
+            macro_text = " · ".join(parts) if parts else ""
+        except:
+            pass
     # v6.5: 多空比 + Taker + 方向冲突文本
     ls_text = taker_text = conflict_text = ""
     if _HAS_BRIDGE:
@@ -1404,7 +1431,7 @@ def process_block(raw, symbol, block, state):
             allow_push, push_reason = push_allowed("expired", expired, snapshot)
             pushed = False
             if allow_push:
-                msg = render_message(f"{symbol} · 监控位过期", symbol, price, plan_id, cycle, expired, "旧位已过期，不再按旧计划触发", tier="expired", risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
+                msg = render_message(f"{symbol} · 监控位过期", symbol, price, plan_id, cycle, expired, "旧位已过期，不再按旧计划触发", tier="expired", risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items, macro_text=macro_text)
                 pushed = push(msg, target=alert_target_for(symbol))
             else:
                 log(f"降噪不推送 {symbol} expired: {push_reason}")
@@ -1427,7 +1454,7 @@ def process_block(raw, symbol, block, state):
             allow_push, push_reason = push_allowed("invalidated", invalidated, snapshot)
             pushed = False
             if allow_push:
-                msg = render_message(f"{symbol} · 计划失效", symbol, price, plan_id, cycle, invalidated, "旧计划已失效，等新分析刷新", reason=reason, tier="invalidated", risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
+                msg = render_message(f"{symbol} · 计划失效", symbol, price, plan_id, cycle, invalidated, "旧计划已失效，等新分析刷新", reason=reason, tier="invalidated", risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items, macro_text=macro_text)
                 pushed = push(msg, target=alert_target_for(symbol))
             else:
                 log(f"降噪不推送 {symbol} invalidated: {push_reason}")
@@ -1511,11 +1538,11 @@ def process_block(raw, symbol, block, state):
         # v7.5: 突破后就地自动重算结构（在推送前完成，合并通知到同一条消息）
         raw, auto_refreshed = auto_refresh_structure(raw, symbol, price, breached)
         if auto_refreshed:
-            msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
+            msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items, macro_text=macro_text)
             msg += f"\n\n🔁 结构已自动重算 — 等回踩确认后说「分析 {symbol.replace('USDT', '')}」刷新卡"
             pushed = push(msg, target=alert_target_for(symbol))
         else:
-            msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items)
+            msg = render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=cvd, cvd_quality=cvd_quality, tier=tier, risk_text=risk_text, derivatives_text=derivatives_text, ls_text=ls_text, taker_text=taker_text, conflict_text=conflict_text, model_dir_text=model_dir_text, setup=setup, all_levels=items, macro_text=macro_text)
             pushed = push(msg, target=alert_target_for(symbol))
     else:
         log(f"降噪不推送 {symbol} {tier}: {push_reason}")

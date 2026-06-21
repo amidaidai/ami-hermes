@@ -337,12 +337,17 @@ ALL_MODELS = [
 # 合并引擎
 # ═══════════════════════════════════════
 
-def run_all_models(data: dict) -> List[dict]:
-    """运行所有模型，返回结果列表"""
+def run_all_models(data: dict, symbol: str = "BTCUSDT") -> List[dict]:
+    """运行所有模型，返回结果列表。F轮：应用 asset_weight_adapter 按资产调整置信度。"""
     results = []
     for name, fn in ALL_MODELS:
         try:
             direction, confidence = fn(data)
+            # F轮多资产权重适配 (同一模块直接调用)
+            try:
+                confidence = asset_weight_adapter(symbol, confidence, name)
+            except Exception:
+                pass
             results.append({
                 "name": name,
                 "direction": direction,
@@ -658,7 +663,7 @@ if __name__ == "__main__":
     # v1.2: 实际事件检查替代硬编码
     event_ban, event_reason = check_event_ban(data, symbol)
     
-    results = run_all_models(data)
+    results = run_all_models(data, symbol)
     merged = merge_directions(results, event_ban=event_ban, event_ban_reason=event_reason)
     
     # v1.3: Grok 交叉验证
