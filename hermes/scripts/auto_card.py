@@ -164,7 +164,8 @@ def _env_walls_line(symbol: str, price, klines: dict) -> str:
 def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dict,
                        engine_data: dict, grok: dict | None = None,
                        search_sent: str = "", community: str = "",
-                       regime_name: str | None = None, now: datetime | None = None) -> str:
+                       regime_name: str | None = None, now: datetime | None = None,
+                       force_full: bool = False) -> str:
     """v6.9 混合排版：完整底板内容套速读版序号骨架。
 
     ⑩头部 + 一∼五段全部展开 + 预案A/B双轨 + 逐周期分解 + 三源裁决 + 风控⑩闸门。
@@ -391,7 +392,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     
     # 决策模式：B等待但价格已锚定关键位 → 输出极简速读卡（替代60行全卡）
     anchored = _near_key_level(klines, price)
-    if (status == "B等待" or status == "X禁做") and anchored:
+    if not force_full and (status == "B等待" or status == "X禁做") and anchored:
         compact = _compact_card(symbol, price, status, direction, model_id, klines, k4h, k5m, k15m,
                                 merged, cvd_dir, cvd_quality, taker_dir, taker_ratio,
                                 funding_rate, engine_data, risk_amt, risk_pct_limit,
@@ -1771,24 +1772,44 @@ def auto_card(symbol: str, push: bool = False) -> str:
         meta["protections_active"] = False
         meta["protections_status"] = f"未启用({e})"
     
+    # ═══ Step 5: 双卡渲染 ═══
+    # Card A: 完整分析卡（始终输出）
+    full_card = render_card_locked(
+        symbol, merged, results, meta, engine_data,
+        grok=grok, search_sent=search_sent, community=community,
+        regime_name=regime_name, force_full=True,
+    )
+    full_card = sanitize_card_format(full_card)
+    rule_errors = validate_card_rules(full_card, meta)
+    if rule_errors:
+        print("  ⚠ 模板审计发现问题: " + "；".join(rule_errors))
+    append_trade_plan(meta, full_card)
+    update_monitor_metadata(symbol, meta)
+
+    # Card B: 极简决策卡（仅当价格锚定关键位时）
     card = render_card_locked(
         symbol, merged, results, meta, engine_data,
         grok=grok, search_sent=search_sent, community=community,
-        regime_name=regime_name,
+        regime_name=regime_name, force_full=False,
     )
-    # 机器字段不进卡片正文，单独落盘（人读中文卡，机器读结构化字段）
     card = sanitize_card_format(card)
-    rule_errors = validate_card_rules(card, meta)
-    if rule_errors:
-        print("  ⚠ 模板审计发现问题: " + "；".join(rule_errors))
-    append_trade_plan(meta, card)
-    update_monitor_metadata(symbol, meta)
 
-    # Save
-    out_path = DATA / f"auto_card_{symbol.replace('/', '_')}.md"
-    out_path.write_text(card, encoding="utf-8")
-    print(f"  ✅ 已写入 {out_path}")
+    # Save both
+    sym_name = symbol.replace('/', '_')
+    full_path = DATA / f"auto_card_{sym_name}_full.md"
+    compact_path = DATA / f"auto_card_{sym_name}.md"
+    full_path.write_text(full_card, encoding="utf-8")
+    compact_path.write_text(card, encoding="utf-8")
+    
+    is_compact = len(card.strip().split('\n')) <= 10
+    print(f"  ✅ 已写入 {compact_path} ({'极简' if is_compact else '完整'})")
+    print(f"  ✅ 已写入 {full_path} (完整)")
+    
+    # Show compact card (shorter) first, then note full card available
     print(f"\n{card}")
+    if is_compact:
+        line_count = len(full_card.strip().split('\n'))
+        print(f"\n📋 完整分析卡 ({line_count}行) 已保存至 {full_path.name}")
     
     # ═══ Step 6: 推送 ═══
     if push:
@@ -2014,8 +2035,17 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     else:
         stop_a = nearest_level * 0.995; tp_b = nearest_level * 1.03
         stop_b = nearest_level * 1.005; tp_a = nearest_level * 0.97
-    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)}"
-    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)}"
+    rr_a = abs(tp_a - p) / abs(stop_a - p) if abs(stop_a - p) > 0 else 1
+    rr_b = abs(tp_b - p) / abs(stop_b - p) if abs(stop_b - p) > 0 else 1
+    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}"
+    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}"
+    
+    # 社区共识标签
+    fg_val = fg.get("value", "?") if isinstance(fg, dict) else "?"
+    fg_cls = fg.get("value_classification", "") if isinstance(fg, dict) else ""
+    fg_tag = f"F&G {fg_val}{fg_cls}" if fg_val != "?" else ""
+    comm_tag = f"社区{fg_tag}" if fg_tag else ""
+    
     prot_tag = "🛡" if prot_status == "通过" else f"⚠{prot_status}"
     lines = [
         f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {bias}",
@@ -2024,7 +2054,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
         plan_a,
         plan_b,
-        f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag}",
+        f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag} · {comm_tag}",
         f"—— 决策：你来选方向——",
     ]
     return "\n".join(lines) + "\n"

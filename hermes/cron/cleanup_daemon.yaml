@@ -1,0 +1,10 @@
+# 清理守护 — 每6小时
+# 清理过期日志、临时文件、状态缓存
+name: "清理守护"
+cron: "0 */6 * * *"
+no_agent: true
+command: "python"
+args:
+  - "hermes/scripts/cleanup_daemon.py"
+  - "--quiet"
+enabled: true

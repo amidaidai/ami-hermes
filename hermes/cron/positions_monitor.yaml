@@ -1,0 +1,10 @@
+# 持仓与信号监控 — 每5分钟
+# no_agent: 纯脚本模式，零token消耗
+name: "持仓信号监控"
+cron: "*/5 * * * *"
+no_agent: true
+command: "python"
+args:
+  - "hermes/scripts/monitor_positions.py"
+  - "--silent"
+enabled: true

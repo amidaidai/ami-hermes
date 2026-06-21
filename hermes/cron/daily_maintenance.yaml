@@ -1,0 +1,10 @@
+# 凌晨维护 — 每天3:20
+# 日度数据刷新、持仓快照、周度更迭检查
+name: "凌晨维护"
+cron: "20 3 * * *"
+no_agent: true
+command: "python"
+args:
+  - "hermes/scripts/daily_maintenance.py"
+  - "--quiet"
+enabled: true

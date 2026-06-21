@@ -1,96 +1,53 @@
-#!/usr/bin/env python3
-"""
-棠溪 · 事件清理守护 v1.0 (独立 cron · 不依赖信号巡检)
-每天凌晨 4:00 运行，清理过期事件/日志，防止 monitor_events.json 膨胀
-"""
-import json, os, time
-from datetime import datetime, timezone, timedelta
+#!/usr/bin/env python
+"""清理守护 — 每6小时。清理过期日志、临时文件、状态缓存。"""
+import sys
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
-TZ = timezone(timedelta(hours=8))
-DATA_DIR = "D:/Hermes agent/data"
+DATA = Path(__file__).resolve().parent.parent.parent / "data"
+SCRIPTS = Path(__file__).resolve().parent
 
-MAX_EVENTS = 500
-MAX_AGE_DAYS = 7
-MAX_LOG_SIZE_MB = 10
-
-def main():
-    now = datetime.now(TZ)
-    cutoff = now - timedelta(days=MAX_AGE_DAYS)
+def cleanup():
+    cleaned = []
+    now = datetime.now(timezone.utc)
     
-    changes = []
+    # 清理7天前的旧卡文件（保留最近10个）
+    card_files = sorted(DATA.glob("auto_card_*.md"), key=lambda x: x.stat().st_mtime, reverse=True)
+    for f in card_files[10:]:
+        if now - datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) > timedelta(days=7):
+            f.unlink(missing_ok=True)
+            cleaned.append(f.name)
     
-    # 1. 清理 monitor_events.json
-    events_file = os.path.join(DATA_DIR, "monitor_events.json")
-    if os.path.exists(events_file):
+    # 清理30天前的旧JSONL日志（trade_plans保留）
+    for pattern in ["prediction_log.jsonl", "price_alerts.jsonl"]:
+        f = DATA / pattern
+        if f.exists() and now - datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc) > timedelta(days=30):
+            f.unlink(missing_ok=True)
+            cleaned.append(f.name)
+    
+    # 清理过期Protections状态（保留今天的）
+    prot_file = DATA / "protections_state.json"
+    if prot_file.exists():
         try:
-            with open(events_file, "r") as f:
-                data = json.load(f)
-            events = data.get("events", [])
-            original_count = len(events)
-            
-            # 去旧事件
-            new_events = []
-            for e in events:
-                try:
-                    t = datetime.fromisoformat(e.get("time", "2000-01-01"))
-                    if t > cutoff:
-                        new_events.append(e)
-                except Exception:
-                    new_events.append(e)
-            
-            # 只保留最近 MAX_EVENTS
-            if len(new_events) > MAX_EVENTS:
-                new_events = new_events[-MAX_EVENTS:]
-            
-            data["events"] = new_events
-            data["_last_cleanup"] = now.isoformat(timespec="seconds")
-            data["_cleaned"] = original_count - len(new_events)
-            
-            with open(events_file, "w") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            changes.append(f"monitor_events: {original_count} → {len(new_events)} (-{original_count - len(new_events)})")
-        except Exception as e:
-            changes.append(f"monitor_events: error - {e}")
+            import json
+            prot = json.loads(prot_file.read_text())
+            last_time = prot.get("last_reset", "")
+            if last_time:
+                last = datetime.fromisoformat(last_time)
+                if (now - last.replace(tzinfo=timezone.utc)).days > 1:
+                    prot_file.unlink(missing_ok=True)
+                    cleaned.append("protections_state.json (expired)")
+        except:
+            pass
     
-    # 2. 清理大日志文件
-    for fname in ["noise_history.json", "monitor_log.txt"]:
-        fpath = os.path.join(DATA_DIR, fname)
-        if os.path.exists(fpath):
-            size_mb = os.path.getsize(fpath) / (1024 * 1024)
-            if size_mb > MAX_LOG_SIZE_MB:
-                # Truncate by keeping last 1000 lines
-                try:
-                    with open(fpath, "r") as f:
-                        lines = f.readlines()
-                    with open(fpath, "w") as f:
-                        f.writelines(lines[-1000:])
-                    changes.append(f"{fname}: {size_mb:.1f}MB → truncated")
-                except Exception as e:
-                    changes.append(f"{fname}: error - {e}")
-    
-    # 3. 清理旧的 source_snapshots
-    snap_dir = os.path.join(DATA_DIR, "source_snapshots")
-    if os.path.isdir(snap_dir):
-        for date_dir in os.listdir(snap_dir):
-            dpath = os.path.join(snap_dir, date_dir)
-            if os.path.isdir(dpath):
-                try:
-                    d = datetime.strptime(date_dir, "%Y-%m-%d")
-                    if d < cutoff:
-                        import shutil
-                        shutil.rmtree(dpath)
-                        changes.append(f"source_snapshots/{date_dir}: removed")
-                except ValueError:
-                    pass
-    
-    result = {
-        "time": now.isoformat(timespec="seconds"),
-        "changes": changes,
-        "summary": "\n".join(changes) if changes else "No cleanup needed"
-    }
-    
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return cleaned
 
 if __name__ == "__main__":
-    main()
+    silent = "--quiet" in sys.argv
+    result = cleanup()
+    if result and not silent:
+        print(f"清理守护: 清理了 {len(result)} 个文件")
+        for f in result:
+            print(f"  🗑 {f}")
+    elif not silent:
+        print("清理守护: 无需清理")
