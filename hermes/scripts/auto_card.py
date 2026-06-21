@@ -235,36 +235,45 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"◷ {now.strftime('%m-%d %H:%M')} CST",
         f"① 品种：{display_symbol}",
         "② 周期：",
-        f"5m {_kl_summary(k5m, '当前')} — 等待方向",
-        f"15m {_kl_summary(k15m, '当前')} — 等待方向",
-        f"1h {_kl_summary(k1h, '当前')} — 等待方向",
-        f"4h {_kl_summary(k4h, '背景')} — 等待方向",
+        f"5m {_kl_summary(k5m, '当前') or '等待方向'}",
+        f"15m {_kl_summary(k15m, '当前') or '等待方向'}",
+        f"1h {_kl_summary(k1h, '当前') or '等待方向'}",
+        f"4h {_kl_summary(k4h, '背景') or '等待方向'}",
         f"③ 现价：{_fmt_price(price)} · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
-        f"④ 状态：{status} · ⑤ 模型：{model_id}",
+        f"④ 状态：{status}",
+        f"⑤ 模型：{model_id}",
         f"⑥ 评分：{_score13(merged, results, status, symbol)}",
         f"⑦ 决策：{_decision_text(merged, status)} · 置信 {n5}/5",
-        f"⑧ 仓位：{_pos_level(data_grade, status)} · 风险 `{meta.get('risk_usd',2)}U`",
+        f"⑧ 仓位：{_pos_level(data_grade, status)} · 风险 `{_adaptive_risk(engine_data):.2f}U`",
         f"⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}",
         f"⑩ 数据：{data_grade} · {_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
     ]
 
-    # ═══ 一、环境（1500字版） ═══
+    # ═══ 一、环境 ═══
     fg_v = fg.get("value", "?") if fg else "?"
     flow_line = _asset_flow_line(symbol, engine_data, funding_rate, taker_dir, taker_ratio, cvd_dir, cvd_quality)
+    risk_amt = _adaptive_risk(engine_data)
+    macro = engine_data.get("_macro", {})
     env = [
         "一、环境",
         f"① 数据：{data_grade} · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}",
-        f"② 资金：{flow_line}",
-        f"③ 催化/情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)}",
+        f"② 市场：{flow_line}",
+        f"③ 主动成交：{_cvd_display(cvd_dir)} {cvd_quality} · Taker {taker_dir} — 只在关键位计入",
+        f"④ 流动性：上 `{_fmt_price(high)}` · 下 `{_fmt_price(low)}` — 止损池/前高低/价值区",
+        f"⑤ 催化与情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)} — 只验证结构",
+        f"⑥ 风控环境：{_gate_data(data_grade)} — 风险 `{risk_amt:.2f}U` · Constitution v2.0",
     ]
 
-    # ═══ 二、结构（1500字版） ═══
+    # ═══ 二、结构 ═══
     struct = ["二、结构"]
-    struct.append(f"① 4h：{_kl_bias(k4h)} · 失效 `{_invalid_4h(k4h, merged)}`")
-    struct.append(f"② 1h/15m：阻 `{_sr_level(k1h,'res',price)}` · 支 `{_sr_level(k1h,'sup',price)}` · 执行 `{_exec_line(klines, merged, status)}`")
-    struct.append(f"③ 5m：{_trigger_5m(k5m, merged, model_id)} · 禁追 `{_no_chase_line(klines, price)}`")
+    struct.append(f"① 4h背景：{_kl_bias(k4h)} — 高周期方向与失效线 `{_invalid_4h(k4h, merged)}`")
+    struct.append(f"② 1h结构：阻 `{_sr_level(k1h,'res',price)}` · 支 `{_sr_level(k1h,'sup',price)}` — 接受/拒绝状态")
+    struct.append(f"③ 15m执行：触发 `{_exec_line(klines, merged, status)}` · 禁追 `{_no_chase_line(klines, price)}` — 收线确认")
+    struct.append(f"④ 5m触发：扫荡 `{_sweep_state(k5m, merged) or '待扫'}` · CVD/量价 `{_cvd_display(cvd_dir)}` · 强位移 `{_displacement(k5m) or '弱'}`")
+    struct.append(f"⑤ 价值区：VAH `{_fmt_price(k15m.get('vah'))}` · POC `{_fmt_price(k15m.get('poc'))}` · VAL `{_fmt_price(k15m.get('val'))}` · 裸POC {_naked_poc(k15m)}")
+    struct.append(f"⑥ 三线：失效 `{_invalid_4h(k4h, merged)}` · 执行 `{_exec_line(klines, merged, status)}` · 禁追 `{_no_chase_line(klines, price)}`")
 
-    # ═══ 三、博弈（1500字版） ═══
+    # ═══ 三、博弈 ═══
     _near_lv = _near_key_level(klines, price)
     _anchor_txt = "锚定" if _near_lv else "未锚定"
     structure_dir = _structure_verdict(klines, merged)
@@ -273,11 +282,15 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     flow_label = _asset_flow_label(symbol)
     resonance = "共振" if (structure_dir == engine_dir == flow_dir) or status.startswith("A") else "未共振"
     boundary = _boundary(klines, merged, price)
+    asset_game = _asset_game_line(symbol, engine_data)
     game = [
         "三、博弈",
-        f"① 裁决：结构{structure_dir} · 引擎{engine_dir} · {flow_label}{flow_dir} — {resonance}",
-        f"② 强弱：空 {short_c:.2f} vs 多 {long_c:.2f} · {_anchor_txt}",
-        f"③ 分界：`{boundary}` — 上方偏多，下破偏空",
+        f"① 结构裁决：{structure_dir} — 4h/1h {'同向' if structure_dir == _kl_bias(k1h) else '分歧'}",
+        f"② 引擎裁决：做空 {short_c:.2f} vs 做多 {long_c:.2f} — {resonance}",
+        f"③ 订单流裁决：扫荡 {_sweep_state(k5m, merged) or '待扫'} · CVD/成交 {_cvd_display(cvd_dir)} · 强位移 {_displacement(k5m) or '弱'}",
+        f"④ 资产专属：{asset_game}",
+        f"⑤ 三源裁决：结构{structure_dir} + 引擎{engine_dir} + 订单流{flow_dir} — {resonance}",
+        f"⑥ 分歧处理：{resonance}才允许预案；未共振则 B等待；硬闸不过则 X禁做",
     ]
 
     # ═══ 四、操作 ═══
@@ -308,7 +321,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"   **止盈1：`{tp1_a}`**")
         ops.append(f"   **止盈2：`{tp2_a}`**")
         ops.append(f"**④ 仓位：`{_qty(price, meta, plan_a_bias, symbol)} {qty_unit}`**")
-        ops.append(f"   **风险：`{meta.get('risk_usd',2)}U`**")
+        ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：等确认 → 入场 → 移损/止盈")
@@ -326,7 +339,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"   **止盈1：`{tp1_b}`**")
         ops.append(f"   **止盈2：`{tp2_b}`**")
         ops.append(f"**④ 仓位：`{_qty_b(price, meta, plan_a_bias, symbol)} {qty_unit}`**")
-        ops.append(f"   **风险：`{meta.get('risk_usd',2)}U`**")
+        ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：反向确认 → 入场 → 移损/止盈")
@@ -342,18 +355,31 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"   **止损：`{_plan_stop(klines, merged, price, bias_cn, symbol)}`** — 结构反向突破")
         ops.append(f"   **止盈：`{_plan_targets(klines, price, bias_cn, symbol)[0]}`** — R:R底线1:2")
         ops.append(f"**④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`**")
-        ops.append(f"   **风险：`{meta.get('risk_usd',2)}U`**")
+        ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：关键结构位反向收复 — 触发后取消**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：{status} → 入场 → 复查 → 移损/止盈/失效")
 
-    # ═══ 五、风控（精简） ═══
+    # ═══ 五、风控 ═══
     rr1 = meta.get("rr1")
+    prot_status = meta.get("protections_status", "未检测")
+    try:
+        from risk_constitution import CONSTITUTION
+        risk_pct_limit = CONSTITUTION.get("MAX_RISK_PER_TRADE_PCT", 0.01) * 100
+    except Exception:
+        risk_pct_limit = 1
     risk = [
         "五、风控",
-        f"**① 风险：`{meta.get('risk_usd',2)}U`** · 日限`10U` · R:R≥1:2",
-        f"② 闸门：数据{_gate_data(data_grade)} · 事件{_gate_event(engine_data)} · 执行{_gate_exec(klines, price, status)}",
-        "**③ 纪律：不追价 · 不复仇 · 必复盘**",
+        f"① 单笔：风险 `{risk_amt:.2f}U` — {risk_pct_limit:.0f}%宪法上限（v2.0）",
+        f"② 日限：日回撤≥10%全停 · 周回撤≥15%全停",
+        f"③ R:R：≥1:2 — 低于直接 X禁做",
+        f"④ 止损：结构止损优先 · ATR夹层 0.5×∼2.5×ATR",
+        f"⑤ 移损：+1R 移至保本 — +2R 保护利润",
+        f"⑥ 数据闸门：{_gate_data(data_grade)} — 数据C级最高B等待",
+        f"⑦ 事件闸门：{_gate_event(engine_data)} — 重大事件前后60m禁做",
+        f"⑧ 执行闸门：{_gate_exec(klines, price, status)} — 距关键位≤0.5ATR才执行",
+        f"⑨ Protections：{prot_status} — StoplossGuard+Cooldown+MaxDrawdown",
+        f"⑩ 心态闸门：禁追价 · 禁复仇 · 连亏后暂停",
     ]
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]
@@ -1596,6 +1622,68 @@ def auto_card(symbol: str, push: bool = False) -> str:
             print(f"  ⚠️ Push: {e}")
     
     return card
+
+
+# ── v2.0 新增辅助函数 ──
+
+def _cvd_display(cvd_dir: str) -> str:
+    """CVD 清理显示"""
+    if not cvd_dir or cvd_dir in ("N/A", "?", "None", ""):
+        return "CVD ?"
+    return f"CVD {cvd_dir}"
+
+
+def _sweep_state(k: dict, merged: dict) -> str:
+    """扫荡状态"""
+    if not k:
+        return "待扫"
+    desc = k.get("description", "")
+    if "扫荡" in desc or "sweep" in desc.lower():
+        return "已扫"
+    # Check merged for sweep signals
+    perfect = merged.get("perfect_signals", {})
+    if perfect.get("sweep"):
+        return "已扫"
+    return "待扫"
+
+
+def _displacement(k: dict) -> str:
+    """强位移检测"""
+    if not k:
+        return "弱"
+    chg = abs(float(k.get("change_pct", 0) or 0))
+    if chg > 0.005:
+        return "强"
+    if chg > 0.002:
+        return "中"
+    return "弱"
+
+
+def _naked_poc(k: dict) -> str:
+    """裸 POC 检测"""
+    if not k:
+        return "?"
+    poc = k.get("poc")
+    price = k.get("close") or k.get("price")
+    if poc and price and abs(float(poc) - float(price)) < float(poc) * 0.001:
+        return "有"
+    return "无"
+
+
+def _asset_game_line(symbol: str, engine_data: dict) -> str:
+    """资产专属博弈文本"""
+    cls = _asset_class(symbol)
+    if cls == "crypto":
+        cvd = engine_data.get("cvd", {})
+        spot_vs_perp = "分化" if cvd.get("spot_perp_divergence") else "同向"
+        return f"加密现货vs永续{spot_vs_perp} · Funding/OI/Taker综合"
+    elif cls == "gold":
+        macro = engine_data.get("_macro", {})
+        dxy = macro.get("dxy") or "?"
+        kill = macro.get("kill_zone_active", False)
+        return f"黄金Kill Zone {'内' if kill else '外'} · DXY {dxy} · 扫荡后Displacement确认"
+    else:
+        return "按资产类规则判定"
 
 
 if __name__ == "__main__":
