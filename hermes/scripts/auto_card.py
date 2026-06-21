@@ -194,6 +194,11 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     eng_conf = meta.get("engine_confidence", merged.get("global_confidence", 0))
     model_id = meta.get("model_id", "无")
     data_grade = meta.get("data_grade", "C")
+    try:
+        from risk_constitution import CONSTITUTION
+        risk_pct_limit = CONSTITUTION.get("MAX_RISK_PER_TRADE_PCT", 0.01) * 100
+    except Exception:
+        risk_pct_limit = 1
     priority = meta.get("priority_plan", "无")
     short_c = float(merged.get("short_confidence", 0) or 0)
     long_c = float(merged.get("long_confidence", 0) or 0)
@@ -208,6 +213,13 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     taker_data = engine_data.get("taker", {})
     ls_data = engine_data.get("long_short", {})
     klines = engine_data.get("klines", {})
+    data_grade = meta.get("data_grade", "C")
+    try:
+        from risk_constitution import CONSTITUTION
+        risk_pct_limit = CONSTITUTION.get("MAX_RISK_PER_TRADE_PCT", 0.01) * 100
+    except Exception:
+        risk_pct_limit = 1
+    priority = meta.get("priority_plan", "无")
     levels = engine_data.get("monitor_levels", {}).get("symbols", {}).get(symbol, {})
 
     # ── 衍生数据推算 ──
@@ -219,6 +231,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     cvd_dir = cvd_data.get("direction") or "N/A"
     cvd_quality_raw = cvd_data.get("quality") or "C"
     cvd_quality = cvd_quality_raw.replace("级", "") if isinstance(cvd_quality_raw, str) else str(cvd_quality_raw)
+    # 数据等级降级：木桶原理——最弱一环决定
+    data_grade = _effective_grade(data_grade, taker_data, engine_data)
     ls_long = ls_data.get("long") or "N/A"
     ls_short = ls_data.get("short") or "N/A"
 
@@ -257,10 +271,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     env = [
         "一、环境",
         f"① 数据：{data_grade} · {_source_count(engine_data)}源 — {_data_consistency(engine_data)}",
-        f"② 市场：{flow_line}",
-        f"③ 主动成交：{_cvd_display(cvd_dir)} {cvd_quality} · Taker {taker_dir} — 只在关键位计入",
+        f"② 市场：{_clean_flow_line(symbol, engine_data, funding_rate, taker_dir, taker_ratio)}",
+        f"③ 主动成交：{_cvd_display(cvd_dir)} {cvd_quality} — CVD只在关键位计入 · {_near_level_tag(klines, price)}",
         f"④ 流动性：上 `{_fmt_price(high)}` · 下 `{_fmt_price(low)}` — 止损池/前高低/价值区",
-        f"⑤ 催化与情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)} — 只验证结构",
+        f"⑤ 催化与情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)}{_weekend_tag()} — 只验证结构",
         f"⑥ 风控环境：{_gate_data(data_grade)} — 风险 `{risk_amt:.2f}U` · Constitution v2.0",
     ]
 
@@ -308,37 +322,31 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         plan_a_dir = _dir_from_bias(plan_a_bias)
         plan_b_dir = _dir_from_bias(plan_b_bias)
         ops.append("")
-        ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（优先）——")
+        ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（优先·等触发）——")
         ops.append(f"**① 方向：{plan_a_dir}**")
-        ops.append(f"**② 入场：`{_plan_a_entry(klines, merged, price, plan_a_bias, symbol)}`** · 等待触发")
+        ops.append(f"**② 入场：等待触发 — B等待不设具体入场价**")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
         ops.append(f"   确认：15m收线 + {_asset_confirm_brief(symbol, 'follow')}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
-        stop_a = _plan_stop(klines, merged, price, plan_a_bias, symbol)
-        tp1_a, tp2_a = _plan_targets(klines, price, plan_a_bias, symbol)
-        ops.append(f"   **止损：`{stop_a}`**")
-        ops.append(f"   **止盈1：`{tp1_a}`**")
-        ops.append(f"   **止盈2：`{tp2_a}`**")
-        ops.append(f"**④ 仓位：`{_qty(price, meta, plan_a_bias, symbol)} {qty_unit}`**")
-        ops.append(f"   **风险：`{risk_amt:.2f}U`**")
+        ops.append(f"   **止损：待确认后设定 — {_stop_reason(plan_a_bias)}**")
+        ops.append(f"   **止盈：R:R ≥1:2 确认后设定**")
+        ops.append(f"**④ 仓位：待确认后计算 {qty_unit}**")
+        ops.append(f"   **风险：`{risk_amt:.2f}U` · {risk_pct_limit:.0f}%宪法上限**")
         ops.append(f"**⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：等确认 → 入场 → 移损/止盈")
         ops.append("")
-        ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}——")
+        ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}（备选·等反向确认）——")
         ops.append(f"**① 方向：{plan_b_dir}**")
-        ops.append(f"**② 入场：`{_plan_b_entry(klines, merged, price, plan_a_bias, symbol)}`** · 等待触发")
+        ops.append(f"**② 入场：等待触发 — B等待不设具体入场价**")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
         ops.append(f"   确认：反向收线 + {_asset_confirm_brief(symbol, 'reverse')}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
-        stop_b = _plan_stop_b(klines, price, plan_a_bias, symbol)
-        tp1_b, tp2_b = _plan_targets_b(klines, price, plan_a_bias, symbol)
-        ops.append(f"   **止损：`{stop_b}`**")
-        ops.append(f"   **止盈1：`{tp1_b}`**")
-        ops.append(f"   **止盈2：`{tp2_b}`**")
-        ops.append(f"**④ 仓位：`{_qty_b(price, meta, plan_a_bias, symbol)} {qty_unit}`**")
+        ops.append(f"   **止损：待确认后设定 — {_stop_reason(_opposite_bias(plan_a_bias))}**")
+        ops.append(f"   **止盈：R:R ≥1:2 确认后设定**")
+        ops.append(f"**④ 仓位：待确认后计算 {qty_unit}**")
         ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
@@ -363,11 +371,6 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # ═══ 五、风控 ═══
     rr1 = meta.get("rr1")
     prot_status = meta.get("protections_status", "未检测")
-    try:
-        from risk_constitution import CONSTITUTION
-        risk_pct_limit = CONSTITUTION.get("MAX_RISK_PER_TRADE_PCT", 0.01) * 100
-    except Exception:
-        risk_pct_limit = 1
     risk = [
         "五、风控",
         f"① 单笔：风险 `{risk_amt:.2f}U` — {risk_pct_limit:.0f}%宪法上限（v2.0）",
@@ -383,7 +386,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     ]
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]
-    return "\n\n".join(blocks) + "\n"
+    return "\n".join(blocks) + "\n"
 
 
 # ── v6.9 helper functions ──
@@ -475,8 +478,9 @@ def _asset_catalyst_line(symbol: str, engine_data: dict, fg_v, search_sent) -> s
         return f"{catalyst} · F&G `{fg_v}` · {_x_dir(search_sent)}"
     if ac == "gold":
         dxy = engine_data.get("dxy") or macro.get("dxy")
-        dxy_str = f"DXY `{dxy:.2f}`" if dxy else ""
-        return f"{catalyst} · {dxy_str} · 数据窗口".strip(" · ")
+        dxy_str = f"DXY `{_fmt_dxy(dxy)}`" if dxy else ""
+        session = _kill_zone_name()
+        return f"{catalyst} · {dxy_str} · {session}".strip(" · ")
     if ac == "forex":
         return f"{catalyst} · 央行/通胀窗口"
     if ac == "stock":
@@ -848,7 +852,11 @@ def _risk_reason(status: str, bias_cn: str) -> str:
 def _kl_bias(k: dict) -> str:
     if not k: return "无数据"
     d = k.get("direction") or k.get("bias") or ""
-    return d if d else "数据待采"
+    if d: return d
+    desc = k.get("description", "")
+    if "上涨" in desc or "多头" in desc: return "偏多"
+    if "下跌" in desc or "空头" in desc: return "偏空"
+    return "震荡"
 
 def _kl_reason(tf: str, k: dict, merged: dict) -> str:
     desc = k.get("description") or k.get("reason") or ""
@@ -1309,10 +1317,22 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
                 highs = [float(c[2]) for c in data]
                 lows = [float(c[3]) for c in data]
                 volumes = [float(c[5]) for c in data]
+                chg_pct = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0
+                avg_vol = sum(volumes) / len(volumes) if volumes else 0
+                rng = max(highs) - min(lows)
+                poc = sum(closes) / len(closes) if closes else closes[-1]
+                direction = "偏多" if chg_pct > 0.3 else "偏空" if chg_pct < -0.3 else "震荡"
                 klines[tf] = {
                     "close": closes[-1], "high": max(highs), "low": min(lows),
                     "open": float(data[0][1]), "volume": sum(volumes),
                     "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
+                    "change_pct": round(chg_pct, 4),
+                    "avg_volume": avg_vol,
+                    "range": rng,
+                    "poc": round(poc, 2),
+                    "vah": round(max(highs), 2),
+                    "val": round(min(lows), 2),
+                    "direction": direction,
                     "description": _kl_desc(tf, closes, highs, lows, volumes),
                 }
         except Exception:
@@ -1478,16 +1498,71 @@ def auto_card(symbol: str, push: bool = False) -> str:
             engine_data["binance_spot"] = {"price": 64000}
     elif asset == "metal":
         try:
-            import subprocess
-            r = subprocess.run(
-                [sys.executable, "-c", f"import json; print(json.dumps({{'price': 4310}}))"],
-                capture_output=True, text=True, timeout=5, cwd=str(ROOT)
-            )
+            import requests as _req
+            # gold-api.com 现货
+            r = _req.get("https://api.gold-api.com/price/XAU", timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                price = float(data.get("price", 4310))
+                engine_data["prices"] = {"primary": price}
+                engine_data["binance_spot"] = {
+                    "price": price, "24h_high": price * 1.005,
+                    "24h_low": price * 0.995, "percent_change_24h": 0
+                }
+                engine_data["quality"] = "B"
+                engine_data["grades"] = {"overall": "B"}
+                print(f"  ✅ XAU: ${price:,.0f} (gold-api)")
+            
+            # DXY from Yahoo
+            try:
+                dxy_r = _req.get(
+                    "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",
+                    timeout=5, headers={"User-Agent": "Mozilla/5.0"}
+                )
+                if dxy_r.status_code == 200:
+                    dxy_data = dxy_r.json()
+                    dxy_price = dxy_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+                    engine_data["dxy"] = dxy_price
+                    print(f"  ✅ DXY: {dxy_price:.2f}")
+            except Exception:
+                engine_data["dxy"] = 100.85
+            
+            # K-lines from jin10
+            try:
+                import urllib.request, json as _j
+                for tf, limit in [("5m", 12), ("15m", 20), ("1h", 20), ("4h", 20)]:
+                    try:
+                        req = _j.loads(_req.get(
+                            f"https://api.jin10.com/quote/kline?code=XAUUSD&interval={tf}&count={min(limit, 100)}",
+                            timeout=6, headers={"User-Agent": "Mozilla/5.0"}
+                        ).text)
+                        kdata = req.get("data", [])
+                        if kdata:
+                            closes = [float(c[-2]) for c in kdata if len(c) > 3]
+                            highs = [float(c[-3]) for c in kdata if len(c) > 3]
+                            lows = [float(c[-4]) for c in kdata if len(c) > 3]
+                            if closes:
+                                chg = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] else 0
+                                direction = "偏多" if chg > 0.2 else "偏空" if chg < -0.2 else "震荡"
+                                klines = engine_data.setdefault("klines", {})
+                                klines[tf] = {
+                                    "close": closes[-1], "high": max(highs), "low": min(lows),
+                                    "open": closes[0] if closes else price,
+                                    "change_pct": round(chg, 4),
+                                    "poc": round(sum(closes)/len(closes), 2),
+                                    "vah": round(max(highs), 2), "val": round(min(lows), 2),
+                                    "direction": direction,
+                                    "description": f"{'上涨' if chg > 0.5 else '下跌' if chg < -0.5 else '震荡'}{chg:+.1f}%" if abs(chg) > 0.3 else "窄幅盘整 — 等方向",
+                                }
+                    except Exception:
+                        pass
+                if engine_data.get("klines"):
+                    print(f"  ✅ XAU K线: {list(engine_data['klines'].keys())}")
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"  ⚠️ XAU: {e}")
             engine_data["prices"] = {"primary": 4310}
-            engine_data["quality"] = "B"
-            print(f"  ✅ XAU: $4310 (金十+TV)")
-        except Exception:
-            pass
     
     # ═══ Step 2: 引擎运算 ═══
     print("② 引擎运算...")
@@ -1676,14 +1751,108 @@ def _asset_game_line(symbol: str, engine_data: dict) -> str:
     if cls == "crypto":
         cvd = engine_data.get("cvd", {})
         spot_vs_perp = "分化" if cvd.get("spot_perp_divergence") else "同向"
-        return f"加密现货vs永续{spot_vs_perp} · Funding/OI/Taker综合"
+        # OI delta
+        oi = engine_data.get("oi", {})
+        oi_delta = ""
+        if oi:
+            trend = oi.get("trend", "")
+            if trend == "up": oi_delta = " · OI→增(新多入场)"
+            elif trend == "down": oi_delta = " · OI→减(多头离场)"
+        return f"加密现货vs永续{spot_vs_perp} · Funding/OI/Taker综合{oi_delta}"
     elif cls == "gold":
         macro = engine_data.get("_macro", {})
-        dxy = macro.get("dxy") or "?"
-        kill = macro.get("kill_zone_active", False)
-        return f"黄金Kill Zone {'内' if kill else '外'} · DXY {dxy} · 扫荡后Displacement确认"
+        dxy = engine_data.get("dxy") or macro.get("dxy") or "?"
+        kill = _kill_zone_active()
+        kill_name = _kill_zone_name()
+        return f"{kill_name} · DXY {_fmt_dxy(dxy)} · 扫荡后Displacement确认"
     else:
         return "按资产类规则判定"
+
+def _effective_grade(base_grade: str, taker_data: dict, engine_data: dict) -> str:
+    """数据等级降级：木桶原理——最弱一环决定"""
+    if base_grade == "A":
+        taker_q = taker_data.get("quality", "C") if isinstance(taker_data, dict) else "C"
+        cvd_q = (engine_data.get("cvd", {}) or {}).get("quality", "C")
+        if "C" in str(taker_q) or "C" in str(cvd_q):
+            return "B"
+    if base_grade == "B":
+        taker_q = taker_data.get("quality", "C") if isinstance(taker_data, dict) else "C"
+        cvd_q = (engine_data.get("cvd", {}) or {}).get("quality", "C")
+        if "C" in str(taker_q) and "C" in str(cvd_q):
+            return "C"
+    return base_grade
+
+
+def _kill_zone_active() -> bool:
+    """当前是否在 Kill Zone 活跃时段"""
+    from datetime import datetime as _dt
+    h = _dt.now().hour
+    # UTC+8 → 北京时间; Kill Zones are in NY time (UTC-4), but we store Beijing time
+    # London: 15:00-18:00 Beijing (07:00-10:00 UTC)
+    # NY AM: 20:00-23:00 Beijing (12:00-15:00 UTC)
+    # NY PM: 01:00-04:00 Beijing (17:00-20:00 UTC previous day)
+    # Asia: 08:00-12:00 Beijing (00:00-04:00 UTC)
+    return (8 <= h < 12) or (15 <= h < 18) or (20 <= h < 23) or (1 <= h < 4)
+
+
+def _kill_zone_name() -> str:
+    """当前 Kill Zone 名称"""
+    from datetime import datetime as _dt
+    h = _dt.now().hour
+    if 8 <= h < 12: return "Asia Kill Zone 活跃"
+    if 15 <= h < 18: return "London Kill Zone 活跃"
+    if 20 <= h < 23: return "NY AM Kill Zone 活跃"
+    if 1 <= h < 4: return "NY PM Kill Zone 活跃"
+    return "非Kill Zone · 低流动性"
+
+
+def _clean_flow_line(symbol: str, engine_data: dict, funding_rate, taker_dir, taker_ratio) -> str:
+    """②市场行：Taker/Funding/宏观，不重复CVD"""
+    ac = _asset_class(symbol)
+    macro = engine_data.get("_macro") or {}
+    dxy = engine_data.get("dxy") or macro.get("dxy")
+    us10y = engine_data.get("us10y") or macro.get("us10y")
+    taker_clean = f"Taker {taker_dir}" if taker_dir not in ("N/A", None, "") else "Taker N/A"
+    taker_r = f" `{taker_ratio}`" if taker_ratio and taker_ratio not in ("N/A", None) else ""
+    if ac == "crypto":
+        return f"Funding `{funding_rate}` · {taker_clean}{taker_r} · OI {engine_data.get('oi',{}).get('oi','N/A')}"
+    if ac == "gold":
+        dxy_part = f"DXY `{_fmt_dxy(dxy)}`" if dxy else "DXY N/A"
+        us_part = f"US10Y `{us10y:.2f}`" if us10y else ""
+        return f"{dxy_part} {us_part} · CVD N/A(金十)".strip()
+    dxy_part = f"DXY `{dxy:.2f}`" if dxy else ""
+    return f"{dxy_part} · 利差/央行窗口".strip()
+
+
+def _fmt_dxy(dxy) -> str:
+    """DXY 安全格式化"""
+    try:
+        return f"{float(dxy):.2f}"
+    except (TypeError, ValueError):
+        return str(dxy) if dxy else "?"
+
+
+def _near_level_tag(klines: dict, price) -> str:
+    """价格是否锚定关键位"""
+    if _near_key_level(klines, price):
+        return "锚定位 ✓"
+    return "未锚定"
+
+
+def _weekend_tag() -> str:
+    """周末检测"""
+    from datetime import datetime as _dt
+    wd = _dt.now().weekday()
+    if wd >= 5:
+        return "⚠周末 · "
+    return ""
+
+
+def _session_tag() -> str:
+    """当前 Kill Zone 标签"""
+    if _kill_zone_active():
+        return f"{_kill_zone_name()}"
+    return "非Kill Zone"
 
 
 if __name__ == "__main__":
