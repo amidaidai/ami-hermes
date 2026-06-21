@@ -125,6 +125,27 @@ if __name__ == "__main__":
             reason = "B级但不在关键位·跳过"
     
     # 输出JSON结果给agent读取
+    # 提取附加参数（treatment, cvd_state, background, position, execution, risk）
+    treatment = ""
+    cvd_state = ""
+    background = ""
+    position = ""
+    execution_val = ""
+    risk_val = ""
+    for i, arg in enumerate(sys.argv):
+        if arg == "--tv-treatment" and i + 1 < len(sys.argv):
+            treatment = sys.argv[i + 1]
+        elif arg == "--tv-cvd-state" and i + 1 < len(sys.argv):
+            cvd_state = sys.argv[i + 1]
+        elif arg == "--tv-background" and i + 1 < len(sys.argv):
+            background = sys.argv[i + 1]
+        elif arg == "--tv-position" and i + 1 < len(sys.argv):
+            position = sys.argv[i + 1]
+        elif arg == "--tv-execution" and i + 1 < len(sys.argv):
+            execution_val = sys.argv[i + 1]
+        elif arg == "--tv-risk" and i + 1 < len(sys.argv):
+            risk_val = sys.argv[i + 1]
+    
     result = {
         "push": bool(push) if push != "CHECK_KEY_LEVEL" else False,
         "grade": grade,
@@ -137,5 +158,18 @@ if __name__ == "__main__":
         state["last_push_time"] = result["time"]
         state["push_count_today"] = state.get("push_count_today", 0) + 1
         save_state(state)
+    
+    # 写入 TV DMI 缓存（供 行情守望.py 读取）
+    cache = {
+        "grade": grade,
+        "treatment": treatment or "?",
+        "cvd_state": cvd_state or "?",
+        "background": background or "?",
+        "position": position or "?",
+        "execution": execution_val or "?",
+        "risk": risk_val or "?",
+        "updated": datetime.now(TZ).isoformat(),
+    }
+    (DATA / "tv_dmi_cache.json").write_text(json.dumps(cache, indent=2, ensure_ascii=False))
     
     print(json.dumps(result, ensure_ascii=False))

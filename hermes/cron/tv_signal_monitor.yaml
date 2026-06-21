@@ -31,8 +31,22 @@ instructions: |
   如果今日已达上限，改为只记录不推送。
 
   ## 输出格式
-  只输出一行JSON到 data/tv_heartbeat.json:
-  {"time":"...","grade":"...","action":"push/skip","reason":"..."}
+  每次运行必须:
+  1. 将TV DMI全量数据写入 data/tv_dmi_cache.json（供行情守望.py读取）:
+  {
+    "grade": "X", "treatment": "结构冲突", "cvd_state": "顺多确认",
+    "background": "空 4h", "position": "VAL下方|下方控制",
+    "execution": "等:等确认", "risk": "不进场",
+    "updated": "2026-06-21T17:52:00+08:00"
+  }
+  
+  2. 如果可推送，运行: python hermes/scripts/tv_signal_monitor.py 
+     --tv-grade "X" --tv-treatment "结构冲突" --tv-cvd-state "顺多确认"
+     --tv-background "空 4h" --tv-position "VAL下方|下方控制"
+     --tv-execution "等:等确认" --tv-risk "不进场"
+     --symbol BTCUSDT
+  
+  3. 如果 tv_signal_monitor 返回 push=true，运行 auto_card + 推送
 
   ## 关键: 没有机会就不用推送
   只有A多/A空或B+关键位才推。其他情况只写心跳。

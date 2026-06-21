@@ -1228,6 +1228,17 @@ STATUS_ZH = {"A做多": "A做多", "A做空": "A做空", "B等待": "B等待", "
              "long": "A做多", "short": "A做空", "wait": "B等待", "ban": "X禁做"}
 
 
+def _load_tv_dmi_cache():
+    """读取 TV DMI 决策表缓存（由 tv_signal_monitor 每5分钟更新）。"""
+    try:
+        cache_file = DATA_DIR / "tv_dmi_cache.json"
+        if cache_file.exists():
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+    except:
+        pass
+    return {}
+
+
 def _cvd_display(cvd, cvd_quality):
     """CVD '?' / None 兜底为可读文案。"""
     if cvd in (None, "?", "", "不适用"):
@@ -1269,6 +1280,14 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
         conf5 = setup.get("confidence_5")
         conf_txt = f" · 置信 {conf5}/5" if conf5 else ""
         lines.append(f"{_seq()} 模型：{model_id}{conf_txt}")
+    # v6.9.15: TV DMI 决策信号（从缓存读取）
+    tv_cache = _load_tv_dmi_cache()
+    if tv_cache:
+        tv_grade = tv_cache.get("grade", "")
+        tv_treatment = tv_cache.get("treatment", "")
+        if tv_grade and tv_grade != "C等待":
+            prefix = "⚠" if tv_grade == "X" else "🔥" if tv_grade.startswith("A") else ""
+            lines.append(f"{_seq()} TV信号：{prefix}{tv_grade} · {tv_treatment}")
     # 触发位（主体）— 子项用 ▸，不占圈号
     if hits:
         lines.append("")
