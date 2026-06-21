@@ -387,7 +387,19 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     ]
 
     blocks = ["\n".join(head), "\n".join(env), "\n".join(struct), "\n".join(game), "\n".join(ops), "\n".join(risk)]
-    return "\n".join(blocks) + "\n"
+    full = "\n".join(blocks) + "\n"
+    
+    # 决策模式：B等待但价格已锚定关键位 → 输出极简速读卡（替代60行全卡）
+    anchored = _near_key_level(klines, price)
+    if (status == "B等待" or status == "X禁做") and anchored:
+        compact = _compact_card(symbol, price, status, direction, model_id, klines, k4h, k5m, k15m,
+                                merged, cvd_dir, cvd_quality, taker_dir, taker_ratio,
+                                funding_rate, engine_data, risk_amt, risk_pct_limit,
+                                prot_status, data_grade, fg, leverage_text, qty_unit, search_sent)
+        if compact:
+            return compact
+    
+    return full
 
 
 # ── v6.9 helper functions ──
@@ -1966,6 +1978,79 @@ def _price_label(symbol: str, engine_data: dict) -> tuple[str, str]:
     if ac == "stock":
         return "", source or "Alpha Vantage"  
     return "", source or "多源"
+
+
+# ═══════════════════ 极简决策卡 ═══════════════════
+def _compact_card(symbol: str, price, status: str, direction: str, model_id: str,
+                  klines: dict, k4h: dict, k5m: dict, k15m: dict,
+                  merged: dict, cvd_dir: str, cvd_quality: str,
+                  taker_dir: str, taker_ratio, funding_rate,
+                  engine_data: dict, risk_amt: float, risk_pct_limit,
+                  prot_status: str, data_grade: str, fg: dict,
+                  leverage_text: str, qty_unit: str, search_sent: str) -> str:
+    """价格锚定关键位时的极简决策卡。8行替代60行全卡。"""
+    p = float(price or 0)
+    if p <= 0:
+        return ""
+    nearest_level, nearest_name, nearest_dist = _find_nearest_key_level(klines, p)
+    if not nearest_level:
+        return ""
+    nl_fmt = _fmt_price(nearest_level).strip("`")
+    hi = _fmt_price(k15m.get("high") or k4h.get("high"))
+    lo = _fmt_price(k15m.get("low") or k4h.get("low"))
+    taker_label = f"Taker {taker_dir}" if taker_dir not in ("N/A", None, "") else "Taker N/A"
+    taker_r = f" {taker_ratio}" if taker_ratio and str(taker_ratio) not in ("N/A", "") else ""
+    cvd_str = f"CVD {cvd_dir}" if cvd_dir not in ("N/A", "?", None, "") else "CVD ?"
+    ac = _asset_class(symbol)
+    bias = "空头偏" if cvd_dir == "卖" else "多头偏" if cvd_dir == "买" else "观望"
+    from datetime import datetime as _dt
+    wd_tag = "⚠周末 " if _dt.now().weekday() >= 5 else ""
+    dist_pct = abs(p - nearest_level) / p * 100
+    near_str = f"← 价踩在这 · {dist_pct:.1f}%" if dist_pct < 0.5 else f"← 距{abs(p - nearest_level):.0f}点"
+    bearish = (cvd_dir == "卖" or taker_dir == "sell")
+    if bearish:
+        stop_a = nearest_level * 1.005; tp_a = nearest_level * 0.97
+        stop_b = nearest_level * 0.995; tp_b = nearest_level * 1.03
+    else:
+        stop_a = nearest_level * 0.995; tp_b = nearest_level * 1.03
+        stop_b = nearest_level * 1.005; tp_a = nearest_level * 0.97
+    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)}"
+    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)}"
+    prot_tag = "🛡" if prot_status == "通过" else f"⚠{prot_status}"
+    lines = [
+        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {bias}",
+        f"③ {_fmt_price(price)} · 高 {hi} · 低 {lo}",
+        f"{nearest_name} {nl_fmt} {near_str}",
+        f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
+        plan_a,
+        plan_b,
+        f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag}",
+        f"—— 决策：你来选方向——",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _find_nearest_key_level(klines: dict, price: float) -> tuple:
+    """找到价格最接近的关键位"""
+    p = float(price or 0)
+    if p <= 0:
+        return None, None, None
+    candidates = []
+    for tf in ("15m", "1h", "4h"):
+        k = klines.get(tf, {})
+        for key, name in [("vah", "VAH"), ("val", "VAL"), ("poc", "POC"), ("vwap", "VWAP"),
+                          ("high", "高"), ("low", "低")]:
+            v = k.get(key)
+            if v:
+                try:
+                    dist = abs(float(v) - p) / p * 100
+                    candidates.append((float(v), name, dist))
+                except (TypeError, ValueError):
+                    pass
+    if not candidates:
+        return None, None, None
+    candidates.sort(key=lambda x: x[2])
+    return candidates[0]
 
 
 if __name__ == "__main__":
