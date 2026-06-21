@@ -1640,6 +1640,26 @@ def process_block(raw, symbol, block, state):
     pushed = False
     auto_refreshed = False  # 初始化：只有 allow_push 时才会重算
     if allow_push:
+        # ═══ VWAP/EMA 实时注入（v1.0 · 本地计算·对齐Pine指标） ═══
+        vwap_ema_alert = ""
+        try:
+            from vwap_ema_cvd_engine import vwap_ema_cvd_summary
+            _va_klines = block.get("klines_raw") or block.get("_klines_raw") or []
+            if not _va_klines:
+                snap = _liquidity_snapshot(symbol, raw, block, price)
+                _va_klines = snap.get("klines") or []
+            if _va_klines:
+                _va = vwap_ema_cvd_summary(symbol, _va_klines)
+                if _va.get("available"):
+                    v = _va.get("vwap", {})
+                    ec = _va.get("ema_cloud", {})
+                    if v.get("vwap"):
+                        vwap_ema_alert = f"VWAP {v['vwap']} {v.get('price_vs_vwap','?')}·{ec.get('fast_cloud','?')}·{ec.get('trend_strength','?')[:10]}"
+        except Exception:
+            pass
+        # 将 VWAP/EMA 追加到 macro_text
+        if vwap_ema_alert:
+            macro_text = f"{macro_text or ''} | {vwap_ema_alert}".strip(" |")
         # v7.5: 突破后就地自动重算结构（在推送前完成，合并通知到同一条消息）
         raw, auto_refreshed = auto_refresh_structure(raw, symbol, price, breached)
         if auto_refreshed:
