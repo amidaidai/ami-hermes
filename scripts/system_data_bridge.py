@@ -253,11 +253,9 @@ def dir_flip(sym: str) -> tuple:
         # 每轮记录预测，4h 后由 行情守望._verify_predictions_if_needed 回验
         try:
             from prediction_tracker import log_prediction
-            pred = log_prediction(sym, m, r)
-            # 补真实价格（log_prediction 默认写 0）
             px = s.get("price") or _price(sym)
-            if px and pred:
-                _patch_pred_price(sym, px)
+            if px:
+                log_prediction(sym, m, r, price=px)  # v2.0: price written at log time
         except Exception:
             pass
     except Exception:
@@ -286,25 +284,6 @@ def enrich_engine_data(symbol: str, engine_data: dict) -> dict:
 # 导出
 __all__ = ["snapshot", "cvd_dir", "deriv_text", "event_ban", "dir_flip", "asset_macro_enrich", "enrich_engine_data", "get_dxy", "get_us10y_proxy"]
 
-
-def _patch_pred_price(sym: str, price: float):
-    """把刚写入的最后一条预测的 price_at_prediction 从 0 补成真实价。"""
-    try:
-        pf = Path(__file__).resolve().parent.parent / "data" / "prediction_log.jsonl"
-        if not pf.exists():
-            return
-        lines = pf.read_text(encoding="utf-8").splitlines()
-        for i in range(len(lines) - 1, -1, -1):
-            if not lines[i].strip():
-                continue
-            obj = json.loads(lines[i])
-            if obj.get("symbol") == sym and not obj.get("price_at_prediction"):
-                obj["price_at_prediction"] = float(price)
-                lines[i] = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
-                pf.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                break
-    except Exception:
-        pass
 
 if __name__ == "__main__":
     print(json.dumps(snapshot("BTCUSDT"), indent=2, ensure_ascii=False, default=str))

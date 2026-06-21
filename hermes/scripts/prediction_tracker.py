@@ -17,12 +17,12 @@ STATS_FILE = DATA / "strategy_model_stats.json"
 TZ = timezone(timedelta(hours=8))
 
 
-def log_prediction(symbol: str, merged: dict, model_results: list) -> dict:
+def log_prediction(symbol: str, merged: dict, model_results: list, price: float = 0) -> dict:
     """记录一次引擎预测"""
     pred = {
         "time": datetime.now(TZ).isoformat(timespec="seconds"),
         "symbol": symbol,
-        "price_at_prediction": 0,  # filled by caller
+        "price_at_prediction": price,
         "direction": merged["bias"],
         "long_confidence": merged["long_confidence"],
         "short_confidence": merged["short_confidence"],

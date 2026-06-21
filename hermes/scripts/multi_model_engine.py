@@ -699,16 +699,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hermes" / "scripts"))
         from prediction_tracker import log_prediction
         price = data.get("binance_spot", {}).get("price", 0) or data.get("prices", {}).get("primary", 0)
-        pred = log_prediction(symbol, merged, results)
-        pred["price_at_prediction"] = price
-        # Resave with price
-        import json as _json
-        prf = Path("D:/Hermes agent/data/prediction_log.jsonl")
-        if prf.exists():
-            lines = prf.read_text(encoding="utf-8").strip().split("\n")
-            if lines:
-                lines[-1] = _json.dumps(pred, ensure_ascii=False, separators=(",", ":"))
-                prf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log_prediction(symbol, merged, results, price=price)  # v2.0: price written at log time, no post-patch needed
     except Exception:
         pass
     
