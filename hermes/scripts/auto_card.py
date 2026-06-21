@@ -25,6 +25,20 @@ DATA = ROOT / "data"
 sys.path.insert(0, str(ROOT / "hermes" / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+# v7.5: 中文本地化
+from zh_locale import T, CARD_LABELS, KILL_ZONE_ZH, DIR_ZH, STRATEGY_ZH, SYMBOL_ZH, asset_name
+# v7.5: TV截图
+try:
+    from tv_screenshot import capture_analysis_setup as _tv_screenshot
+except Exception:
+    _tv_screenshot = lambda s, d: None
+# v7.5: 话题路由
+try:
+    from topic_router import route_send as _route_send, get_target as _get_target
+except Exception:
+    _route_send = lambda s, m, sc=None: None
+    _get_target = lambda s: "telegram:-1003733144325:416"
+
 
 FIXED_MODELS = ("VWAP反抽", "VAH回收", "VAL回收", "POC拒绝", "扫流动性回收", "突破接受")
 MODEL_TAGS = {"VWAP反抽": "vwap_pullback", "VAH回收": "vah_reclaim", "VAL回收": "val_reclaim", "POC拒绝": "poc_rejection", "扫流动性回收": "liquidity_sweep_reclaim", "突破接受": "breakout_acceptance"}
@@ -679,7 +693,7 @@ def _asset_data_line(symbol: str, engine_data: dict, taker_data: dict, cvd_quali
         return f"Taker{_grade_short(taker_data)} · CVD {cvd_quality}"
     if ac == "gold":
         dxy_str = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
-        return f"Spot/美元({dxy_str}) · CVD {cvd_quality}"
+        return f"现货/美元({dxy_str}) · CVD {cvd_quality}"
     if ac == "forex":
         dxy_str = f"DXY `{dxy:.2f}`" if dxy else ""
         return f"美元腿/SMT {dxy_str}".strip()
@@ -697,7 +711,7 @@ def _asset_flow_line(symbol: str, engine_data: dict, funding_rate, taker_dir, ta
     dxy = engine_data.get("dxy") or macro.get("dxy")
     us10y = engine_data.get("us10y") or macro.get("us10y")
     if ac == "crypto":
-        return f"Funding `{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
+        return f"资金费率`{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
     if ac == "gold":
         dxy_part = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
         us_part = f"US10Y `{us10y:.2f}`" if us10y else ""
@@ -824,7 +838,7 @@ def _qty_unit(symbol: str) -> str:
 def _asset_confirm_text(symbol: str, bias_cn: str, cvd_dir: str) -> str:
     ac = _asset_class(symbol)
     if ac == "crypto":
-        return f"CVD{cvd_dir or '待确认'}与Taker顺向，现货vs永续不分裂，突破接受必须无背离"
+        return f"CVD{cvd_dir or '待确认'}与Taker顺向·现货vs永续不分裂·突破接受须无背离"
     if ac == "gold":
         return "London/NY Kill Zone优先，DXY/美债不反向，扫荡后出现Displacement"
     if ac == "forex":
@@ -2340,11 +2354,11 @@ def _kill_zone_name() -> str:
     """当前 Kill Zone 名称"""
     from datetime import datetime as _dt
     h = _dt.now().hour
-    if 8 <= h < 12: return "Asia Kill Zone 活跃"
-    if 15 <= h < 18: return "London Kill Zone 活跃"
-    if 20 <= h < 23: return "NY AM Kill Zone 活跃"
-    if 1 <= h < 4: return "NY PM Kill Zone 活跃"
-    return "非Kill Zone · 低流动性"
+    if 8 <= h < 12: return "亚洲盘活跃"
+    if 15 <= h < 18: return "伦敦盘活跃"
+    if 20 <= h < 23: return "纽约上午盘活跃"
+    if 1 <= h < 4: return "纽约下午盘活跃"
+    return "非主盘·低流动性"
 
 
 def _clean_flow_line(symbol: str, engine_data: dict, funding_rate, taker_dir, taker_ratio) -> str:
@@ -2393,7 +2407,7 @@ def _session_tag() -> str:
     """当前 Kill Zone 标签"""
     if _kill_zone_active():
         return f"{_kill_zone_name()}"
-    return "非Kill Zone"
+    return "非主盘"
 
 
 def _price_label(symbol: str, engine_data: dict) -> tuple[str, str]:
@@ -2595,7 +2609,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         "",
         f"现价 `{_fmt_price(price)}` 高 `{hi}` 低 `{lo}`",
         f"{nearest_name} `{nl_fmt}` 距 {dist_pct:.1f}%",
-        f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
+        f"{cvd_str} · {taker_label}{taker_r} · 费率 {funding_rate}",
         trigger_line,
     ]
     if vwap_line:

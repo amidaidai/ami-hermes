@@ -278,8 +278,11 @@ ALERT_TOPIC_DEFAULT = "416"
 ALERT_TOPIC_BY_SYMBOL = {
     "BTCUSDT": "386",
     "XAUUSD": "385",
+    # 山寨币统一路由（ETH/SOL/...）
+    "ETHUSDT": "416",
+    "SOLUSDT": "416",
 }
-REPORT_TOPIC = "846"  # 非警报的任务报告/心跳卡
+REPORT_TOPIC = "416"  # 非警报任务报告/心跳卡
 
 
 def alert_target_for(symbol):
