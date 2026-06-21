@@ -37,6 +37,8 @@ CMC_KEY = _read_secret("coinmarketcap_api_key.txt")
 AV_KEY = _read_secret("alphavantage_api_key.txt")
 TD_KEY = _read_secret("twelvedata_api_key.txt")
 TUSHARE_TOKEN = _read_secret("tushare_token.txt")
+FMP_KEY = _read_secret("fmp_api_key.txt")
+MASSIVE_KEY = _read_secret("massive_api_key.txt")
 
 
 def _fetch(url: str, headers: dict = None, timeout: int = 10) -> dict:
@@ -198,10 +200,8 @@ def td_quote(symbol: str = "AAPL") -> dict:
 # ═══════════════════ 汇总输出 ═══════════════════
 
 # ═══════════════════ Massive.com ═══════════════════
-MASSIVE_KEY = _read_secret("massive_api_key.txt")
 
 def massive_aggs(symbol: str = "AAPL", asset: str = "stock") -> dict:
-    """Massive 日线聚合数据 (免费层可用)"""
     try:
         from massive import RESTClient
         client = RESTClient(api_key=MASSIVE_KEY)
@@ -232,6 +232,50 @@ def massive_futures_snapshot(ticker: str = "ES") -> dict:
     except Exception as e:
         return {"_error": str(e)[:80]}
     return {}
+
+
+# ═══════════════════ FMP (Financial Modeling Prep) ═══════════════════
+def fmp_quote(symbol: str = "AAPL") -> dict:
+    """FMP 股票/ETF 实时行情"""
+    def fetch():
+        d = _fetch(
+            f"https://financialmodelingprep.com/api/v3/quote/{symbol}?apikey={FMP_KEY}"
+        )
+        if isinstance(d, list) and d:
+            q = d[0]
+            return {
+                "price": float(q.get("price", 0)),
+                "change": float(q.get("change", 0)),
+                "change_pct": q.get("changesPercentage", 0),
+                "volume": int(q.get("volume", 0)),
+                "high": float(q.get("dayHigh", 0)),
+                "low": float(q.get("dayLow", 0)),
+                "open": float(q.get("open", 0)),
+                "prev_close": float(q.get("previousClose", 0)),
+                "market_cap": q.get("marketCap", 0),
+                "pe": q.get("pe", None),
+            }
+        return {}
+    return _cached(f"fmp_{symbol}", fetch, ttl=120)
+
+
+def fmp_forex(pair: str = "EURUSD") -> dict:
+    """FMP 外汇实时行情"""
+    def fetch():
+        d = _fetch(
+            f"https://financialmodelingprep.com/api/v3/quote/{pair}?apikey={FMP_KEY}"
+        )
+        if isinstance(d, list) and d:
+            q = d[0]
+            return {
+                "price": float(q.get("price", 0)),
+                "change": float(q.get("change", 0)),
+                "change_pct": q.get("changesPercentage", 0),
+                "high": float(q.get("dayHigh", 0)),
+                "low": float(q.get("dayLow", 0)),
+            }
+        return {}
+    return _cached(f"fmpfx_{pair}", fetch, ttl=60)
 
 def gather_all(asset_class: str = "crypto", symbol: str = "BTC") -> dict:
     """

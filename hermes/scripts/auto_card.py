@@ -245,6 +245,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # ═══ ⑩ 头部 ═══
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
     display_symbol = _display_symbol(symbol)
+    price_label, price_source = _price_label(symbol, engine_data)
     head = [
         f"◷ {now.strftime('%m-%d %H:%M')} CST",
         f"① 品种：{display_symbol}",
@@ -253,7 +254,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"15m {_kl_summary(k15m, '当前') or '等待方向'}",
         f"1h {_kl_summary(k1h, '当前') or '等待方向'}",
         f"4h {_kl_summary(k4h, '背景') or '等待方向'}",
-        f"③ 现价：{_fmt_price(price)} · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
+        f"③ 现价：{price_label}{_fmt_price(price)}（{price_source}） · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
         f"④ 状态：{status}",
         f"⑤ 模型：{model_id}",
         f"⑥ 评分：{_score13(merged, results, status, symbol)}",
@@ -1325,6 +1326,13 @@ def _load_binance_keys() -> tuple:
 def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     """Fetch Binance futures data with HMAC signing for authenticated endpoints."""
     import requests, time as _time, hmac, hashlib, urllib.parse
+    # 只用于加密品种，金属/股票/外汇不碰（防止覆盖已有K线）
+    su = symbol.upper()
+    if "XAU" in su or "GOLD" in su:
+        return
+    ac = _asset_class(symbol) if callable(_asset_class) else (lambda s: "crypto" if s.endswith("USDT") else "other")(symbol)
+    if ac not in ("crypto",):
+        return
     base = "https://fapi.binance.com"
     sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
     api_key, secret = _load_binance_keys()
@@ -1539,16 +1547,35 @@ def auto_card(symbol: str, push: bool = False) -> str:
     engine_data = {"symbol": symbol, "quality": "B"}
     
     if asset == "crypto":
+        # 期货价格优先（TV/Binance Perp），CMC现货作 backup
+        futures_price = None
+        try:
+            import requests as _req
+            sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+            r = _req.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}", timeout=5)
+            futures_price = float(r.json().get("price", 0))
+        except Exception:
+            pass
+        
         try:
             from multi_source_collector import cmc_quote, cmc_global, cmc_fear_greed
             cmc = cmc_quote(symbol[:3])
-            engine_data["binance_spot"] = {"price": cmc.get("price", 0), 
-                                           "24h_high": cmc.get("price", 0) * 1.03,
-                                           "24h_low": cmc.get("price", 0) * 0.97}
-            engine_data["prices"] = {"primary": cmc.get("price", 0)}
+            spot_price = cmc.get("price", 0)
+            # 优先期货价，CMC现货为备用
+            primary_price = futures_price or spot_price
+            engine_data["binance_spot"] = {"price": spot_price, 
+                                           "24h_high": spot_price * 1.03,
+                                           "24h_low": spot_price * 0.97}
+            engine_data["prices"] = {
+                "primary": primary_price,
+                "futures": futures_price or spot_price,
+                "spot": spot_price,
+                "source": "Binance期货" if futures_price else "CMC现货"
+            }
             engine_data["quality"] = "A"
             engine_data["grades"] = {"overall": "A"}
-            print(f"  ✅ CMC: ${cmc.get('price', 0):,.2f} | 市占{cmc.get('dominance',0):.1f}% | 24h{cmc.get('percent_change_24h',0):+.1f}%")
+            basis = f" 期现差{(futures_price/spot_price-1)*100:+.3f}%" if futures_price and spot_price else ""
+            print(f"  ✅ 期货: ${primary_price:,.0f} (Binance Perp) | CMC现货: ${spot_price:,.0f}{basis} | 市占{cmc.get('dominance',0):.1f}%")
             
             # CMC global
             glob = cmc_global()
@@ -1570,7 +1597,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
             if r.status_code == 200:
                 data = r.json()
                 price = float(data.get("price", 4310))
-                engine_data["prices"] = {"primary": price}
+                engine_data["prices"] = {"primary": price, "source": "gold-api现货"}
                 engine_data["binance_spot"] = {
                     "price": price, "24h_high": price * 1.005,
                     "24h_low": price * 0.995, "percent_change_24h": 0
@@ -1922,6 +1949,23 @@ def _session_tag() -> str:
     if _kill_zone_active():
         return f"{_kill_zone_name()}"
     return "非Kill Zone"
+
+
+def _price_label(symbol: str, engine_data: dict) -> tuple[str, str]:
+    """返回(价格标签, 来源) — 区分期货/现货"""
+    prices = engine_data.get("prices", {})
+    source = prices.get("source", "")
+    ac = _asset_class(symbol)
+    if ac == "crypto":
+        label = "期货 " if prices.get("futures") else "现货 "
+        return label, source or "Binance Perp"
+    if ac == "gold":
+        return "现货 ", source or "gold-api"
+    if ac == "forex":
+        return "现货 ", source or "Alpha Vantage"
+    if ac == "stock":
+        return "", source or "Alpha Vantage"  
+    return "", source or "多源"
 
 
 if __name__ == "__main__":
