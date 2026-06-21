@@ -220,18 +220,35 @@ def start_monitor(emergency: bool = False) -> bool:
                 pass
     
     try:
-        subprocess.Popen(
+        env = os.environ.copy()
+        # Watchdog is production runtime: never inherit test/CI no-send switches.
+        env.pop("HANGQING_NO_SEND", None)
+        proc = subprocess.Popen(
             [sys.executable, str(MONITOR_SCRIPT)],
             cwd=str(ROOT),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=env,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        log("行情守望.py 已启动")
-        write_watchdog_state(status="running", last_restart_reason="started")
+        time.sleep(3)
+        if proc.poll() is not None:
+            reason = f"启动失败: 行情守望提前退出 code={proc.returncode}"
+            log(reason)
+            write_watchdog_state(status="failed", last_restart_reason=reason)
+            return False
+        hb = read_heartbeat() or {}
+        if str(hb.get("pid")) != str(proc.pid) and not pid_alive(proc.pid):
+            reason = f"启动失败: 子进程未存活 pid={proc.pid}"
+            log(reason)
+            write_watchdog_state(status="failed", last_restart_reason=reason)
+            return False
+        log(f"行情守望.py 已启动 pid={proc.pid}")
+        write_watchdog_state(status="running", last_restart_reason="started", monitor_pid=proc.pid)
         return True
     except Exception as e:
         log(f"启动失败: {e}")
+        write_watchdog_state(status="failed", last_restart_reason=f"start_exception:{type(e).__name__}")
         return False
 
 

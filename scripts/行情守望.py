@@ -1703,9 +1703,11 @@ def main():
                     log(f"TV推送触发: {msg}")
                     # 异步出卡（不阻塞主循环）
                     try:
+                        env = os.environ.copy()
+                        env.pop("HANGQING_NO_SEND", None)
                         subprocess.Popen(
                             [sys.executable, str(ROOT / "hermes" / "scripts" / "auto_card.py"), "BTCUSDT", "--push"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
                         )
                     except Exception as e:
                         log(f"TV卡片生成失败: {e}")
