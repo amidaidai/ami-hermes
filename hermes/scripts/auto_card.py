@@ -492,14 +492,18 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # ── v7.1 手机适配 组装（每行≤38字符）──
     display_symbol = _display_symbol(symbol)
     _r = _fmt_price
+    # Strip backticks from _fmt_price output for mobile (we add our own)
+    def _p(v):
+        s = _r(v)
+        return s.replace('`','') if s.startswith('`') else s
     card_lines = [
         f"◷ {now.strftime('%m-%d %H:%M')} · {display_symbol} · {data_grade}",
         "",
         f"① {status} · {model_id} · {n5}/13 · 置信{eng_conf}/5",
         f"   {one_reason}",
         "",
-        f"② 现价 `{_r(price)}`",
-        f"   高 `{_r(high)}` 低 `{_r(low)}` 日{float(chg or 0):+.2f}%",
+        f"② 现价 `{_p(price)}`",
+        f"   高 `{_p(high)}` 低 `{_p(low)}` 日{float(chg or 0):+.2f}%",
         f"   {tf_lines}",
         "",
     ]
@@ -516,35 +520,35 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     card_lines.append("")
 
     # ── ④ 关键位（拆3行）──
-    _poc = _r(k15m.get('poc'))
-    _vah = _r(k15m.get('vah'))
-    _val = _r(k15m.get('val'))
+    _poc = _p(k15m.get('poc'))
+    _vah = _p(k15m.get('vah'))
+    _val = _p(k15m.get('val'))
     card_lines.extend([
-        f"④ 阻 `{_r(res)}` POC `{_poc}`",
+        f"④ 阻 `{_p(res)}` POC `{_poc}`",
         f"   VAH `{_vah}` VAL `{_val}`",
-        f"   支 `{_r(sup)}`",
-        f"   失效 `{_r(inv_line)}` 执行 `{exec_line}`",
+        f"   支 `{_p(sup)}`",
+        f"   失效 `{_p(inv_line)}` 执行 `{exec_line}`",
         "",
     ])
 
     # ── 预案A ──
     if status in ("B等待", "C等待", "X禁做") or direction == "wait":
         plan_a_label = "预案A · 主方向"
-        plan_a_entry = f"`{_r(st_a['stop'])}-{_r(st_a['target'])}`"
+        plan_a_entry = f"`{_p(st_a['stop'])}-{_p(st_a['target'])}`"
         plan_a_note = "等触发"
     else:
         plan_a_label = f"预案A · {'空' if bearish else '多'}{'⚠优先' if resonance == '共振' else ''}"
-        plan_a_entry = f"`{_r(price)}`" if status.startswith("A") else f"`{_r(st_a['stop'])}-{_r(st_a['target'])}`"
+        plan_a_entry = f"`{_p(price)}`" if status.startswith("A") else f"`{_p(st_a['stop'])}-{_p(st_a['target'])}`"
         plan_a_note = "限价" if status.startswith("A") else "条件触发"
     _pos = _pos_level(data_grade, status)
 
     card_lines.extend([
         f"—— {plan_a_label} ——",
         f"⑤ 入场 {plan_a_entry} {plan_a_note}",
-        f"⑥ 止损 `{_r(st_a['stop'])}` 结构位",
-        f"   止盈 `{_r(st_a['target'])}` `{_r(st_a['target'])}` 1:{rr_a:.1f}{rr_a_note}",
+        f"⑥ 止损 `{_p(st_a['stop'])}` 结构位",
+        f"   止盈 `{_p(st_a['target'])}` `{_p(st_a['target'])}` 1:{rr_a:.1f}{rr_a_note}",
         f"⑦ 仓位 {_pos} 风险{risk_amt:.2f}U {leverage_text}",
-        f"⑧ 失效 `{_r(inv_line)}` 复查3×15m",
+        f"⑧ 失效 `{_p(inv_line)}` 复查3×15m",
         "",
     ])
 
@@ -552,8 +556,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     plan_b_label = f"预案B · {'多' if bearish else '空'}备选"
     card_lines.extend([
         f"—— {plan_b_label} ——",
-        f"⑨ 入场 `{_r(st_b['stop'])}` 止损 `{_r(st_b['stop'])}`",
-        f"   止盈 `{_r(st_b['target'])}` 1:{rr_b:.1f}{rr_b_note}",
+        f"⑨ 入场 `{_p(st_b['stop'])}` 止损 `{_p(st_b['stop'])}`",
+        f"   止盈 `{_p(st_b['target'])}` 1:{rr_b:.1f}{rr_b_note}",
         f"   仓位 {_pos} 风险{risk_amt:.2f}U",
         "",
     ])
