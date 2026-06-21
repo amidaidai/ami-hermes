@@ -412,7 +412,24 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     except Exception:
         pass
 
-    # ═══ G轮: 对抗式分析 (TradingAgents Bull/Bear pattern) ═══
+    # ═══ VWAP/EMA 本地计算引擎 (v1.0) ═══
+    vwap_ema = {}
+    try:
+        import sys as _s2
+        _s2.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from vwap_ema_cvd_engine import vwap_ema_cvd_summary, calc_vwap as _calc_vwap
+        # 从 engine_data 提取 klines 用于本地计算
+        _vwap_klines = engine_data.get("_klines_raw") or []
+        if not _vwap_klines:
+            # 从 15m klines 重建 OHLCV 格式
+            _k15m_list = k15m.get("bars") or k15m.get("data") or []
+            if _k15m_list:
+                _vwap_klines = _k15m_list
+        if _vwap_klines:
+            vwap_ema = vwap_ema_cvd_summary(symbol, _vwap_klines)
+            engine_data["_vwap_ema"] = vwap_ema
+    except Exception:
+        pass
     adversarial = {}
     try:
         from adversarial_analyst import adversarial_scoring, adversarial_text_for_card
@@ -460,6 +477,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"⑤ 催化与情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)}{_weekend_tag()} — 只验证结构",
         f"⑥ 风控环境：{_gate_data(data_grade)} — 风险 `{risk_amt:.2f}U` · Constitution v2.0",
         f"⑦ 预测市场：{pm_text or '数据待采集'}",
+        f"⑧ VWAP/EMA：{_vwap_ema_display(vwap_ema)}",
     ]
 
     # ═══ 二、结构 ═══
@@ -469,6 +487,9 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     struct.append(f"③ 15m执行：触发 `{_exec_line(klines, merged, status)}` · 禁追 `{_no_chase_line(klines, price)}` — 收线确认")
     struct.append(f"④ 5m触发：扫荡 `{_sweep_state(k5m, merged) or '待扫'}` · CVD/量价 `{_cvd_display(cvd_dir)}` · 强位移 `{_displacement(k5m) or '弱'}`")
     struct.append(f"⑤ 价值区：VAH `{_fmt_price(k15m.get('vah'))}` · POC `{_fmt_price(k15m.get('poc'))}` · VAL `{_fmt_price(k15m.get('val'))}` · 裸POC {_naked_poc(k15m)}")
+    _vwap_line = _vwap_structure_line(vwap_ema)
+    if _vwap_line:
+        struct.append(f"   VWAP带：{_vwap_line}")
     struct.append(f"⑥ 三线：失效 `{_invalid_4h(k4h, merged)}` · 执行 `{_exec_line(klines, merged, status)}` · 禁追 `{_no_chase_line(klines, price)}`")
 
     # ═══ 三、博弈 ═══
@@ -2538,18 +2559,31 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         else:
             grade_line = f"TV: {tv_grade} — {engine_data.get('_tv_override', {}).get('tv_treatment', '等')}"
 
+    # VWAP/EMA 极简行（从 engine_data 提取）
+    vwap_ema_compact = engine_data.get("_vwap_ema", {})
+    vwap_line = ""
+    if vwap_ema_compact.get("available"):
+        v = vwap_ema_compact.get("vwap", {})
+        ec = vwap_ema_compact.get("ema_cloud", {})
+        if v.get("vwap"):
+            vwap_line = f"VWAP `{v['vwap']}` {v.get('price_vs_vwap','?')}·{ec.get('fast_cloud','?')}·{ec.get('trend_strength','?')[:8]}"
+
     lines = [
         f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {header_4h} · {bias}{' ' + grade_line if grade_line else ''}",
         f"③ {_fmt_price(price)} · 高 {hi} · 低 {lo}",
         f"{nearest_name} {nl_fmt} {near_str}",
         f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
         trigger_line,
+    ]
+    if vwap_line:
+        lines.append(vwap_line)
+    lines.extend([
         plan_a,
         plan_b,
         scale_line,
         f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag} · {comm_tag}",
         f"—— 决策：你来选方向——",
-    ]
+    ])
     return "\n".join(lines) + "\n"
 
 
@@ -2586,6 +2620,37 @@ def _parse_cli_symbol(argv=None) -> str:
         if symbol in {"BTC", "BTCUSDT", "XAU", "XAUUSD"} or symbol.endswith(("USDT", "USD")):
             return "BTCUSDT" if symbol == "BTC" else "XAUUSD" if symbol == "XAU" else symbol
     return "BTCUSDT"
+
+
+def _vwap_ema_display(vwap_ema: dict) -> str:
+    """VWAP/EMA 单行展示（注入环境段⑧）。"""
+    if not vwap_ema or not vwap_ema.get("available"):
+        return "数据待刷新"
+    vwap = vwap_ema.get("vwap", {})
+    ema_cloud = vwap_ema.get("ema_cloud", {})
+    parts = []
+    if vwap.get("vwap"):
+        parts.append(f"VWAP `{vwap['vwap']}` · 价在{'上' if vwap.get('price_vs_vwap') == '上' else '下'}·{vwap.get('in_band', '?')}")
+    fast = ema_cloud.get("fast_cloud", "?")
+    slow = ema_cloud.get("slow_cloud", "?")
+    parts.append(f"EMA 快{fast}·慢{slow} — {ema_cloud.get('trend_strength', '?')}")
+    return " · ".join(parts) if parts else "数据不足"
+
+
+def _vwap_structure_line(vwap_ema: dict) -> str:
+    """VWAP结构线（注入结构段·替代或增强⑤价值区）。"""
+    if not vwap_ema or not vwap_ema.get("available"):
+        return ""
+    vwap = vwap_ema.get("vwap", {})
+    if not vwap.get("vwap"):
+        return ""
+    return (
+        f"VWAP `{vwap['vwap']}` "
+        f"+1σ `{vwap.get('upper_1', '?')}` "
+        f"-1σ `{vwap.get('lower_1', '?')}` "
+        f"+2σ `{vwap.get('upper_2', '?')}` "
+        f"-2σ `{vwap.get('lower_2', '?')}`"
+    )
 
 
 if __name__ == "__main__":
