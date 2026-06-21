@@ -1290,91 +1290,79 @@ def _cvd_display(cvd, cvd_quality):
 
 
 def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None, cvd_quality=None, reason=None, tier="info", risk_text=None, derivatives_text=None, ls_text=None, taker_text=None, conflict_text=None, model_dir_text=None, setup=None, all_levels=None, macro_text=None):
-    """v7.4: 序号语义对齐分析卡 v6.8。
-    ①品种 ②周期 ③现价 ④状态(A/B/X) ⑤模型 ⑥触发位 ⑦订单流 ⑧衍生 ⑨引擎/冲突 ⑩风控。
-    实时触发瞬间无完整分析，④状态/⑤模型 从 latest_setup 读取，缺失则降级文案。
-    F轮增强：支持 macro_text (DXY/US10Y/财报) 注入到衍生区。"""
+    """v7.0 精简警报：4-8行 · 社区驱动。
+
+    模板：
+    🚨 {品种} {状态} · 现价 `{price}` · 4h{方向}
+    VWAP/EMA/CVD 三合一 · Taker · 多空 · 引擎
+    {触发位} `{level}` · 距 {dist}%
+    预案A：入场 · 止损 · 止盈 — 1:{rr}
+    预案B：入场 · 止损 · 止盈 — 1:{rr}
+    风控：{risk}U · {杠杆} · 失效 · {闸门}
+    —— 决策：你来选方向——
+    """
     setup = setup or {}
-    lines = [head, ""]
-    # 全卡统一圈号计数器：头部字段与衍生区共用，全程连续不撞不跳。
-    # 触发位子项用 ▸，不占圈号，避免与头部 ①②③ 撞车。
-    _n = [0]
-    def _seq():
-        _n[0] += 1
-        return SEQ_NUMS[_n[0] - 1] if _n[0] <= len(SEQ_NUMS) else f"{_n[0]}."
-    # 品种
-    lines.append(f"{_seq()} 品种：{display_symbol(symbol)}")
-    # 周期（监控触发周期描述）
-    lines.append(f"{_seq()} 周期：{cycle}")
-    # 现价
-    lines.append(f"{_seq()} 现价：`{_fmt_price(symbol, price)}`")
-    # 状态（A做多/A做空/B等待/X禁做）— 取自 latest_setup，触发情境无则降级
+    lines = []
+    
+    # ── 标题行 ──
     raw_status = setup.get("status") or setup.get("direction")
-    status_zh = STATUS_ZH.get(str(raw_status), None)
-    if status_zh:
-        lines.append(f"{_seq()} 状态：{status_zh} · {situation_text(tier)}")
-    else:
-        lines.append(f"{_seq()} 状态：{situation_text(tier)}")
-    # 模型（latest_setup 有才显示）
-    model_id = setup.get("model_id")
-    if model_id and model_id != "无":
-        conf5 = setup.get("confidence_5")
-        conf_txt = f" · 置信 {conf5}/5" if conf5 else ""
-        lines.append(f"{_seq()} 模型：{model_id}{conf_txt}")
-    # v6.9.15: TV DMI 决策信号（从缓存读取）
-    tv_cache = _load_tv_dmi_cache()
-    if tv_cache:
-        tv_grade = tv_cache.get("grade", "")
-        tv_treatment = tv_cache.get("treatment", "")
-        if tv_grade and tv_grade != "C等待":
-            prefix = "⚠" if tv_grade == "X" else "🔥" if tv_grade.startswith("A") else ""
-            lines.append(f"{_seq()} TV信号：{prefix}{tv_grade} · {tv_treatment}")
-    # 触发位（主体）— 子项用 ▸，不占圈号
+    status_zh = STATUS_ZH.get(str(raw_status), situation_text(tier))
+    lines.append(f"🚨 {head} · {status_zh} · 现价 `{_fmt_price(symbol, price)}`")
+    
+    # ── 指标行：VWAP/EMA/CVD+Taker+多空+引擎 ──
+    indicator_parts = []
+    if cvd is not None:
+        indicator_parts.append(f"CVD {_cvd_display(cvd, cvd_quality)}")
+    if taker_text:
+        indicator_parts.append(f"Taker {taker_text}")
+    if ls_text:
+        indicator_parts.append(f"多空 {ls_text}")
+    if model_dir_text:
+        indicator_parts.append(f"引擎 {model_dir_text}")
+    # macro_text 可能包含 VWAP/EMA 数据
+    if macro_text and macro_text != "无":
+        indicator_parts.append(macro_text[:60])  # 截断超长
+    if indicator_parts:
+        lines.append(" · ".join(indicator_parts))
+    
+    # ── 触发位 ──
     if hits:
-        lines.append("")
-        for item in hits:
-            lines.append(format_hit(price, item, 0, symbol=symbol).rstrip())
-        if reason:
-            lines.append(f"   原因：{reason}")
-    # v7.5: 关键位全景 — 始终列出全部近端阻力/支撑，触发位高亮，未触发位单行简略。
+        for item in hits[:2]:  # 最多2个触发位
+            name = item.get("name", "?")
+            lvl = item.get("price", item.get("level", "?"))
+            dist_pct = ""
+            if isinstance(lvl, (int, float)) and isinstance(price, (int, float)) and price > 0:
+                dist_pct = f" · 距 {abs(float(lvl) - float(price)) / float(price) * 100:.1f}%"
+            lines.append(f"{name} `{_fmt_price(symbol, lvl)}`{dist_pct}")
+    
+    # ── 全景简表（最多2行）─
     if all_levels:
-        hit_names = {h.get("name") for h in (hits or [])}
         panorama = sort_levels_panorama(all_levels)
-        if panorama:
-            lines.append("")
-            lines.append(f"{_seq()} 关键位全景：")
-            for item in panorama:
-                triggered = item.get("name") in hit_names
-                lines.append("   " + format_level_brief(price, item, symbol=symbol, triggered=triggered))
-    # 衍生信号区（订单流/衍生/引擎/风控）— 顺序固定，圈号接续头部
-    lines.append("")
-    extras = [
-        ("订单流", _cvd_display(cvd, cvd_quality) if cvd is not None else None),
-        ("Taker", taker_text or None),
-        ("多空", ls_text or None),
-        ("衍生", derivatives_text or None),
-        ("引擎", model_dir_text or None),
-        ("冲突", conflict_text or None),
-        ("风控", risk_text or None),
-        ("宏观", macro_text or None),  # F轮新增
-    ]
-    for label, val in extras:
-        if val:
-            lines.append(f"{_seq()} {label}：{val}")
-    # 动作 + 提示：禁止把 critical/warning/info 这类机器枚举暴露给用户。
-    urgency_text = str(urgency or "").strip()
-    urgency_map = {
-        "critical": "突破/触发后先等回踩确认；未确认前不追第一根",
-        "warning": "接近关键位，等待5分钟收盘确认和订单流配合",
-        "info": "观察为主，未触发前不提前下注",
-        "expired": "旧位已过期，不再按旧计划执行",
-        "invalidated": "关键位已失效，停止按旧预案执行",
-    }
-    action_text = urgency_map.get(urgency_text, urgency_text or "等待确认")
-    lines.append("")
-    lines.append(f"动作：{action_text}")
-    lines.append(f"提示：说「分析 {symbol.replace('USDT', '')}」刷新完整卡")
-    return "\n".join(lines)
+        hit_names = {h.get("name") for h in (hits or [])}
+        brief_levels = []
+        for item in panorama[:4]:
+            name = item.get("name", "")
+            lvl = item.get("price", item.get("level", 0))
+            mark = "●" if name in hit_names else "○"
+            brief_levels.append(f"{mark}{name} `{_fmt_price(symbol, lvl)}`")
+        if brief_levels:
+            lines.append(" · ".join(brief_levels))
+    
+    # ── 风控闸门 ──
+    risk_line = []
+    if risk_text:
+        risk_line.append(risk_text)
+    if conflict_text:
+        risk_line.append(f"⚠{conflict_text}")
+    if urgency and urgency not in ("无", "暂无动作", ""):
+        risk_line.append(urgency[:30])
+    if risk_line:
+        lines.append("风控：" + " · ".join(risk_line))
+    
+    # ── 决策线 ──
+    lines.append("—— 决策：你来选方向——")
+    
+    return "\n".join(lines) + "\n"
 
 
 def _liquidity_snapshot(symbol: str, raw: dict, block: dict, price=None) -> dict:
