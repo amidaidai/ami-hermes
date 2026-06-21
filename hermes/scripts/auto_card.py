@@ -693,7 +693,7 @@ def _asset_data_line(symbol: str, engine_data: dict, taker_data: dict, cvd_quali
         return f"Taker{_grade_short(taker_data)} · CVD {cvd_quality}"
     if ac == "gold":
         dxy_str = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
-        return f"现货/美元({dxy_str}) · CVD {cvd_quality}"
+        return f"Spot/美元({dxy_str}) · CVD {cvd_quality}"
     if ac == "forex":
         dxy_str = f"DXY `{dxy:.2f}`" if dxy else ""
         return f"美元腿/SMT {dxy_str}".strip()
@@ -711,7 +711,7 @@ def _asset_flow_line(symbol: str, engine_data: dict, funding_rate, taker_dir, ta
     dxy = engine_data.get("dxy") or macro.get("dxy")
     us10y = engine_data.get("us10y") or macro.get("us10y")
     if ac == "crypto":
-        return f"资金费率`{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
+        return f"Funding `{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
     if ac == "gold":
         dxy_part = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
         us_part = f"US10Y `{us10y:.2f}`" if us10y else ""
@@ -2609,7 +2609,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         "",
         f"现价 `{_fmt_price(price)}` 高 `{hi}` 低 `{lo}`",
         f"{nearest_name} `{nl_fmt}` 距 {dist_pct:.1f}%",
-        f"{cvd_str} · {taker_label}{taker_r} · 费率 {funding_rate}",
+        f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
         trigger_line,
     ]
     if vwap_line:
