@@ -1230,7 +1230,7 @@ STATUS_ZH = {"A做多": "A做多", "A做空": "A做空", "B等待": "B等待", "
 
 
 def _load_tv_dmi_cache():
-    """读取 TV DMI 决策表缓存（由 tv_signal_monitor 每5分钟更新）。"""
+    """读取 TV DMI 决策表缓存（由 cron agent 定期更新）。"""
     try:
         cache_file = DATA_DIR / "tv_dmi_cache.json"
         if cache_file.exists():
@@ -1238,6 +1238,32 @@ def _load_tv_dmi_cache():
     except:
         pass
     return {}
+
+
+def _check_tv_grade_change(state: dict):
+    """v6.9.15e: 检测 TV DMI 等级变化 → 仅关键信号触发推送。
+    返回 (should_push, grade, treatment)"""
+    cache = _load_tv_dmi_cache()
+    if not cache:
+        return False, "", ""
+    # 兼容多格式: grade 可能在顶层或 tv_data 内
+    grade = cache.get("grade") or cache.get("tv_data", {}).get("grade", "")
+    if not grade:
+        return False, "", ""
+    last = state.get("last_tv_grade", "")
+    # 无变化则跳过
+    if grade == last:
+        return False, grade, ""
+    state["last_tv_grade"] = grade
+    state["last_tv_time"] = now_local().isoformat()
+    # 仅关键等级触发推送
+    if grade.startswith("A"):
+        return True, grade, cache.get("action") or cache.get("tv_data", {}).get("action") or cache.get("treatment", "优先")
+    if grade == "X":
+        return True, grade, cache.get("action") or cache.get("tv_data", {}).get("action") or "结构冲突"
+    if grade.startswith("B"):
+        return True, grade, cache.get("action") or cache.get("tv_data", {}).get("action") or "关注"
+    return False, grade, ""
 
 
 def _cvd_display(cvd, cvd_quality):
@@ -1626,6 +1652,26 @@ def main():
                     write_heartbeat("running", symbol)
                     raw, block_changed = process_block(raw, symbol, block, state)
                     changed = changed or block_changed
+
+                # v6.9.15e: TV DMI 等级变化检测 → 仅关键信号触发推送
+                should_tv_push, tv_grade, tv_action = _check_tv_grade_change(state)
+                if should_tv_push:
+                    prefix = "🔥" if tv_grade.startswith("A") else "⚠" if tv_grade == "X" else "📡"
+                    msg = f"{prefix} TV DMI 等级变化: {tv_grade} — {tv_action}"
+                    log(f"TV推送触发: {msg}")
+                    # 异步出卡（不阻塞主循环）
+                    try:
+                        subprocess.Popen(
+                            [sys.executable, str(ROOT / "hermes" / "scripts" / "auto_card.py"), "BTCUSDT", "--push"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    except Exception as e:
+                        log(f"TV卡片生成失败: {e}")
+                    # 轻量推送等级变化通知
+                    try:
+                        _send_one(report_target(), msg)
+                    except Exception as e:
+                        log(f"TV通知失败: {e}")
 
                 if changed:
                     save_json(LEVELS_FILE, raw)

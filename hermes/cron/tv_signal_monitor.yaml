@@ -2,52 +2,21 @@
 # cron agent: 需要LLM推理来读取TradingView MCP数据
 # 逻辑: 读TV DMI → 判断等级 → A级/关键位触发时生成卡+推送
 name: "TV信号监控·智能推送"
-cron: "*/5 * * * *"
+cron: "*/30 * * * *"
 no_agent: false
 instructions: |
-  你是棠溪交易系统的TV信号监控员。每5分钟检查一次。
+  你是TV缓存维护员。每30分钟读一次TradingView MCP，写入data/tv_dmi_cache.json。
+  行情守望(10s实时)会检测等级变化并自动推送关键信号。
 
   ## 步骤
-  1. 调用 mcp_tradingview_data_get_pine_tables 读取 TV DMI 决策表
-  2. 调用 mcp_tradingview_data_get_study_values 读取 TV 指标数据
-  3. 解析等级（A多/A空/B多/B空/C反多/C反空/X/C等待）
-  
-  ## 推送判断
-  - A多/A空 → 必须推送！运行 auto_card.py 生成卡片并推送到 Telegram
-  - B多/B空 + 价格在关键位 → 推送
-  - C/X/其他 → 只记录不推送，静默退出
-  
-  ## 推送命令
-  推送时用: python hermes/scripts/auto_card.py BTCUSDT --push
-  或: python hermes/scripts/auto_card.py XAUUSD --push
-  
-  ## 防重复
-  - 同一等级30分钟内不重复推
-  - 每日上限: A级6次, B级3次
-  - 无机会不推: C/X/等待直接跳过，不浪费token
-
-  ## 紧急状态检查
-  同时检查 data/tv_signal_state.json 的 push_count_today 字段。
-  如果今日已达上限，改为只记录不推送。
-
-  ## 输出格式
-  每次运行必须:
-  1. 将TV DMI全量数据写入 data/tv_dmi_cache.json（供行情守望.py读取）:
+  1. 调用 mcp_tradingview_data_get_pine_tables + mcp_tradingview_data_get_study_values
+  2. 将完整数据写入 data/tv_dmi_cache.json:
   {
-    "grade": "X", "treatment": "结构冲突", "cvd_state": "顺多确认",
-    "background": "空 4h", "position": "VAL下方|下方控制",
-    "execution": "等:等确认", "risk": "不进场",
-    "updated": "2026-06-21T17:52:00+08:00"
+    "timestamp": "ISO时间",
+    "symbol": "BTCUSDT",
+    "grade": "从DMI表取等级",
+    "table_raw": ["等级 | ...", "处理 | ...", ...],
+    "indicators": {"S_VWAP": ..., "CVD_Value": ..., ...}
   }
-  
-  2. 如果可推送，运行: python hermes/scripts/tv_signal_monitor.py 
-     --tv-grade "X" --tv-treatment "结构冲突" --tv-cvd-state "顺多确认"
-     --tv-background "空 4h" --tv-position "VAL下方|下方控制"
-     --tv-execution "等:等确认" --tv-risk "不进场"
-     --symbol BTCUSDT
-  
-  3. 如果 tv_signal_monitor 返回 push=true，运行 auto_card + 推送
-
-  ## 关键: 没有机会就不用推送
-  只有A多/A空或B+关键位才推。其他情况只写心跳。
+  3. 不推送，不运行auto_card。行情守望负责。
 enabled: true
