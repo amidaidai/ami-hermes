@@ -161,6 +161,114 @@ def _env_walls_line(symbol: str, price, klines: dict) -> str:
     return f"④ 清算：上 `{_liquidation(klines, 'up')}` · 下 `{_liquidation(klines, 'down')}` — {_liq_read(klines, price)}"
 
 
+
+def _parse_tv_dmi_table(tv_tables: list | None) -> dict:
+    """从 TradingView Pine table 解析 DMI 决策表数据。"""
+    if not tv_tables:
+        return {}
+    rows = {}
+    for row_text in (tv_tables[0].get("rows", []) if tv_tables else []):
+        parts = row_text.split(" | ", 1)
+        if len(parts) == 2:
+            key, val = parts[0].strip(), parts[1].strip()
+            rows[key] = val
+    return rows
+
+
+def _parse_tv_study_values(tv_studies: list | None) -> dict:
+    """从 TradingView study values 提取关键数据。"""
+    result = {}
+    if not tv_studies:
+        return result
+    for s in tv_studies:
+        name = s.get("name", "")
+        vals = s.get("values", {})
+        if "CVD" in name or "SVP" in name:
+            for k, v in vals.items():
+                try:
+                    val_str = str(v).replace("\u2212", "-").replace(",", "").replace("\u202fK", "").replace("\u202f", "").strip()
+                    # Also handle unicode minus sign
+                    val_str = val_str.replace("\u2212", "-")
+                    result[k] = float(val_str) * (1000 if "K" in str(v) else 1)
+                except (ValueError, TypeError):
+                    result[k] = str(v)
+    return result
+
+
+def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
+                           dmi_rows: dict, tv_vals: dict) -> dict:
+    """用 TV DMI 数据覆盖引擎的 bias/grade/status。返回变更标记。"""
+    if not dmi_rows:
+        return {"tv_active": False}
+    grade = dmi_rows.get("等级", "C等待")
+    changes = {"tv_active": True, "tv_grade": grade, "tv_treatment": dmi_rows.get("处理", "?"),
+               "tv_background": dmi_rows.get("背景", "?"), "tv_position": dmi_rows.get("位置", "?"),
+               "tv_volume": dmi_rows.get("量能", "?"), "tv_cvd_state": dmi_rows.get("CVD", "?"),
+               "tv_execution": dmi_rows.get("执行", "?"), "tv_risk": dmi_rows.get("风控", "?")}
+
+    # Grade -> status mapping (TV authority overrides engine)
+    if grade.startswith("A多"):
+        meta["status"] = "A做多"
+        meta["direction"] = "long"
+        meta["priority_plan"] = "A"
+    elif grade.startswith("A空"):
+        meta["status"] = "A做空"
+        meta["direction"] = "short"
+        meta["priority_plan"] = "A"
+    elif grade.startswith("B多"):
+        meta["status"] = "B等待"
+        meta["direction"] = "long"
+        meta["priority_plan"] = "B"
+    elif grade.startswith("B空"):
+        meta["status"] = "B等待"
+        meta["direction"] = "short"
+        meta["priority_plan"] = "B"
+    elif grade.startswith("C反多"):
+        meta["status"] = "C反转"
+        meta["direction"] = "long"
+        meta["priority_plan"] = "C"
+    elif grade.startswith("C反空"):
+        meta["status"] = "C反转"
+        meta["direction"] = "short"
+        meta["priority_plan"] = "C"
+    elif grade == "X":
+        meta["status"] = "X禁做"
+        meta["direction"] = "wait"
+        meta["priority_plan"] = "无"
+    else:  # C等待
+        meta["status"] = "B等待"
+        meta["direction"] = "wait"
+        meta["priority_plan"] = "无"
+
+    changes["new_status"] = meta["status"]
+    changes["new_direction"] = meta["direction"]
+
+    # Inject TV CVD values into engine_data for real CVD display
+    if tv_vals:
+        cvd_val = tv_vals.get("CVD Value")
+        cvd_slope = tv_vals.get("CVD Slope")
+        if cvd_val is not None:
+            cvd_dir = "买" if (cvd_slope and cvd_slope > 0) else "卖" if (cvd_slope and cvd_slope < 0) else "?"
+            engine_data["cvd_tv"] = {"value": cvd_val, "slope": cvd_slope, "direction": cvd_dir}
+            changes["tv_cvd_value"] = cvd_val
+            changes["tv_cvd_slope"] = cvd_slope
+
+    return changes
+
+
+def _tv_cvd_override(cvd_data: dict, tv_vals: dict) -> dict:
+    """用 TV CVD 真实值覆盖 Binance Taker 代理 CVD。"""
+    if not tv_vals:
+        return cvd_data
+    cvd_val = tv_vals.get("CVD Value")
+    cvd_slope = tv_vals.get("CVD Slope")
+    if cvd_val is not None and cvd_slope is not None:
+        direction = "买" if cvd_slope > 50 else "卖" if cvd_slope < -50 else "中性" if abs(cvd_slope) < 10 else ("买" if cvd_slope > 0 else "卖")
+        quality = "A" if abs(cvd_slope) > 500 else "B" if abs(cvd_slope) > 200 else "C"
+        return {"direction": direction, "quality": quality,
+                "value": cvd_val, "slope": cvd_slope,
+                "source": "TV真实CVD", "raw": cvd_data}
+    return cvd_data
 def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dict,
                        engine_data: dict, grok: dict | None = None,
                        search_sent: str = "", community: str = "",
@@ -243,6 +351,45 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     k15m = klines.get("15m") or {}
     k5m = klines.get("5m") or {}
 
+    # ── TV DMI 数据注入 ──
+    tv_dmi_rows = {}
+    tv_vals = {}
+    tv_override = {"tv_active": False}
+    try:
+        import requests as _req, json as _j
+        # 从 Hermes Web UI MCP 获取 TV 数据（通过内部管道）
+        tv_raw = engine_data.get("_tv_data")
+        if not tv_raw:
+            # 尝试从 engine_data 的 cvd_tv 预注入字段读取
+            pass
+        # 如果有 TV Pine table 数据，解析它
+        tv_pine = engine_data.get("_tv_pine", {})
+        if tv_pine:
+            tv_dmi_rows = _parse_tv_dmi_table(tv_pine.get("tables"))
+            tv_vals = _parse_tv_study_values(tv_pine.get("studies"))
+            if tv_dmi_rows:
+                tv_override = _apply_tv_dmi_override(meta, engine_data, symbol, tv_dmi_rows, tv_vals)
+                engine_data["_tv_override"] = tv_override  # 存储供 compact card 使用
+            # 用 TV 真实 CVD 覆盖 Binance Taker 代理
+                if tv_vals.get("CVD Value") is not None:
+                    cvd_data = _tv_cvd_override(cvd_data, tv_vals)
+        # 注入 TV 价格轴数据到 klines（POC/VAH/VAL 更精确）
+        if tv_vals:
+            for tf_dict, tf_name in [(k4h, "4h"), (k1h, "1h"), (k15m, "15m"), (k5m, "5m")]:
+                if isinstance(tf_dict, dict):
+                    for tv_key, dict_key in [("POC Price", "poc"), ("VAH Price", "vah"),
+                                             ("VAL Price", "val"), ("S VWAP", "vwap"),
+                                             ("nPOC Price", "npoc")]:
+                        if tv_key in tv_vals and dict_key not in tf_dict:
+                            tf_dict[dict_key] = tv_vals[tv_key]
+            # EMA 注入（日线趋势更准）
+            for ema_key, ema_name in [("EMA 9", "ema9"), ("EMA 21", "ema21"),
+                                       ("EMA 34", "ema34"), ("EMA 55", "ema55")]:
+                if ema_key in tv_vals:
+                    k15m[ema_name] = tv_vals[ema_key]
+    except Exception:
+        pass
+
     # ═══ ⑩ 头部 ═══
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
     display_symbol = _display_symbol(symbol)
@@ -256,11 +403,11 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"1h {_kl_summary(k1h, '当前') or '等待方向'}",
         f"4h {_kl_summary(k4h, '背景') or '等待方向'}",
         f"③ 现价：{price_label}{_fmt_price(price)}（{price_source}） · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
-        f"④ 状态：{status}",
-        f"⑤ 模型：{model_id}",
-        f"⑥ 评分：{_score13(merged, results, status, symbol)}",
-        f"⑦ 决策：{_decision_text(merged, status)} · 置信 {n5}/5",
-        f"⑧ 仓位：{_pos_level(data_grade, status)} · 风险 `{_adaptive_risk(engine_data):.2f}U`",
+        f"④ 状态：{status}{' · TV:' + tv_override.get('tv_grade', '') if tv_override.get('tv_active') and tv_override.get('tv_grade') not in ('C等待', '') else ''}",
+        f"⑤ 识别信号：{model_id}",
+        f"⑥ 数据：{_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
+        f"⑦ 风险：{_adaptive_risk(engine_data):.2f}U",
+        f"⑧ 仓位：{_pos_level(data_grade, status)}",
         f"⑨ 失效：{meta.get('invalid_price') or _default_failure(dir_cn)}",
         f"⑩ 数据：{data_grade} · {_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
     ]
@@ -318,9 +465,20 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     asset_risk_short = asset_risk.split("；")[0] if isinstance(asset_risk, str) else asset_risk
     asset_review = _asset_review_text(symbol)
 
-    if status == "B等待" or direction == "wait":
+    if status == "X禁做":
+        # TV DMI 信号冲突 → 明确标注不进
+        x_reason = tv_override.get("tv_treatment", "结构冲突")
+        x_cvd = tv_override.get("tv_cvd_state", "?")
+        x_pos = tv_override.get("tv_position", "?")
+        x_vol = tv_override.get("tv_volume", "?")
+        ops.append(f"⚠ TV DMI 决策表: X — {x_reason}")
+        ops.append(f"   位置: {x_pos} · 量能: {x_vol} · CVD: {x_cvd}")
+        ops.append(f"   等: {tv_override.get('tv_execution', '等关键位')} · {tv_override.get('tv_risk', '不进场')}")
+        ops.append(f"   方向不定，待结构明朗后再看。")
+        ops.append(f"   失效：等 TV 下一根 DMI 表更新。")
+    elif status == "B等待" or direction == "wait":
         k4h_bias = _kl_bias(k4h)  # 高周期继承
-        plan_a_bias = _primary_plan_bias(bias_cn, k4h_bias)
+        plan_a_bias = _primary_plan_bias(bias_cn, k4h_bias, symbol, klines, cvd_data)
         plan_b_bias = _opposite_bias(plan_a_bias)
         plan_a_dir = _dir_from_bias(plan_a_bias)
         plan_b_dir = _dir_from_bias(plan_b_bias)
@@ -1069,18 +1227,63 @@ def _plan_a_name(bias_cn: str, model_id: str) -> str:
     return f"{dir_word} · {model_id}"
 
 
-def _primary_plan_bias(bias_cn: str, k4h_direction: str = "") -> str:
-    """主方向判定：引擎 > 4h继承 > 默认偏多。4h是低周期的'宪法'。"""
+def _primary_plan_bias(bias_cn: str, k4h_direction: str = "", symbol: str = "", klines: dict = None, cvd_data: dict = None) -> str:
+    """主方向判定：TV DMI > 4h继承 > 市场权重 > 引擎 > 默认偏多。"""
     # 4h方向有否决权：4h偏空时，引擎中性也优先空
     if k4h_direction in ("偏空", "bearish", "下跌"):
         return "偏空"
     if k4h_direction in ("偏多", "bullish", "上涨"):
         return "偏多"
+
+    # 市场权重调整（P2: 对齐 TV 多市场评分）
+    if symbol and klines and cvd_data:
+        weighted = _asset_weight_bias(symbol, bias_cn, klines, cvd_data)
+        if weighted != bias_cn:
+            return weighted
+
     if bias_cn in ("偏空", "空头"):
         return "偏空"
     if bias_cn in ("偏多", "多头"):
         return "偏多"
     return "偏多"
+
+
+def _asset_weight_bias(symbol: str, bias_cn: str, klines: dict, cvd_data: dict) -> str:
+    """按资产类别调整方向权重（对齐 TV SVP 多市场评分逻辑）。
+
+    加密：放量方向加分；贵金属/外汇：流动性扫掠加分；股票：指数联动。
+    """
+    ac = _asset_class(symbol)
+    k15m = klines.get("15m") or {}
+    vol = k15m.get("volume") or 0
+
+    if ac == "crypto":
+        # 加密：放量方向优先 + CVD 权重
+        cvd_dir = cvd_data.get("direction", "?")
+        if vol > 500 and cvd_dir == "买":
+            return "偏多" if bias_cn != "偏空" else "偏空"  # 尊重引擎方向，放量确认
+        if vol > 500 and cvd_dir == "卖":
+            return "偏空" if bias_cn != "偏多" else "偏多"
+        return bias_cn
+
+    if ac in ("gold", "metal", "forex"):
+        # 贵金属/外汇：流动性扫掠权重更高
+        merged_kl = klines.get("merged") or {}
+        swept_low = merged_kl.get("swept_low_reclaimed") or False
+        swept_high = merged_kl.get("swept_high_rejected") or False
+        if swept_low:
+            return "偏多"  # 扫低收回→优先多
+        if swept_high:
+            return "偏空"  # 扫高拒绝→优先空
+        return bias_cn
+
+    if ac == "stock":
+        # 股票：放量确认方向
+        if vol > 100000:
+            return bias_cn  # 放量确认原方向
+        return "等待" if vol < 30000 else bias_cn
+
+    return bias_cn
 
 
 def _dir_from_bias(bias_cn: str) -> str:
@@ -1773,8 +1976,25 @@ def auto_card(symbol: str, push: bool = False) -> str:
     
     print("⑦ 渲染锁定卡片...")
     meta = build_setup_metadata(symbol, merged, results, engine_data)
+
+    # v6.9.14: TV DMI 决策表数据注入（从 TradingView MCP 读取）
+    tv_dmi_data = {}
+    try:
+        # 尝试从 Hermes Web UI MCP 读取 TV 实时数据
+        import requests as _req, json as _j
+        # 通过本地 MCP bridge 获取 TV study values 和 Pine table
+        # 目前使用 engine_data 中已预载的 _tv_pine 字段（由调用方注入）
+        tv_raw = engine_data.get("_tv_pine")
+        if tv_raw:
+            studies = tv_raw.get("studies", [])
+            tables = tv_raw.get("tables", [])
+            engine_data["_tv_pine"] = {"studies": studies, "tables": tables}
+            tv_dmi_data = {"studies": studies, "tables": tables}
+            print(f"  ✅ TV DMI: {len(studies)} studies · {len(tables)} tables")
+    except Exception as e:
+        print(f"  ⚠ TV DMI跳过: {e}")
     
-    # v2.0: Protections 状态注入（社区共识防护层）
+    # v2.0: Protections 状态注入
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         from risk_constitution import apply_protections, load_protections
@@ -2164,8 +2384,20 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     k4h_bias_compact = _kl_bias(k4h) or "?"
     header_4h = f"4h{k4h_bias_compact}"
     
+    # TV DMI 决策表注入
+    tv_active = engine_data.get("_tv_override", {}).get("tv_active", False)
+    tv_grade = engine_data.get("_tv_override", {}).get("tv_grade", "")
+    grade_line = ""
+    if tv_active and tv_grade:
+        if tv_grade == "X":
+            grade_line = f"⚠TV: X — {engine_data.get('_tv_override', {}).get('tv_treatment', '结构冲突')} · 不进"
+        elif tv_grade.startswith("A"):
+            grade_line = f"🔥TV: {tv_grade} — {engine_data.get('_tv_override', {}).get('tv_treatment', '优先')}"
+        else:
+            grade_line = f"TV: {tv_grade} — {engine_data.get('_tv_override', {}).get('tv_treatment', '等')}"
+
     lines = [
-        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {header_4h} · {bias}",
+        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {header_4h} · {bias}{' ' + grade_line if grade_line else ''}",
         f"③ {_fmt_price(price)} · 高 {hi} · 低 {lo}",
         f"{nearest_name} {nl_fmt} {near_str}",
         f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
