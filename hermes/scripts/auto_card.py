@@ -635,12 +635,12 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     full = "\n".join(card_lines) + "\n"
     
     # 决策模式：B等待但价格已锚定关键位 → 输出极简速读卡（替代全卡）
-    anchored = _near_key_level(klines, price)
+    anchored = _find_nearest_key_level(klines, price)
     if not force_full and status in ("B等待", "C等待", "X禁做") and anchored:
         compact = _compact_card(symbol, price, status, direction, model_id, klines, k4h, k5m, k15m,
                                 merged, cvd_dir, cvd_quality, taker_dir, taker_ratio,
                                 funding_rate, engine_data, risk_amt, risk_pct_limit,
-                                prot_status, data_grade, fg, leverage_text, qty_unit, search_sent)
+                                prot_status, data_grade, fg, leverage_text, _qty_unit(symbol), search_sent)
         if compact:
             return compact
     
