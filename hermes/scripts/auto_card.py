@@ -478,6 +478,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"⑥ 风控环境：{_gate_data(data_grade)} — 风险 `{risk_amt:.2f}U` · Constitution v2.0",
         f"⑦ 预测市场：{pm_text or '数据待采集'}",
         f"⑧ VWAP/EMA：{_vwap_ema_display(vwap_ema)}",
+        f"⑨ 对抗：Bull {adversarial.get('bull_score', '?')} vs Bear {adversarial.get('bear_score', '?')} — {adversarial.get('div_label', '无数据')}",
     ]
 
     # ═══ 二、结构 ═══

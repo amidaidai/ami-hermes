@@ -232,11 +232,21 @@ def start_monitor(emergency: bool = False) -> bool:
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         time.sleep(3)
-        if proc.poll() is not None:
-            reason = f"启动失败: 行情守望提前退出 code={proc.returncode}"
-            log(reason)
-            write_watchdog_state(status="failed", last_restart_reason=reason)
-            return False
+        # v1.3: Popen 在某些 Windows 环境可能返回不完整对象，.poll() 不存在
+        # 使用 pid_alive 替代 poll 检查进程是否存活
+        try:
+            if proc.poll() is not None:
+                reason = f"启动失败: 行情守望提前退出 code={proc.returncode}"
+                log(reason)
+                write_watchdog_state(status="failed", last_restart_reason=reason)
+                return False
+        except AttributeError:
+            # Popen 对象不完整 → 用 pid 检查
+            if not pid_alive(proc.pid):
+                reason = f"启动失败: 进程未存活 pid={proc.pid}"
+                log(reason)
+                write_watchdog_state(status="failed", last_restart_reason=reason)
+                return False
         hb = read_heartbeat() or {}
         if str(hb.get("pid")) != str(proc.pid) and not pid_alive(proc.pid):
             reason = f"启动失败: 子进程未存活 pid={proc.pid}"
