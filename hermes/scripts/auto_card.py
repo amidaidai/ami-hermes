@@ -1300,13 +1300,36 @@ def _gate_exec(klines: dict, price, status: str) -> str:
     return "通过"
 
 
+def _binance_sign(params: dict, secret: str) -> str:
+    """HMAC-SHA256签名"""
+    import hmac, hashlib, urllib.parse
+    query = urllib.parse.urlencode(params)
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+
+
+def _binance_headers(api_key: str = "") -> dict:
+    return {"X-MBX-APIKEY": api_key} if api_key else {}
+
+
+def _load_binance_keys() -> tuple:
+    """Load Binance API keys from secrets"""
+    import json
+    from pathlib import Path
+    try:
+        data = json.loads(Path("D:/hermes Agent/hermes/secrets/binance.json").read_text())
+        return data.get("api_key", ""), data.get("secret_key", "")
+    except Exception:
+        return "", ""
+
+
 def _collect_binance_data(engine_data: dict, symbol: str) -> None:
-    """Fetch Binance futures data and store in engine_data for v6.9 rendering."""
-    import requests, time as _time
+    """Fetch Binance futures data with HMAC signing for authenticated endpoints."""
+    import requests, time as _time, hmac, hashlib, urllib.parse
     base = "https://fapi.binance.com"
     sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+    api_key, secret = _load_binance_keys()
     
-    # ── K-lines (5m/15m/1h/4h) ──
+    # ── K-lines (public, no sign needed) ──
     klines = {}
     for tf, limit in [("5m", 12), ("15m", 20), ("1h", 20), ("4h", 20)]:
         try:
@@ -1327,11 +1350,8 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
                     "open": float(data[0][1]), "volume": sum(volumes),
                     "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
                     "change_pct": round(chg_pct, 4),
-                    "avg_volume": avg_vol,
-                    "range": rng,
-                    "poc": round(poc, 2),
-                    "vah": round(max(highs), 2),
-                    "val": round(min(lows), 2),
+                    "avg_volume": avg_vol, "range": rng,
+                    "poc": round(poc, 2), "vah": round(max(highs), 2), "val": round(min(lows), 2),
                     "direction": direction,
                     "description": _kl_desc(tf, closes, highs, lows, volumes),
                 }
@@ -1339,52 +1359,98 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
             pass
     engine_data["klines"] = klines
     
-    # ── Funding ──
+    if not api_key:
+        # No API key — fallback to public endpoints only
+        try:
+            r = requests.get(f"{base}/fapi/v1/fundingRate", params={"symbol": sym, "limit": 1}, timeout=5)
+            data = r.json()
+            if isinstance(data, list) and data:
+                rate = float(data[0]["fundingRate"]) * 100
+                engine_data["funding"] = {"rate_pct": f"{rate:.4f}%", "rate": rate}
+        except Exception:
+            pass
+        try:
+            r = requests.get(f"{base}/fapi/v1/openInterest", params={"symbol": sym}, timeout=5)
+            data = r.json()
+            engine_data["oi"] = {"oi": f"{float(data.get('openInterest',0)):,.0f}", "value": float(data.get("openInterest", 0))}
+        except Exception:
+            pass
+        # CVD fallback
+        try:
+            from cvd_aggtrades import get_cvd_aggtrades
+            cvd = get_cvd_aggtrades(sym)
+            engine_data["cvd"] = {"direction": cvd.get("direction", "N/A"), "quality": cvd.get("quality", "B")}
+        except Exception:
+            pass
+        return
+    
+    # ── HMAC-signed endpoints ──
+    ts = int(_time.time() * 1000)
+    
+    # Funding rate
     try:
-        r = requests.get(f"{base}/fapi/v1/fundingRate", params={"symbol": sym, "limit": 1}, timeout=5)
+        params = {"symbol": sym, "limit": 1, "timestamp": ts}
+        params["signature"] = _binance_sign(params, secret)
+        r = requests.get(f"{base}/fapi/v1/fundingRate", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         if isinstance(data, list) and data:
             rate = float(data[0]["fundingRate"]) * 100
-            engine_data["funding"] = {"rate_pct": f"{rate:.4f}%", "rate": rate}
+            engine_data["funding"] = {"rate_pct": f"{rate:.4f}%", "rate": rate, "quality": "A"}
     except Exception:
         pass
     
-    # ── Open Interest ──
+    # Open Interest
     try:
-        r = requests.get(f"{base}/fapi/v1/openInterest", params={"symbol": sym}, timeout=5)
+        ts2 = int(_time.time() * 1000)
+        params = {"symbol": sym, "timestamp": ts2}
+        params["signature"] = _binance_sign(params, secret)
+        r = requests.get(f"{base}/fapi/v1/openInterest", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
-        engine_data["oi"] = {"oi": f"{float(data.get('openInterest',0)):,.0f}", "value": float(data.get("openInterest", 0))}
+        oi_val = float(data.get("openInterest", 0))
+        # Check OI trend by comparing with previous (simple: store in engine_data for next call)
+        prev_oi = engine_data.get("_prev_oi", {}).get(sym, oi_val)
+        trend = "up" if oi_val > prev_oi * 1.001 else "down" if oi_val < prev_oi * 0.999 else "flat"
+        engine_data.setdefault("_prev_oi", {})[sym] = oi_val
+        engine_data["oi"] = {"oi": f"{oi_val:,.0f}", "value": oi_val, "trend": trend, "quality": "A"}
     except Exception:
         pass
     
-    # ── Taker buy/sell ──
+    # Taker buy/sell ratio (correct endpoint: /futures/data/takerlongshortRatio)
     try:
-        r = requests.get(f"{base}/fapi/v1/takerlongshortRatio", params={"symbol": sym, "period": "5m", "limit": 1}, timeout=5)
+        ts3 = int(_time.time() * 1000)
+        params = {"symbol": sym, "period": "5m", "limit": 1, "timestamp": ts3}
+        params["signature"] = _binance_sign(params, secret)
+        r = requests.get(f"{base}/futures/data/takerlongshortRatio", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         if isinstance(data, list) and data:
             bs = float(data[0].get("buySellRatio", 1))
-            engine_data["taker"] = {"ratio": f"{bs:.2f}", "direction": "buy" if bs >= 1 else "sell"}
+            engine_data["taker"] = {"ratio": f"{bs:.2f}", "direction": "buy" if bs >= 1 else "sell", "quality": "A", "raw": bs}
     except Exception:
         pass
     
-    # ── Global long/short ──
+    # Global long/short ratio
     try:
-        r = requests.get(f"{base}/fapi/v1/globalLongShortAccountRatio", params={"symbol": sym, "period": "5m", "limit": 1}, timeout=5)
+        ts4 = int(_time.time() * 1000)
+        params = {"symbol": sym, "period": "5m", "limit": 1, "timestamp": ts4}
+        params["signature"] = _binance_sign(params, secret)
+        r = requests.get(f"{base}/futures/data/globalLongShortAccountRatio", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         if isinstance(data, list) and data:
             engine_data["long_short"] = {"long": float(data[0].get("longAccount", 0.5)), "short": float(data[0].get("shortAccount", 0.5))}
     except Exception:
         pass
     
-    # ── CVD via spot aggTrades ──
+    # CVD via spot aggTrades
     try:
         from cvd_aggtrades import get_cvd_aggtrades
         cvd = get_cvd_aggtrades(sym)
         engine_data["cvd"] = {"direction": cvd.get("direction", "N/A"), "quality": cvd.get("quality", "B")}
     except Exception:
         try:
-            # fallback: K-line taker volume estimation
-            r = requests.get(f"{base}/fapi/v1/klines", params={"symbol": sym, "interval": "1m", "limit": 5}, timeout=5)
+            ts5 = int(_time.time() * 1000)
+            params = {"symbol": sym, "interval": "1m", "limit": 5, "timestamp": ts5}
+            params["signature"] = _binance_sign(params, secret)
+            r = requests.get(f"{base}/fapi/v1/klines", params=params, headers=_binance_headers(api_key), timeout=5)
             data = r.json()
             if isinstance(data, list):
                 buy_vol = sum(float(c[9]) for c in data if len(c) > 9)
@@ -1527,37 +1593,40 @@ def auto_card(symbol: str, push: bool = False) -> str:
             except Exception:
                 engine_data["dxy"] = 100.85
             
-            # K-lines from jin10
+            # K-lines from Yahoo GC=F (futures, adjusted for spot)
             try:
                 import urllib.request, json as _j
+                tf_map = {"5m": "5m", "15m": "15m", "1h": "1h", "4h": "1h"}  # Yahoo 1h as 4h proxy
+                tf_range = {"5m": "1d", "15m": "5d", "1h": "7d", "4h": "1mo"}
                 for tf, limit in [("5m", 12), ("15m", 20), ("1h", 20), ("4h", 20)]:
                     try:
-                        req = _j.loads(_req.get(
-                            f"https://api.jin10.com/quote/kline?code=XAUUSD&interval={tf}&count={min(limit, 100)}",
-                            timeout=6, headers={"User-Agent": "Mozilla/5.0"}
-                        ).text)
-                        kdata = req.get("data", [])
-                        if kdata:
-                            closes = [float(c[-2]) for c in kdata if len(c) > 3]
-                            highs = [float(c[-3]) for c in kdata if len(c) > 3]
-                            lows = [float(c[-4]) for c in kdata if len(c) > 3]
+                        ytf = tf_map[tf]
+                        ry = tf_range[tf]
+                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={ytf}&range={ry}"
+                        req = _req.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                        if req.status_code == 200:
+                            result = _j.loads(req.text)["chart"]["result"][0]
+                            quotes = result["indicators"]["quote"][0]
+                            closes = [float(c) - 20 for c in quotes["close"] if c]  # -$20 futures→spot approx
+                            highs = [float(h) - 20 for h in quotes["high"] if h]
+                            lows = [float(l) - 20 for l in quotes["low"] if l]
                             if closes:
+                                closes = closes[-limit:]; highs = highs[-limit:]; lows = lows[-limit:]
                                 chg = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] else 0
                                 direction = "偏多" if chg > 0.2 else "偏空" if chg < -0.2 else "震荡"
-                                klines = engine_data.setdefault("klines", {})
-                                klines[tf] = {
+                                klines_dict = engine_data.setdefault("klines", {})
+                                klines_dict[tf] = {
                                     "close": closes[-1], "high": max(highs), "low": min(lows),
-                                    "open": closes[0] if closes else price,
-                                    "change_pct": round(chg, 4),
+                                    "open": closes[0], "change_pct": round(chg, 4),
                                     "poc": round(sum(closes)/len(closes), 2),
                                     "vah": round(max(highs), 2), "val": round(min(lows), 2),
                                     "direction": direction,
-                                    "description": f"{'上涨' if chg > 0.5 else '下跌' if chg < -0.5 else '震荡'}{chg:+.1f}%" if abs(chg) > 0.3 else "窄幅盘整 — 等方向",
+                                    "description": _kl_desc(tf, closes, highs, lows, [0]*len(closes)),
                                 }
                     except Exception:
                         pass
                 if engine_data.get("klines"):
-                    print(f"  ✅ XAU K线: {list(engine_data['klines'].keys())}")
+                    print(f"  ✅ XAU K线(Yahoo GC=F): {list(engine_data['klines'].keys())}")
             except Exception:
                 pass
         except Exception as e:
