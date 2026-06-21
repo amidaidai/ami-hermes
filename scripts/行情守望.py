@@ -1641,6 +1641,10 @@ def main():
     try:
         log(f"实时监控 v7.5 | 10s | 接近{NEAR_PCT*100:.1f}% | 突破{BREACH_PCT*100:.1f}% | {'数据桥已接' if _HAS_BRIDGE else '数据桥未接'}")
         state = read_json(STATE_FILE, {"last_alerts": {}})
+        # v6.9.15e: 启动时从缓存初始化TV等级，避免重启误触推送
+        if "last_tv_grade" not in state:
+            cache = _load_tv_dmi_cache()
+            state["last_tv_grade"] = cache.get("grade") or cache.get("tv_data", {}).get("grade", "")
         while True:
             try:
                 # P0-1 fix: 心跳移到循环最顶部，确保每轮先报活
