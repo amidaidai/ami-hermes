@@ -341,8 +341,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"**④ 仓位：{qty_calc} {qty_unit}**")
         ops.append(f"   **风险：`{risk_amt:.2f}U` · {risk_pct_limit:.0f}%宪法上限**")
         ops.append(f"**⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}**")
-        ops.append(f"⑥ 复查：15m×3根，不顺就撤")
-        ops.append(f"⑦ 轨迹：等确认 → 入场 → 移损/止盈")
+        ops.append(f"⑥ 复查：15m×3根 — 第4根无利润→减半仓 · 第6根→全平")
+        ops.append(f"⑦ 轨迹：等确认 → 入场 → +1.5R出一半→移损保本 → 剩余跟踪")
         ops.append("")
         ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}（备选·等反向确认）——")
         ops.append(f"**① 方向：{plan_b_dir}**")
@@ -356,8 +356,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"**④ 仓位：{qty_calc} {qty_unit}**")
         ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}**")
-        ops.append(f"⑥ 复查：15m×3根，不顺就撤")
-        ops.append(f"⑦ 轨迹：反向确认 → 入场 → 移损/止盈")
+        ops.append(f"⑥ 复查：15m×3根 — 第4根无利润→减半仓 · 第6根→全平")
+        ops.append(f"⑦ 轨迹：反向确认 → 入场 → +1.5R出一半→移损保本 → 剩余跟踪")
     else:
         plan_tag = " ⚠优先" if priority in ("A", "B") else ""
         a_bias = "偏空" if "空" in dir_cn else "偏多"
@@ -374,8 +374,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"**④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`**")
         ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：关键结构位反向收复 — 触发后取消**")
-        ops.append(f"⑥ 复查：15m×3根，不顺就撤")
-        ops.append(f"⑦ 轨迹：{status} → 入场 → 复查 → 移损/止盈/失效")
+        ops.append(f"⑥ 复查：15m×3根 — 第4根无利润→减半仓 · 第6根→全平")
+        ops.append(f"⑦ 轨迹：{status} → 入场 → +1.5R出一半→移损保本 → 剩余跟踪")
 
     # ═══ 五、风控 ═══
     rr1 = meta.get("rr1")
@@ -383,7 +383,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     risk = [
         "五、风控",
         f"① 单笔：风险 `{risk_amt:.2f}U` — {risk_pct_limit:.0f}%宪法上限（v2.0）",
-        f"② 日限：日回撤≥10%全停 · 周回撤≥15%全停",
+        f"② 日限：日回撤≥3%全停 · 周回撤≥6%全停",
         f"③ R:R：≥1:2 — 低于直接 X禁做",
         f"④ 止损：结构止损优先 · ATR夹层 0.5×∼2.5×ATR",
         f"⑤ 移损：+1R 移至保本 — +2R 保护利润",
@@ -2141,6 +2141,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     
     plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}{rr_a_note}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}{rr_a_note}"
     plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}{rr_b_note}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}{rr_b_note}"
+    scale_line = "→ 到了+1.5R先出一半 · 第4根15m无利润减半"
     
     # 社区共识标签
     fg_val = fg.get("value", "?") if isinstance(fg, dict) else "?"
@@ -2171,6 +2172,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         trigger_line,
         plan_a,
         plan_b,
+        scale_line,
         f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag} · {comm_tag}",
         f"—— 决策：你来选方向——",
     ]

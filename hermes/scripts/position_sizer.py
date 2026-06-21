@@ -71,13 +71,13 @@ def position_size(
     
     # 日损检查（从 risk_state.json）
     daily_loss = 0.0
-    daily_limit = cap * 0.10  # 日上限 10%
+    daily_limit = cap * 0.03  # 日上限 3%（社区标准）
     try:
         rs = ROOT / "data" / "risk_state.json"
         if rs.exists():
             state = json.loads(rs.read_text(encoding="utf-8"))
             daily_loss = float(state.get("daily_realized_pnl", 0))
-            daily_limit = float(state.get("max_daily_loss_usd", cap * 0.10))
+            daily_limit = float(state.get("max_daily_loss_usd", cap * 0.03))
     except Exception:
         pass
     
