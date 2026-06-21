@@ -1293,23 +1293,33 @@ def process_block(raw, symbol, block, state):
     if block.get("monitor_enabled") is False:
         return raw, False
     
-    # v6.4: 事件禁做熔断
+    # v7.1+: 多资产时段过滤（使用统一 session_filter）
+    try:
+        from session_filter import should_trade as session_ok, get_asset_class
+        ac = get_asset_class(symbol)
+        if ac in ("gold", "forex", "stock", "option"):
+            trade_ok, session_reason = session_ok(symbol, require_kill_zone=False)
+            if not trade_ok:
+                log(f"时段过滤 {symbol}: {session_reason} — 静默")
+                return raw, False
+    except ImportError:
+        pass  # 降级
+
+    # 事件禁做 + 数据桥宏观增强（DXY / 财报）
     if _HAS_BRIDGE:
+        try:
+            from system_data_bridge import asset_macro_enrich
+            macro = asset_macro_enrich(symbol)
+            raw["_macro"] = macro
+            if "财报" in macro.get("event_flag", ""):
+                log(f"财报窗口注意 {symbol}")
+        except:
+            pass
+
         banned, ban_reason = bridge_event_ban()
         if banned:
             log(f"事件禁做 {symbol}: {ban_reason}")
             return raw, False
-    
-    # v7.1: XAUUSD时段过滤 — 只在高流动性时段推送告警
-    if "XAU" in str(symbol).upper():
-        try:
-            from session_filter import should_trade as session_ok
-            trade_ok, session_reason = session_ok("XAUUSD", require_kill_zone=False)
-            if not trade_ok:
-                # 闭市/低流动性 → 静默，不推送
-                return raw, False
-        except ImportError:
-            pass  # session_filter不可用时退化到无过滤
     
     price = get_price(symbol, block)
     if price is None:

@@ -730,3 +730,31 @@ def get_perfect_community_signals(data: dict, symbol: str) -> dict:
     from auto_card import _compute_perfect_signals  # reuse
     price = data.get("price", 0)
     return _compute_perfect_signals(data, symbol, price)
+
+# ═══ 多资产权重适配器 (本次全面优化新增) ═══
+def get_asset_class(symbol: str) -> str:
+    su = str(symbol).upper()
+    if "XAU" in su or "GOLD" in su: return "gold"
+    if su.endswith("USDT") or "BTC" in su or "ETH" in su: return "crypto"
+    forex = ["EUR","GBP","JPY","AUD","NZD","CAD","CHF"]
+    if any(x in su for x in forex) and not su.endswith("USDT"): return "forex"
+    if su.isalpha() and len(su) <= 5: return "stock"
+    if "CALL" in su or "PUT" in su: return "option"
+    return "other"
+
+def asset_weight_adapter(symbol: str, base_conf: float, model_name: str = "") -> float:
+    """按资产调整模型权重（社区2026多资产优化）"""
+    ac = get_asset_class(symbol)
+    w = base_conf
+    if ac == "gold":
+        if any(k in model_name.lower() for k in ["kill", "sweep", "dxy"]):
+            w *= 1.25
+    elif ac == "forex":
+        if any(k in model_name.lower() for k in ["silver", "smt", "dxy"]):
+            w *= 1.15
+    elif ac == "crypto":
+        if any(k in model_name.lower() for k in ["cvd", "funding", "oi", "sweep"]):
+            w *= 1.1
+    elif ac == "stock":
+        w *= 0.85  # 个股谨慎
+    return min(max(w, 0.0), 1.0)
