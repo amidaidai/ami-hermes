@@ -883,7 +883,7 @@ def _asset_review_text(symbol: str) -> str:
 def _oi_trend(oi_data: dict) -> str:
     if not oi_data: return ""
     try: return " (微降)" if oi_data.get("trend") == "down" else " (微升)" if oi_data.get("trend") == "up" else ""
-    except: return ""
+    except (TypeError, ValueError, AttributeError): return ""
 
 def _kl_summary(k: dict, role: str) -> str:
     if not k: return f"{role}无数据"
@@ -911,8 +911,8 @@ def _score13(merged: dict, results: list[dict], status: str, symbol: str = "BTCU
             total = min(total + 1, 13)  # DXY SMT 对齐加分
         if ac == "stock" and "财报" in str(macro.get("event_flag", "")):
             total = max(total - 1, 0)   # 财报窗口降分
-    except:
-        pass
+    except (TypeError, ValueError, KeyError):
+            pass
 
     ac = _asset_class(symbol)
     flow_name = {"crypto": "订单流", "gold": "流动性", "forex": "美元腿", "stock": "板块量", "option": "希腊值"}.get(ac, "量价")
@@ -1000,8 +1000,8 @@ def _compute_perfect_signals(engine_data: dict, symbol: str, price: float) -> di
             chg = abs(k5["close"] - k5["open"]) / max(k5["open"], 1) * 100
             if chg > 0.3:
                 displacement = "强"
-    except:
-        pass
+    except (TypeError, ValueError, KeyError):
+            pass
 
     # Confluence score (community multi-asset: Sweep + CVD + Kill + Displacement + SMT)
     conf = 0
@@ -1021,8 +1021,8 @@ def _compute_perfect_signals(engine_data: dict, symbol: str, price: float) -> di
             conf += 1  # SMT confirmation boost
         if "财报" in macro.get("event_flag", ""):
             conf -= 1  # caution during earnings
-    except:
-        pass
+    except (TypeError, ValueError, KeyError):
+            pass
 
     confluence = f"{min(conf, 8)}/8 — {'高概率' if conf >= 5 else '需更多确认'}"
 
