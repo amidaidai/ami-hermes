@@ -2027,18 +2027,25 @@ def auto_card(symbol: str, push: bool = False) -> str:
                         execution = execution or "?"
                     risk = c.get("risk", "?")
                 elif "grade" in cache:
-                    # 格式C: cron agent 最新平键格式
+                    # 格式C/D: cron agent 平键格式（4代变体）
                     grade = cache.get("grade", "C等待")
-                    treatment = cache.get("action") or cache.get("treatment", "?")
-                    background = cache.get("background") or cache.get("bias", "?")
-                    position = cache.get("position", "?")
-                    cvd_state = cache.get("cvd") or cache.get("cvd_state", "?")
-                    execution = cache.get("execution")
-                    if isinstance(execution, dict):
-                        execution = f"多:{execution.get('long','?')}|空:{execution.get('short','?')}"
+                    # 优先用 table_raw（最可靠：直接就是TV Pine表行）
+                    if "table_raw" in cache and isinstance(cache["table_raw"], list):
+                        tv_dmi_data = {
+                            "studies": [],
+                            "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": cache["table_raw"]}]}]
+                        }
                     else:
-                        execution = execution or "?"
-                    risk = cache.get("risk", "?")
+                        treatment = cache.get("action") or cache.get("treatment", "?")
+                        background = cache.get("background") or cache.get("bias", "?")
+                        position = cache.get("position", "?")
+                        cvd_state = cache.get("cvd") or cache.get("cvd_state", "?")
+                        execution = cache.get("execution")
+                        if isinstance(execution, dict):
+                            execution = f"多:{execution.get('long','?')}|空:{execution.get('short','?')}"
+                        else:
+                            execution = execution or "?"
+                        risk = cache.get("risk", "?")
                 else:
                     # 格式B: tv_signal_monitor 旧格式
                     grade = cache.get("grade", "C等待")
@@ -2048,22 +2055,24 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     cvd_state = cache.get("cvd_state", "?")
                     execution = cache.get("execution", "?")
                     risk = cache.get("risk", "?")
-                # 将缓存转换为 _tv_pine 格式: {studies: [...], tables: [...]}
-                tv_dmi_data = {
-                    "studies": [],
-                    "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": [
-                        f"等级 | {grade}",
-                        f"处理 | {treatment}",
-                        f"背景 | {background}",
-                        f"位置 | {position}",
-                        f"量能 | 量能普通",
-                        f"CVD | {cvd_state}",
-                        f"执行 | {execution}",
-                        f"风控 | {risk}",
-                    ]}]}]
-                }
+                # 将缓存变量转换为 _tv_pine 格式（格式B/C未内联构建时走此处）
+                if not tv_dmi_data:
+                    tv_dmi_data = {
+                        "studies": [],
+                        "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": [
+                            f"等级 | {grade}",
+                            f"处理 | {treatment}",
+                            f"背景 | {background}",
+                            f"位置 | {position}",
+                            f"量能 | 量能普通",
+                            f"CVD | {cvd_state}",
+                            f"执行 | {execution}",
+                            f"风控 | {risk}",
+                        ]}]}]
+                    }
                 engine_data["_tv_pine"] = tv_dmi_data
-                print(f"  ✅ TV DMI(缓存): grade={grade} · {treatment}")
+                tv_grade = cache.get("grade") if "grade" in cache else (cache.get("tv_data", {}).get("grade") if "tv_data" in cache else "?")
+                print(f"  ✅ TV DMI(缓存): grade={tv_grade}")
         else:
             studies = tv_raw.get("studies", [])
             tables = tv_raw.get("tables", [])
