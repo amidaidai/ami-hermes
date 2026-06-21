@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""持仓与信号 v1.2 — 合并持仓监测 + 信号巡检，5m 一次。
-   · 持仓监测：有开平仓变化才输出
-   · 信号巡检：心跳/健康/事件/降噪/智能更新
-   · 时段：cron 控制 8-23点运行，23-8点睡觉静默
-   空仓无变化时静默，两个脚本各自控制是否输出。
+"""持仓与信号 v1.3 — 合并持仓监测 + 信号巡检，5m 一次。
+   · 有变化才输出，静默时零消息（减少Telegram刷屏）
+   · cron控制8-23点运行
 """
-import subprocess
-import sys
+import subprocess, sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 
 STEPS = [
-    ("持仓监测", "持仓监测.py", 30),
-    ("信号巡检", "信号巡检.py", 90),
+    ("pos", "持仓监测.py", 30),
+    ("sig", "信号巡检.py", 90),
 ]
 
+outputs = []
 for name, script, timeout in STEPS:
     try:
         cp = subprocess.run(
@@ -24,12 +22,14 @@ for name, script, timeout in STEPS:
         )
         out = cp.stdout.strip()
         if out:
-            if len(STEPS) > 1:
-                print(f"—— {name} ——")
-            print(out)
+            outputs.append(out)
         if cp.stderr.strip():
-            print(f"[{name}] {cp.stderr.strip()}", file=sys.stderr)
+            print(f"⚠ {name}: {cp.stderr.strip()[:120]}", file=sys.stderr)
     except subprocess.TimeoutExpired:
-        print(f"⚠ {name} 超时 ({timeout}s)")
+        print(f"⚠ {name} 超时({timeout}s)", file=sys.stderr)
     except Exception as e:
-        print(f"⚠ {name} 失败: {e}")
+        print(f"⚠ {name}: {e}", file=sys.stderr)
+
+if outputs:
+    print("\n".join(outputs))
+# 静默时零输出 = Telegram无消息
