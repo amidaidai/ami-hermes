@@ -172,6 +172,15 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     """
     grok = grok or {}
     now = now or datetime.now(TZ)
+    # E轮：自动富集宏观数据 (DXY / US10Y / 财报)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from system_data_bridge import enrich_engine_data
+        engine_data = enrich_engine_data(symbol, engine_data or {})
+    except Exception:
+        pass
+
     spot = engine_data.get("binance_spot", {})
     price = engine_data.get("prices", {}).get("primary") or spot.get("price")
     high = spot.get("24h_high")
@@ -391,14 +400,19 @@ def _display_symbol(symbol: str) -> str:
 
 def _asset_data_line(symbol: str, engine_data: dict, taker_data: dict, cvd_quality: str) -> str:
     ac = _asset_class(symbol)
+    macro = engine_data.get("_macro") or {}
+    dxy = engine_data.get("dxy") or macro.get("dxy")
     if ac == "crypto":
         return f"Taker{_grade_short(taker_data)} · CVD {cvd_quality}"
     if ac == "gold":
-        return f"Spot/美元/美债 · CVD {cvd_quality}"
+        dxy_str = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
+        return f"Spot/美元({dxy_str}) · CVD {cvd_quality}"
     if ac == "forex":
-        return "美元腿/利差/事件"
+        dxy_str = f"DXY `{dxy:.2f}`" if dxy else ""
+        return f"美元腿/SMT {dxy_str}".strip()
     if ac == "stock":
-        return "指数/板块/成交量"
+        ev = engine_data.get("event_flag") or macro.get("event_flag") or ""
+        return f"指数/板块 · {ev or '成交量'}"
     if ac == "option":
         return "IV/希腊值/流动性"
     return "专用数据待接入"
@@ -406,32 +420,43 @@ def _asset_data_line(symbol: str, engine_data: dict, taker_data: dict, cvd_quali
 
 def _asset_flow_line(symbol: str, engine_data: dict, funding_rate, taker_dir, taker_ratio, cvd_dir, cvd_quality: str) -> str:
     ac = _asset_class(symbol)
+    macro = engine_data.get("_macro") or {}
+    dxy = engine_data.get("dxy") or macro.get("dxy")
+    us10y = engine_data.get("us10y") or macro.get("us10y")
     if ac == "crypto":
         return f"Funding `{funding_rate}` · Taker {taker_dir} `{taker_ratio}` · CVD {cvd_dir}{cvd_quality}"
     if ac == "gold":
-        return f"CVD {cvd_dir}{cvd_quality} · DXY `{_nna(engine_data,'dxy')}` · US10Y `{_nna(engine_data,'us10y')}`"
+        dxy_part = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
+        us_part = f"US10Y `{us10y:.2f}`" if us10y else ""
+        return f"CVD {cvd_dir}{cvd_quality} · {dxy_part} {us_part}".strip()
     if ac == "forex":
-        return f"DXY `{_nna(engine_data,'dxy')}` · 利差 `{_nna(engine_data,'rate_diff')}` · 央行 `{_nna(engine_data,'central_bank','无')}`"
+        dxy_part = f"DXY `{dxy:.2f}`" if dxy else "DXY N/A"
+        return f"{dxy_part} · 利差/央行窗口"
     if ac == "stock":
-        return f"指数 `{_nna(engine_data,'index_bias','N/A')}` · 板块 `{_nna(engine_data,'sector_bias','N/A')}` · 量能 `{_nna(engine_data,'volume_state','N/A')}`"
+        ev = engine_data.get("event_flag") or macro.get("event_flag") or ""
+        return f"指数/板块 · {ev or '量能'}"
     if ac == "option":
-        return f"Delta `{_nna(engine_data,'delta','N/A')}` · Theta `{_nna(engine_data,'theta','N/A')}` · IV `{_nna(engine_data,'iv_rank','N/A')}`"
-    return f"结构 `{_nna(engine_data,'structure','N/A')}` · 量价 `{_nna(engine_data,'volume_state','N/A')}`"
+        return f"Delta/Theta/IV 待接"
+    return f"结构 · 量价"
 
 
 def _asset_catalyst_line(symbol: str, engine_data: dict, fg_v, search_sent) -> str:
     ac = _asset_class(symbol)
-    catalyst = _nna(engine_data, 'catalyst', '无')
+    macro = engine_data.get("_macro") or {}
+    catalyst = engine_data.get("catalyst") or "无"
+    ev = engine_data.get("event_flag") or macro.get("event_flag") or ""
     if ac == "crypto":
         return f"{catalyst} · F&G `{fg_v}` · {_x_dir(search_sent)}"
     if ac == "gold":
-        return f"{catalyst} · 数据窗口 `{_nna(engine_data,'macro_window','无')}` · {_x_dir(search_sent)}"
+        dxy = engine_data.get("dxy") or macro.get("dxy")
+        dxy_str = f"DXY `{dxy:.2f}`" if dxy else ""
+        return f"{catalyst} · {dxy_str} · 数据窗口".strip(" · ")
     if ac == "forex":
-        return f"{catalyst} · 央行/通胀窗口 `{_nna(engine_data,'macro_window','无')}`"
+        return f"{catalyst} · 央行/通胀窗口"
     if ac == "stock":
-        return f"{catalyst} · 财报 `{_nna(engine_data,'earnings','无')}` · 大盘 `{_nna(engine_data,'index_bias','N/A')}`"
+        return f"{catalyst} · 财报 {ev or '无'} · 大盘"
     if ac == "option":
-        return f"{catalyst} · 财报 `{_nna(engine_data,'earnings','无')}` · IV事件 `{_nna(engine_data,'iv_event','无')}`"
+        return f"{catalyst} · 财报/IV事件 {ev or '无'}"
     return catalyst
 
 
@@ -586,6 +611,21 @@ def _score13(merged: dict, results: list[dict], status: str, symbol: str = "BTCU
     risk_s = 1 if status != "X禁做" else 0
     sent_s = 1
     total = struct_s + cycle_s + flow_s + deriv_s + cat_s + risk_s + sent_s
+
+    # E轮：宏观加分 (DXY 对齐、财报注意)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from system_data_bridge import asset_macro_enrich
+        macro = asset_macro_enrich(symbol)
+        ac = macro.get("asset_class", _asset_class(symbol))
+        if ac in ("gold", "forex") and macro.get("dxy"):
+            total = min(total + 1, 13)  # DXY SMT 对齐加分
+        if ac == "stock" and "财报" in str(macro.get("event_flag", "")):
+            total = max(total - 1, 0)   # 财报窗口降分
+    except:
+        pass
+
     ac = _asset_class(symbol)
     flow_name = {"crypto": "订单流", "gold": "流动性", "forex": "美元腿", "stock": "板块量", "option": "希腊值"}.get(ac, "量价")
     deriv_name = "衍生" if ac in {"crypto", "option"} else "宏观" if ac in {"gold", "forex"} else "市场"

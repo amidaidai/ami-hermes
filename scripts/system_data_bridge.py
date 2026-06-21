@@ -103,7 +103,6 @@ _EVENTS = {
 def get_dxy() -> Optional[float]:
     """DXY (美元指数) - 用于 gold/forex SMT 和确认。"""
     try:
-        # Use a reliable public proxy (yfinance or direct if possible). Fallback to known source.
         url = "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=5m&range=1d"
         r = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(r, timeout=8) as resp:
@@ -111,29 +110,51 @@ def get_dxy() -> Optional[float]:
             meta = data["chart"]["result"][0]["meta"]
             return float(meta.get("regularMarketPrice", meta.get("previousClose", 0)))
     except:
-        # Fallback: simple static or another source
+        return None
+
+def get_us10y_proxy() -> Optional[float]:
+    """简单代理 US10Y (10年期美债收益率) - Yahoo ^TNX"""
+    try:
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ETNX?interval=1d&range=1d"
+        r = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(r, timeout=6) as resp:
+            data = json.loads(resp.read())
+            meta = data["chart"]["result"][0]["meta"]
+            return float(meta.get("regularMarketPrice", meta.get("previousClose", 0)))
+    except:
         return None
 
 def get_basic_earnings_flag(symbol: str) -> str:
-    """简易财报/事件标记 for stocks。真实实现应接 earnings calendar。"""
+    """简易财报/事件标记 for stocks。"""
     su = symbol.upper()
-    if su in ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"]:
-        # Placeholder: in real use, check calendar or recent news.
-        return "财报窗口注意（近似）"
+    if su in ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN"]:
+        return "财报窗口注意（近似，建议核实日历）"
     return "无重大财报"
 
 def asset_macro_enrich(symbol: str) -> dict:
-    """返回资产专属宏观/确认数据。"""
-    ac = _get_asset_class_simple(symbol)  # local simple version
-    out = {"dxy": None, "macro_note": "", "event_flag": ""}
+    """返回资产专属宏观/确认数据。增强版：结构化返回 dxy, us10y, event_flag, macro_note。"""
+    ac = _get_asset_class_simple(symbol)
+    out = {
+        "dxy": None,
+        "us10y": None,
+        "macro_note": "",
+        "event_flag": "",
+        "asset_class": ac
+    }
     if ac in ("gold", "forex"):
         dxy = get_dxy()
+        us10y = get_us10y_proxy()
         out["dxy"] = dxy
-        out["macro_note"] = f"DXY {dxy:.2f}" if dxy else "DXY N/A"
+        out["us10y"] = us10y
+        note = f"DXY {dxy:.2f}" if dxy else "DXY N/A"
+        if us10y:
+            note += f" · US10Y {us10y:.2f}"
+        out["macro_note"] = note
+        if ac == "gold":
+            out["macro_note"] += " · 美债/实际收益率"
     if ac == "stock":
         out["event_flag"] = get_basic_earnings_flag(symbol)
-    if ac == "gold":
-        out["macro_note"] += " · 美债/实际收益率"
+        out["macro_note"] = out["event_flag"]
     return out
 
 def _get_asset_class_simple(symbol: str) -> str:
@@ -246,6 +267,24 @@ def dir_flip(sym: str) -> tuple:
     if old and old!=nd and old!="方向不明/震荡" and nd!="方向不明/震荡":
         return True, old, nd
     return False, old, nd
+
+def enrich_engine_data(symbol: str, engine_data: dict) -> dict:
+    """E轮增强：将 asset_macro_enrich 的结构化数据合并进 engine_data，供卡片环境段和评分使用。"""
+    try:
+        macro = asset_macro_enrich(symbol)
+        ed = dict(engine_data) if engine_data else {}
+        ed.setdefault("dxy", macro.get("dxy"))
+        ed.setdefault("us10y", macro.get("us10y"))
+        ed.setdefault("macro_note", macro.get("macro_note"))
+        ed.setdefault("event_flag", macro.get("event_flag"))
+        ed["_macro"] = macro
+        ed["_asset_class"] = macro.get("asset_class")
+        return ed
+    except Exception:
+        return engine_data or {}
+
+# 导出
+__all__ = ["snapshot", "cvd_dir", "deriv_text", "event_ban", "dir_flip", "asset_macro_enrich", "enrich_engine_data", "get_dxy", "get_us10y_proxy"]
 
 
 def _patch_pred_price(sym: str, price: float):

@@ -49,7 +49,7 @@ except (ImportError, ModuleNotFoundError, AttributeError):
 # v6.4: 接入系统数据桥（Taker B级/多空比 A级）
 # v7.1: 接入 session_filter（XAU London/NY时段过滤）
 try:
-    from system_data_bridge import cvd_dir as bridge_cvd, deriv_text as bridge_deriv, snapshot as bridge_snap, event_ban as bridge_event_ban, dir_flip as bridge_dir_flip
+    from system_data_bridge import cvd_dir as bridge_cvd, deriv_text as bridge_deriv, snapshot as bridge_snap, event_ban as bridge_event_ban, dir_flip as bridge_dir_flip, enrich_engine_data as bridge_enrich
     _HAS_BRIDGE = True
 except (ImportError, ModuleNotFoundError, AttributeError):
     _HAS_BRIDGE = False
@@ -503,6 +503,12 @@ def _verify_predictions_if_needed(state: dict):
                 snap = bridge_snap(sym) if _HAS_BRIDGE else None
                 if snap and snap.get("price"):
                     prices[sym] = snap["price"]
+                    if _HAS_BRIDGE:
+                        try:
+                            from system_data_bridge import enrich_engine_data as _en
+                            snap = _en(sym, snap)
+                        except:
+                            pass
                 else:
                     # Fallback: read from source_snapshot
                     snap_file = DATA_DIR / "source_snapshot.json"
