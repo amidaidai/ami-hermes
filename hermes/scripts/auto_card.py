@@ -480,6 +480,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
 
     # ── 止损止盈 ──
     risk_amt = _adaptive_risk(engine_data)
+    leverage_text = _leverage_text(symbol)
+    prot_status = meta.get("protections_status", "未检测")
     bearish = (cvd_dir == "卖" or direction == "short")
     st_a = _calc_stop_target_atr(price, "short" if bearish else "long", klines, symbol)
     st_b = _calc_stop_target_atr(price, "long" if bearish else "short", klines, symbol)

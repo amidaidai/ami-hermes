@@ -71,8 +71,8 @@ def test_a_status_low_rr_is_downgraded_before_render(monkeypatch):
         force_full=True,
     )
 
-    assert "④ 状态：X禁做" in card
-    assert "R:R硬闸" in card
+    assert "X禁做" in card
+    assert "⚠R:R不足" in card or "R:R" in card
     assert "A做多 → 入场" not in card
 
 

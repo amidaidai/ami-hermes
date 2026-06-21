@@ -50,17 +50,18 @@ def test_render_card_locked_has_speed_read_block():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # 速读区十项，纯纵向 ①-⑩
-    for marker in ["① 品种", "② 周期", "③ 现价", "④ 状态", "⑤ 模型", "⑥ 数据", "⑦ 风险", "⑧ 仓位", "⑨ 失效", "⑩ 数据"]:
-        assert marker in card, f"速读区缺少 {marker}"
+    # v7.0: 速读区压缩为①②③④四行（状态/现价/指标/关键位）+预案AB+闸门
+    for marker in ["① ", "② 现价", "③ ", "④ 关键位", "预案A", "预案B", "闸门"]:
+        assert marker in card, f"v7.0卡缺少 {marker}"
 
 
 def test_render_card_locked_has_five_sections():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    for sec in ["一、环境", "二、结构", "三、博弈", "四、操作", "五、风控"]:
-        assert sec in card, f"正文缺少段落 {sec}"
+    # v7.0: 五段整合为四块连续结构，不再分章标题
+    for marker in ["预案A", "预案B", "闸门", "止损", "止盈"]:
+        assert marker in card, f"v7.0卡缺少操作要素 {marker}"
 
 
 def test_render_card_locked_hides_machine_fields():
