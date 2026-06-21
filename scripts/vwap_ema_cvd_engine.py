@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 棠溪 · VWAP+EMA+CVD 本地计算引擎 v1.0
 基于 TV Pine 指标参数（棠溪自定义·SVP+ICT+VWAP+EMA+CVD.txt）

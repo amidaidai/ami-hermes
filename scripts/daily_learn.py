@@ -218,12 +218,12 @@ if __name__ == "__main__":
                 capture_output=True, text=True, timeout=15,
             )
             if cp.returncode == 0:
-                print("✅ 已推送")
+                sys.stderr.write("daily_learn: pushed\n")
             else:
-                print(f"❌ 推送失败: {cp.stderr[:200]}")
+                sys.stderr.write(f"daily_learn: push failed {cp.stderr[:100]}\n")
         except Exception as e:
-            print(f"❌ 推送异常: {e}")
+            sys.stderr.write(f"daily_learn: push error {e}\n")
     elif "--dry-run" in sys.argv:
-        print("📋 干跑模式（未推送）")
+        pass  # 静默干跑
     else:
-        print("📋 使用 --push 推送到Telegram · --dry-run 干跑测试")
+        pass  # 静默默认

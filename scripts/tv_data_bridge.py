@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 TV数据桥 v1.0 — 行情守望内嵌TV数据采集。
 
