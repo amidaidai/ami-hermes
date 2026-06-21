@@ -323,17 +323,21 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         plan_b_bias = _opposite_bias(plan_a_bias)
         plan_a_dir = _dir_from_bias(plan_a_bias)
         plan_b_dir = _dir_from_bias(plan_b_bias)
+        # 即使B等待也算出止损止盈结构位
+        st_a = _calc_stop_target_atr(price, "short" if plan_a_bias == "偏空" else "long", klines, symbol)
+        st_b = _calc_stop_target_atr(price, "short" if plan_b_bias == "偏空" else "long", klines, symbol)
+        qty_calc = _qty_str(price, meta, symbol)
         ops.append("")
         ops.append(f"—— 预案A · {_plan_a_name(plan_a_bias, model_id)}（优先·等触发）——")
         ops.append(f"**① 方向：{plan_a_dir}**")
-        ops.append(f"**② 入场：等待触发 — B等待不设具体入场价**")
+        ops.append(f"**② 入场：等待触发 — 价格 `{_fmt_price(price)}` 附近**")
         ops.append(f"   触发：{_plan_a_trigger(model_id, klines, {**merged, 'bias': plan_a_bias})}")
         ops.append(f"   确认：15m收线 + {_asset_confirm_brief(symbol, 'follow')}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
-        ops.append(f"   **止损：待确认后设定 — {_stop_reason(plan_a_bias)}**")
-        ops.append(f"   **止盈：R:R ≥1:2 确认后设定**")
-        ops.append(f"**④ 仓位：待确认后计算 {qty_unit}**")
+        ops.append(f"   **止损：`{_fmt_price(st_a['stop'])}` — {st_a['stop_reason']}**")
+        ops.append(f"   **止盈：`{_fmt_price(st_a['target'])}` — {st_a['target_reason']}**（R:R 1:{st_a['rr']:.1f}）")
+        ops.append(f"**④ 仓位：{qty_calc} {qty_unit}**")
         ops.append(f"   **风险：`{risk_amt:.2f}U` · {risk_pct_limit:.0f}%宪法上限**")
         ops.append(f"**⑤ 失效：{_plan_failure_by_bias(plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
@@ -341,20 +345,22 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append("")
         ops.append(f"—— 预案B · {_plan_b_name(plan_a_bias, model_id)}（备选·等反向确认）——")
         ops.append(f"**① 方向：{plan_b_dir}**")
-        ops.append(f"**② 入场：等待触发 — B等待不设具体入场价**")
+        ops.append(f"**② 入场：等待触发 — 价格 `{_fmt_price(price)}` 附近**")
         ops.append(f"   触发：{_plan_b_trigger(model_id, klines, merged, plan_a_bias)}")
         ops.append(f"   确认：反向收线 + {_asset_confirm_brief(symbol, 'reverse')}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
-        ops.append(f"   **止损：待确认后设定 — {_stop_reason(_opposite_bias(plan_a_bias))}**")
-        ops.append(f"   **止盈：R:R ≥1:2 确认后设定**")
-        ops.append(f"**④ 仓位：待确认后计算 {qty_unit}**")
+        ops.append(f"   **止损：`{_fmt_price(st_b['stop'])}` — {st_b['stop_reason']}**")
+        ops.append(f"   **止盈：`{_fmt_price(st_b['target'])}` — {st_b['target_reason']}**（R:R 1:{st_b['rr']:.1f}）")
+        ops.append(f"**④ 仓位：{qty_calc} {qty_unit}**")
         ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：{_plan_b_failure(klines, merged, price, plan_a_bias)}**")
         ops.append(f"⑥ 复查：15m×3根，不顺就撤")
         ops.append(f"⑦ 轨迹：反向确认 → 入场 → 移损/止盈")
     else:
         plan_tag = " ⚠优先" if priority in ("A", "B") else ""
+        a_bias = "偏空" if "空" in dir_cn else "偏多"
+        st = _calc_stop_target_atr(price, "short" if a_bias == "偏空" else "long", klines, symbol)
         ops.append(f"—— 预案{priority} · {dir_cn}{plan_tag} ——")
         ops.append(f"**① 方向：{dir_cn}**")
         ops.append(f"**② 入场：{_fmt_price(price)}** · {'市价' if status.startswith('A') else '限价'}")
@@ -362,8 +368,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"   确认：{asset_confirm}")
         ops.append(f"③ 风控：{leverage_text}")
         ops.append(f"   规则：{asset_risk_short}")
-        ops.append(f"   **止损：`{_plan_stop(klines, merged, price, bias_cn, symbol)}`** — 结构反向突破")
-        ops.append(f"   **止盈：`{_plan_targets(klines, price, bias_cn, symbol)[0]}`** — R:R底线1:2")
+        ops.append(f"   **止损：`{_fmt_price(st['stop'])}` — {st['stop_reason']}**")
+        ops.append(f"   **止盈：`{_fmt_price(st['target'])}` — {st['target_reason']}**（R:R 1:{st['rr']:.1f}）")
         ops.append(f"**④ 仓位：`{_qty(price, meta, bias_cn, symbol)} {qty_unit}`**")
         ops.append(f"   **风险：`{risk_amt:.2f}U`**")
         ops.append(f"**⑤ 失效：关键结构位反向收复 — 触发后取消**")
@@ -1149,6 +1155,11 @@ def _plan_targets(klines: dict, price, bias_cn: str, symbol: str = "BTCUSDT"):
 def _stop_reason(bias_cn: str) -> str:
     return "反弹高点上沿" if bias_cn == "偏空" else "支撑下方"
 
+def _qty_str(price, meta: dict, symbol: str = "BTCUSDT") -> str:
+    """薄封装：返回格式化的仓位字符串，兼容 B等待 场景"""
+    bias = meta.get("bias_cn", "偏空")
+    return _qty(price, meta, bias, symbol)
+
 def _qty(price, meta: dict, bias_cn: str, symbol: str = "BTCUSDT") -> str:
     risk = float(meta.get("risk_usd", 2))
     p = float(price or 62000)
@@ -1647,9 +1658,11 @@ def auto_card(symbol: str, push: bool = False) -> str:
                         if req.status_code == 200:
                             result = _j.loads(req.text)["chart"]["result"][0]
                             quotes = result["indicators"]["quote"][0]
-                            closes = [float(c) - 20 for c in quotes["close"] if c]  # -$20 futures→spot approx
-                            highs = [float(h) - 20 for h in quotes["high"] if h]
-                            lows = [float(l) - 20 for l in quotes["low"] if l]
+                            # futures→spot: GC contract premium typically $125+
+                            spot_adj = -125
+                            closes = [float(c) + spot_adj for c in quotes["close"] if c]
+                            highs = [float(h) + spot_adj for h in quotes["high"] if h]
+                            lows = [float(l) + spot_adj for l in quotes["low"] if l]
                             if closes:
                                 closes = closes[-limit:]; highs = highs[-limit:]; lows = lows[-limit:]
                                 chg = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] else 0
@@ -2001,6 +2014,85 @@ def _price_label(symbol: str, engine_data: dict) -> tuple[str, str]:
     return "", source or "多源"
 
 
+# ═══════════════════ 日内止损止盈（ATR夹层+结构锚定）═══════════════════
+def _calc_stop_target_atr(
+    price: float, direction: str, klines: dict,
+    symbol: str = "BTCUSDT", atr_mult: float = 2.0
+) -> dict:
+    """计算日内止损止盈。返回 {stop, target, rr, stop_reason, target_reason, atr}。
+    
+    direction: "short" 或 "long"
+    atr_mult: ATR 倍数（默认 2.0x，日内夹层 1.5-2.5）
+    """
+    p = float(price or 0)
+    if p <= 0:
+        return {"stop": p, "target": p, "rr": 1, "stop_reason": "?", "target_reason": "?", "atr": 0}
+    
+    ac = _asset_class(symbol)
+    MIN_MOVE = p * 0.003  # 0.3% 以内视为噪音
+    
+    # ATR
+    atr_15m = 0
+    for tf in ("15m", "5m"):
+        k = klines.get(tf, {})
+        atr_15m = float(k.get("atr", 0) or 0)
+        if atr_15m > 0:
+            break
+    if atr_15m <= 0:
+        atr_15m = p * 0.002  # 0.2% fallback
+    
+    atr_stop_dist = atr_15m * atr_mult
+    atr_stop_dist = max(atr_stop_dist, MIN_MOVE)  # 最少 0.3%
+    
+    # 收集结构位
+    above_levels = []  # (level, name, tf)
+    below_levels = []
+    
+    for tf_name in ("15m", "1h", "4h"):
+        k = klines.get(tf_name, {})
+        for key, label in [("vah", "VAH"), ("vwap", "VWAP"), ("high", "高"),
+                           ("poc", "POC"), ("ema21", "EMA21"), ("ema55", "EMA55")]:
+            v = k.get(key)
+            if v:
+                try:
+                    fv = float(v)
+                    if fv > p + MIN_MOVE:
+                        above_levels.append((fv, label, tf_name))
+                    elif fv < p - MIN_MOVE:
+                        below_levels.append((fv, label, tf_name))
+                except (TypeError, ValueError):
+                    pass
+    
+    above_levels.sort()  # nearest first
+    below_levels.sort(reverse=True)  # nearest first
+    
+    if direction == "short":
+        # 止损在最近阻力上方
+        stop_structural = above_levels[0][0] if above_levels else p + atr_stop_dist
+        stop = max(p + atr_stop_dist, stop_structural)
+        stop_reason = f"{above_levels[0][1]}({above_levels[0][2]})上方" if above_levels else "ATR×2"
+        
+        # 止盈在最近支撑
+        target = below_levels[0][0] if below_levels else p - atr_stop_dist * 2
+        target_reason = f"{below_levels[0][1]}({below_levels[0][2]})" if below_levels else "ATR×4"
+    else:
+        # 止损在最近支撑下方
+        stop_structural = below_levels[0][0] if below_levels else p - atr_stop_dist
+        stop = min(p - atr_stop_dist, stop_structural)
+        stop_reason = f"{below_levels[0][1]}({below_levels[0][2]})下方" if below_levels else "ATR×2"
+        
+        # 止盈在最近阻力
+        target = above_levels[0][0] if above_levels else p + atr_stop_dist * 2
+        target_reason = f"{above_levels[0][1]}({above_levels[0][2]})" if above_levels else "ATR×4"
+    
+    rr = abs(target - p) / abs(stop - p) if abs(stop - p) > 0 else 1
+    return {
+        "stop": stop, "target": target, "rr": rr,
+        "stop_reason": stop_reason, "target_reason": target_reason,
+        "atr": atr_15m,
+    }
+
+
 # ═══════════════════ 极简决策卡 ═══════════════════
 def _compact_card(symbol: str, price, status: str, direction: str, model_id: str,
                   klines: dict, k4h: dict, k5m: dict, k15m: dict,
@@ -2028,78 +2120,14 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     wd_tag = "⚠周末 " if _dt.now().weekday() >= 5 else ""
     dist_pct = abs(p - nearest_level) / p * 100
     near_str = f"← 价踩在这 · {dist_pct:.1f}%" if dist_pct < 0.5 else f"← 距{abs(p - nearest_level):.0f}点"
-    
-    # ── 日内止损止盈：ATR夹层 + 关键位锚定 ──
-    atr_15m = float(k15m.get("atr", 0) or 0)
-    if atr_15m <= 0:
-        atr_15m = p * 0.002  # fallback: 0.2% ATR
-    
-    MIN_MOVE_PCT = 0.003  # 0.3%以内算噪音，跳过
-    
-    def _meaningful_level_above(price_val: float) -> float:
-        """找价格上方第一个有意义的结构位（≥0.3%距离）"""
-        best = None
-        for tf in ("15m", "1h", "4h"):
-            k = klines.get(tf, {})
-            for key in ("vah", "vwap", "high", "poc", "ema21"):
-                v = k.get(key)
-                if v:
-                    try:
-                        fv = float(v)
-                        if fv > price_val * (1 + MIN_MOVE_PCT):
-                            if best is None or fv < best:
-                                best = fv
-                    except (TypeError, ValueError):
-                        pass
-        return best or (price_val * 1.008)  # 0.8% 兜底
-    
-    def _meaningful_level_below(price_val: float) -> float:
-        """找价格下方第一个有意义的结构位（≥0.3%距离）"""
-        best = None
-        for tf in ("15m", "1h", "4h"):
-            k = klines.get(tf, {})
-            for key in ("val", "low", "npoc", "poc"):
-                v = k.get(key)
-                if v:
-                    try:
-                        fv = float(v)
-                        if fv < price_val * (1 - MIN_MOVE_PCT):
-                            if best is None or fv > best:
-                                best = fv
-                    except (TypeError, ValueError):
-                        pass
-        return best or (price_val * 0.992)  # 0.8% 兜底
-    
     bearish = (cvd_dir == "卖" or taker_dir == "sell")
-    atr_stop = max(atr_15m * 2.0, p * 0.003)  # 2x ATR，最少0.3%（日内底线）
     
-    if bearish:
-        # Plan A: 空头
-        raw_stop_a = p + atr_stop
-        level_above = _meaningful_level_above(p)
-        stop_a = max(raw_stop_a, level_above)
-        tp_a = _meaningful_level_below(p)
-        # Plan B: 多头（备选）
-        raw_stop_b = p - atr_stop
-        level_below_b = _meaningful_level_below(p)
-        stop_b = min(raw_stop_b, level_below_b)
-        tp_b = _meaningful_level_above(p)
-    else:
-        # Plan A: 多头
-        raw_stop_a = p - atr_stop
-        level_below = _meaningful_level_below(p)
-        stop_a = min(raw_stop_a, level_below)
-        tp_a = _meaningful_level_above(p)
-        # Plan B: 空头（备选）
-        raw_stop_b = p + atr_stop
-        level_above_b = _meaningful_level_above(p)
-        stop_b = max(raw_stop_b, level_above_b)
-        tp_b = _meaningful_level_below(p)
+    # 使用共享 ATR 止损止盈计算
+    st_a = _calc_stop_target_atr(p, "short" if bearish else "long", klines, symbol)
+    st_b = _calc_stop_target_atr(p, "long" if bearish else "short", klines, symbol)
+    stop_a, tp_a, rr_a = st_a["stop"], st_a["target"], st_a["rr"]
+    stop_b, tp_b, rr_b = st_b["stop"], st_b["target"], st_b["rr"]
     
-    rr_a = abs(tp_a - p) / abs(stop_a - p) if abs(stop_a - p) > 0 else 1
-    rr_b = abs(tp_b - p) / abs(stop_b - p) if abs(stop_b - p) > 0 else 1
-    
-    # R:R 底线检查
     rr_a_note = "" if rr_a >= 2.0 else " ⚠R:R不足"
     rr_b_note = "" if rr_b >= 2.0 else " ⚠R:R不足"
     
