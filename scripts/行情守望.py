@@ -1363,6 +1363,30 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
     return "\n".join(lines)
 
 
+def _liquidity_snapshot(symbol: str, raw: dict, block: dict, price=None) -> dict:
+    snap = dict((raw or {}).get("_macro") or {})
+    for source in (block or {}, (raw or {}).get("source_snapshot") or {}):
+        if isinstance(source, dict):
+            for key in ("quality", "confidence", "confidence_label", "price_spread_pct", "sources", "single_quote_ok"):
+                if key in source and source.get(key) is not None and key not in snap:
+                    snap[key] = source.get(key)
+    if not snap.get("quality"):
+        for candidate in (DATA_DIR / f"source_snapshot_{symbol}.json", DATA_DIR / "source_snapshot.json"):
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    if data.get("symbol") in (None, symbol) or candidate.name != "source_snapshot.json":
+                        for key in ("quality", "confidence", "confidence_label", "price_spread_pct", "sources", "single_quote_ok"):
+                            if key in data and data.get(key) is not None and key not in snap:
+                                snap[key] = data.get(key)
+                        break
+            except Exception:
+                pass
+    if not snap and isinstance(price, (int, float)):
+        snap = {"quality": "B", "confidence": 100, "confidence_label": "live_price_ok", "single_quote_ok": True}
+    return snap
+
+
 def process_block(raw, symbol, block, state):
     if block.get("monitor_enabled") is False:
         return raw, False
@@ -1379,15 +1403,15 @@ def process_block(raw, symbol, block, state):
     except ImportError:
         pass  # 降级
 
-    # F轮: 额外流动性门槛 (使用 snapshot 或默认)
+    # F轮: 额外流动性门槛（使用真实 snapshot；空 macro 不再误杀 BTC）
     try:
         from session_filter import has_min_liquidity
-        snap = raw.get("_macro") or {}
+        snap = _liquidity_snapshot(symbol, raw, block, block.get("price_at_analysis"))
         if not has_min_liquidity(symbol, snap):
-            log(f"流动性不足 {symbol} — 静默")
+            log(f"流动性不足 {symbol} — 静默 · q={snap.get('quality')} conf={snap.get('confidence')} spread={snap.get('price_spread_pct')} src={snap.get('sources')}")
             return raw, False
-    except:
-        pass
+    except Exception as e:
+        log(f"流动性门槛异常 {symbol}: {type(e).__name__} — 放行")
 
     # 事件禁做 + 数据桥宏观增强（DXY / 财报）
     if _HAS_BRIDGE:

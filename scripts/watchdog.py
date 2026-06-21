@@ -57,6 +57,22 @@ def append_system_event(row: dict):
         f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def send_watchdog_alert(msg: str) -> bool:
+    try:
+        from telegram_direct import send_telegram_direct
+        ok, _reason = send_telegram_direct("telegram:-1003733144325:416", msg, timeout=10)
+        if ok:
+            return True
+    except Exception as e:
+        log(f"watchdog直发告警失败: {type(e).__name__}: {str(e)[:100]}")
+    try:
+        subprocess.run(["hermes", "send", "telegram:-1003733144325:416", msg], cwd=str(ROOT), capture_output=True, text=True, timeout=20)
+        return True
+    except Exception as e:
+        log(f"watchdog兜底告警失败: {type(e).__name__}: {str(e)[:100]}")
+        return False
+
+
 def notify_watchdog_block(reason: str, cooldown_remaining: int, restart_count: int):
     state = write_watchdog_state(
         status="restart_blocked",
@@ -69,6 +85,7 @@ def notify_watchdog_block(reason: str, cooldown_remaining: int, restart_count: i
     if now_ts - last_alert < 900:
         return
     append_system_event({"type": "watchdog_restart_blocked", "reason": reason, "cooldown_remaining": cooldown_remaining, "restart_count_1h": restart_count})
+    send_watchdog_alert(f"安禾监控告警：行情守望重启被限速 — {reason}")
     write_watchdog_state(last_alert_sent=now_ts)
 
 

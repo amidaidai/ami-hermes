@@ -314,6 +314,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     low = spot.get("24h_low")
     chg = spot.get("percent_change_24h")
 
+    _downgrade_low_rr_a_status(meta, engine_data, price, symbol)
     status = meta.get("status", "B等待")
     direction = meta.get("direction", "wait")
     dir_cn = {"short": "空头", "long": "多头", "wait": "观望"}.get(direction, "观望")
@@ -502,7 +503,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
 
     if status == "X禁做":
         # TV DMI 信号冲突 → 明确标注不进
-        x_reason = tv_override.get("tv_treatment", "结构冲突")
+        x_reason = meta.get("hard_gate_reason") or tv_override.get("tv_treatment", "结构冲突")
         x_cvd = tv_override.get("tv_cvd_state", "?")
         x_pos = tv_override.get("tv_position", "?")
         x_vol = tv_override.get("tv_volume", "?")
@@ -1581,6 +1582,32 @@ def _binance_headers(api_key: str = "") -> dict:
     return {"X-MBX-APIKEY": api_key} if api_key else {}
 
 
+_BINANCE_TIME_OFFSET_MS = None
+
+
+def _binance_timestamp(base: str = "https://fapi.binance.com") -> int:
+    """Return Binance server-aligned timestamp to avoid -1021 recvWindow drift."""
+    global _BINANCE_TIME_OFFSET_MS
+    import requests, time as _time
+    local_ms = int(_time.time() * 1000)
+    if _BINANCE_TIME_OFFSET_MS is None:
+        try:
+            r = requests.get(f"{base}/fapi/v1/time", timeout=3)
+            server_ms = int((r.json() or {}).get("serverTime") or local_ms)
+            _BINANCE_TIME_OFFSET_MS = server_ms - local_ms
+        except Exception:
+            _BINANCE_TIME_OFFSET_MS = 0
+    return int(_time.time() * 1000) + int(_BINANCE_TIME_OFFSET_MS or 0)
+
+
+def _signed_binance_params(params: dict, secret: str, base: str = "https://fapi.binance.com") -> dict:
+    signed = dict(params)
+    signed.setdefault("recvWindow", 10000)
+    signed["timestamp"] = _binance_timestamp(base)
+    signed["signature"] = _binance_sign(signed, secret)
+    return signed
+
+
 def _load_binance_keys() -> tuple:
     """Load Binance API keys from secrets"""
     import json
@@ -1590,6 +1617,30 @@ def _load_binance_keys() -> tuple:
         return data.get("api_key", ""), data.get("secret_key", "")
     except Exception:
         return "", ""
+
+
+def _downgrade_low_rr_a_status(meta: dict, engine_data: dict, price, symbol: str) -> dict | None:
+    """Hard gate: an A plan with R:R < 2.0 must not render as executable."""
+    status = str(meta.get("status") or "")
+    direction = str(meta.get("direction") or "wait")
+    if not status.startswith("A") or direction not in ("long", "short"):
+        return None
+    try:
+        rr_plan = _calc_stop_target_atr(price, direction, engine_data.get("klines", {}) or {}, symbol)
+        rr = float(rr_plan.get("rr") or 0)
+    except Exception:
+        return None
+    if rr >= 2.0:
+        meta["rr1"] = rr
+        return None
+    previous_status = status
+    meta["status"] = "X禁做"
+    meta["priority_plan"] = "无"
+    meta["rr1"] = rr
+    meta["invalid_price"] = rr_plan.get("stop")
+    meta["hard_gate_reason"] = f"R:R硬闸 {previous_status}→X禁做 · 1:{rr:.1f}<1:2"
+    engine_data.setdefault("_hard_gates", []).append(meta["hard_gate_reason"])
+    return rr_plan
 
 
 def _collect_binance_data(engine_data: dict, symbol: str) -> None:
@@ -1662,12 +1713,9 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
         return
     
     # ── HMAC-signed endpoints ──
-    ts = int(_time.time() * 1000)
-    
     # Funding rate
     try:
-        params = {"symbol": sym, "limit": 1, "timestamp": ts}
-        params["signature"] = _binance_sign(params, secret)
+        params = _signed_binance_params({"symbol": sym, "limit": 1}, secret, base)
         r = requests.get(f"{base}/fapi/v1/fundingRate", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         if isinstance(data, list) and data:
@@ -1678,9 +1726,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     
     # Open Interest
     try:
-        ts2 = int(_time.time() * 1000)
-        params = {"symbol": sym, "timestamp": ts2}
-        params["signature"] = _binance_sign(params, secret)
+        params = _signed_binance_params({"symbol": sym}, secret, base)
         r = requests.get(f"{base}/fapi/v1/openInterest", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         oi_val = float(data.get("openInterest", 0))
@@ -1694,9 +1740,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     
     # Taker buy/sell ratio (correct endpoint: /futures/data/takerlongshortRatio)
     try:
-        ts3 = int(_time.time() * 1000)
-        params = {"symbol": sym, "period": "5m", "limit": 1, "timestamp": ts3}
-        params["signature"] = _binance_sign(params, secret)
+        params = _signed_binance_params({"symbol": sym, "period": "5m", "limit": 1}, secret, base)
         r = requests.get(f"{base}/futures/data/takerlongshortRatio", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         if isinstance(data, list) and data:
@@ -1707,9 +1751,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     
     # Global long/short ratio
     try:
-        ts4 = int(_time.time() * 1000)
-        params = {"symbol": sym, "period": "5m", "limit": 1, "timestamp": ts4}
-        params["signature"] = _binance_sign(params, secret)
+        params = _signed_binance_params({"symbol": sym, "period": "5m", "limit": 1}, secret, base)
         r = requests.get(f"{base}/futures/data/globalLongShortAccountRatio", params=params, headers=_binance_headers(api_key), timeout=5)
         data = r.json()
         if isinstance(data, list) and data:
@@ -1724,9 +1766,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
         engine_data["cvd"] = {"direction": cvd.get("direction", "N/A"), "quality": cvd.get("quality", "B")}
     except Exception:
         try:
-            ts5 = int(_time.time() * 1000)
-            params = {"symbol": sym, "interval": "1m", "limit": 5, "timestamp": ts5}
-            params["signature"] = _binance_sign(params, secret)
+            params = _signed_binance_params({"symbol": sym, "interval": "1m", "limit": 5}, secret, base)
             r = requests.get(f"{base}/fapi/v1/klines", params=params, headers=_binance_headers(api_key), timeout=5)
             data = r.json()
             if isinstance(data, list):
