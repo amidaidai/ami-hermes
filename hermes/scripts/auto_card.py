@@ -1164,15 +1164,15 @@ def _invalid_reason_4h(merged: dict) -> str:
 
 def _sr_level(k: dict, side: str, price) -> str:
     if side == "res":
-        return f"{k.get('resistance') or k.get('high') or 'N/A'}"
-    return f"{k.get('support') or k.get('low') or 'N/A'}"
+        return f"{k.get('resistance') or k.get('high') or '待确认'}"
+    return f"{k.get('support') or k.get('low') or '待确认'}"
 
 def _atr_15m(klines: dict) -> float:
     k15 = klines.get("15m") or {}
     return float(k15.get("atr") or 242)
 
 def _chase_ok(dist: float, atr: float) -> str:
-    if atr <= 0: return "N/A"
+    if atr <= 0: return "—"
     return "不追空" if dist < 2 * atr else "可追"
 
 def _trigger_5m(k: dict, merged: dict, model_id: str) -> str:
@@ -1183,15 +1183,29 @@ def _noise_5m(k: dict) -> str:
     return "低量弱反弹 — 可能是空头回补而非真正买盘" if float(vol or 0) < 200 else "正常"
 
 def _tf_verdict(tf: str, k: dict, merged: dict) -> str:
-    if tf == "4h": return "4h下降结构完整，空头压制明显但延伸已远"
-    if tf == "1h": return "1h急跌结构完整，尾K缩量企稳，超卖修正概率上升"
-    if tf == "15m": return "15m等待结构确认"
-    return "5m无操作价值"
+    """按时间框架返回动态判语（v7.5: 基于实际数据而非硬编码）。"""
+    if not k or not isinstance(k, dict):
+        return "数据不足"
+    close = k.get("close") or k.get("price")
+    high = k.get("high")
+    low = k.get("low")
+    ema21 = k.get("ema21")
+    if not close:
+        return "待刷新"
+    parts = []
+    if ema21 and close > ema21:
+        parts.append(f"{tf}价上EMA21·偏多")
+    elif ema21:
+        parts.append(f"{tf}价下EMA21·偏空")
+    bias_val = k.get("bias") or k.get("trend", "")
+    if bias_val:
+        parts.append(str(bias_val)[:6])
+    return "·".join(parts) if parts else f"{tf}方向待判"
 
 def _exec_line(klines: dict, merged: dict, status: str) -> str:
     k4h = klines.get("4h") or {}
     val = k4h.get("val") or k4h.get("value_val")
-    return f"{val:,.0f}" if val else "N/A"
+    return f"{val:,.0f}" if val else "待确认"
 
 def _no_chase_line(klines: dict, price) -> str:
     k15 = klines.get("15m") or {}
@@ -2538,7 +2552,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     nl_fmt = _fmt_price(nearest_level).strip("`")
     hi = _fmt_price(k15m.get("high") or k4h.get("high"))
     lo = _fmt_price(k15m.get("low") or k4h.get("low"))
-    taker_label = f"Taker {taker_dir}" if taker_dir not in ("N/A", None, "") else "Taker N/A"
+    taker_label = f"Taker {taker_dir}" if taker_dir not in ("N/A", None, "") else "Taker 无"
     taker_r = f" {taker_ratio}" if taker_ratio and str(taker_ratio) not in ("N/A", "") else ""
     cvd_str = f"CVD {cvd_dir}" if cvd_dir not in ("N/A", "?", None, "") else "CVD ?"
     ac = _asset_class(symbol)
@@ -2547,7 +2561,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     wd_tag = "⚠周末 " if _dt.now().weekday() >= 5 else ""
     dist_pct = abs(p - nearest_level) / p * 100
     near_str = f"← 价踩在这 · {dist_pct:.1f}%" if dist_pct < 0.5 else f"← 距{abs(p - nearest_level):.0f}点"
-    bearish = (cvd_dir == "卖" or taker_dir == "sell")
+    bearish = (cvd_dir == "卖" or taker_dir in ("sell", "卖"))
     
     # 使用共享 ATR 止损止盈计算
     st_a = _calc_stop_target_atr(p, "short" if bearish else "long", klines, symbol)
@@ -2632,8 +2646,8 @@ def _find_nearest_key_level(klines: dict, price: float) -> tuple:
     candidates = []
     for tf in ("15m", "1h", "4h"):
         k = klines.get(tf, {})
-        for key, name in [("vah", "VAH"), ("val", "VAL"), ("poc", "POC"), ("vwap", "VWAP"),
-                          ("high", "高"), ("low", "低")]:
+        for key, name in [("vah", "价值上沿"), ("val", "价值下沿"), ("poc", "控制点"), ("vwap", "量价均值"),
+                          ("high", "日高"), ("low", "日低")]:
             v = k.get(key)
             if v:
                 try:
