@@ -646,6 +646,27 @@ def apply_risk_constitution(symbol, gate, snapshot, state=None, account_balance=
         result_gate["tier"] = constitution_result["risk_tier"]
         result_gate["max_risk_usd"] = constitution_result["max_risk_usd"]
         result_gate["reasons"].append(f"宪法降级: {constitution_result['risk_tier']}")
+    
+    # v2.0: Protections 层检查（StoplossGuard + Cooldown + MaxDrawdown）
+    try:
+        from risk_constitution import apply_protections, load_protections, save_protections
+        from datetime import datetime as _dt
+        current_bar = int(_dt.now().timestamp() // 300)
+        prot = load_protections()
+        prot_result = apply_protections(symbol, current_bar, prot)
+        if not prot_result["passed"]:
+            result_gate["allowed"] = False
+            result_gate["tier"] = "禁止"
+            result_gate["max_risk_usd"] = 0
+            result_gate["reasons"] = prot_result["violations"]
+        elif prot_result["suspended"]:
+            result_gate["allowed"] = False
+            result_gate["tier"] = "禁止"
+            result_gate["max_risk_usd"] = 0
+            result_gate["reasons"] = [prot_result["reason"]]
+    except Exception:
+        pass
+    
     return result_gate
 
 

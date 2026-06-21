@@ -336,6 +336,27 @@ class Protections:
             if self.cooldown_bars_remaining <= 0:
                 self.cooldown_active = False
     
+    def to_dict(self) -> dict:
+        """序列化为可 JSON 持久化的 dict"""
+        return {
+            "stoploss_guard": self.stoploss_guard,
+            "stoploss_guard_lookback": self.stoploss_guard_lookback,
+            "cooldown_active": self.cooldown_active,
+            "cooldown_bars_remaining": self.cooldown_bars_remaining,
+            "cooldown_after_loss": self.cooldown_after_loss,
+            "daily_drawdown_pct": self.daily_drawdown_pct,
+            "max_daily_drawdown_hard": self.max_daily_drawdown_hard,
+            "weekly_drawdown_pct": self.weekly_drawdown_pct,
+            "max_weekly_drawdown_hard": self.max_weekly_drawdown_hard,
+            "suspended": self.suspended,
+            "suspend_reason": self.suspend_reason,
+        }
+    
+    @classmethod
+    def from_dict(cls, d: dict) -> "Protections":
+        """从 dict 恢复 Protections 实例"""
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+    
     def check_all(self, symbol: str, current_bar: int) -> tuple[bool, list[str]]:
         """全量检查所有防护层，返回 (通过?, [违规原因])"""
         violations = []
@@ -376,6 +397,25 @@ def apply_protections(symbol: str, current_bar: int = None,
         "suspended": protections.suspended,
         "reason": protections.suspend_reason if protections.suspended else "",
     }
+
+
+_PROTECTIONS_FILE = DATA_DIR / "protections_state.json"
+
+def load_protections() -> Protections:
+    """从磁盘加载 Protections 状态（监控重启不丢失）"""
+    if _PROTECTIONS_FILE.exists():
+        try:
+            data = json.loads(_PROTECTIONS_FILE.read_text(encoding="utf-8"))
+            return Protections.from_dict(data)
+        except Exception:
+            pass
+    return Protections()
+
+
+def save_protections(p: Protections):
+    """持久化 Protections 状态到磁盘"""
+    _PROTECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PROTECTIONS_FILE.write_text(json.dumps(p.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # ═══ Volatility Targeting (3Commas 2025指南) ═══

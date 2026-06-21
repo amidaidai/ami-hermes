@@ -1,43 +1,61 @@
 #!/usr/bin/env python3
 """
-棠溪 · 仓位计算引擎 v1.0
-输入：多模型引擎输出 + 账户参数
+棠溪 · 仓位计算引擎 v2.0
+对接 risk_constitution v2.0 宪法值（社区2026共识）
+输入：多模型引擎输出 + 宪法参数
 输出：仓位大小建议 + 理由
 集成到 multi_model_engine 输出尾部
 """
 
 from typing import Dict, Optional
+from pathlib import Path
+import json
 
+ROOT = Path("D:/Hermes agent")
 
-# ═══════════════════ 账户参数（从 risk_state.json 或默认） ═══════════════════
+# ═══════════════════ 账户参数（从宪法/实盘动态读取） ═══════════════════
 
-DEFAULT_ACCOUNT = {
-    "capital_usd": 100.0,
-    "max_risk_per_trade_usd": 10.0,
-    "max_daily_loss_usd": 30.0,
-    "leverage": 100,  # BTC/ETH 100x, others 20x
-    "min_rr": 2.0,
-}
-
-
-def load_risk_state() -> dict:
+def _get_account_balance() -> float:
+    """从 equity_curve.json 读取实盘余额，缺失回退 67.52"""
     try:
-        import json
-        from pathlib import Path
-        path = Path("D:/Hermes agent/data/risk_state.json")
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+        eq = ROOT / "data" / "equity_curve.json"
+        if eq.exists():
+            return float(json.loads(eq.read_text(encoding="utf-8")).get("current_balance", 67.52))
     except Exception:
         pass
-    return {}
+    return 67.52
+
+
+def _get_leverage(symbol: str = "BTCUSDT") -> int:
+    """按品种返回杠杆"""
+    sym = symbol.upper()
+    if "XAU" in sym:
+        return 1000
+    if sym in ("BTCUSDT", "ETHUSDT"):
+        return 100
+    return 20
+
+
+def _get_max_risk_usd(symbol: str = "BTCUSDT", atr_pct: float = 0) -> float:
+    """从宪法获取自适应单笔风险"""
+    try:
+        import sys
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from risk_constitution import adaptive_risk_usd
+        balance = _get_account_balance()
+        r = adaptive_risk_usd(account_balance=balance, atr_pct=atr_pct)
+        return r["risk_usd"]
+    except Exception:
+        return 1.0  # fallback 1U（宪法 1% × 100 本金）
 
 
 def position_size(
-    direction: str,           # "偏多" / "偏空"
-    global_confidence: float,  # 0-1
-    long_confidence: float,
-    short_confidence: float,
-    action: str,               # from merge_directions
+    direction: str = "",           # "偏多" / "偏空"
+    global_confidence: float = 0,  # 0-1
+    long_confidence: float = 0,
+    short_confidence: float = 0,
+    action: str = "",              # from merge_directions
+    symbol: str = "BTCUSDT",       # v2.0: 新增品种参数
     entry_price: float = 0,
     stop_loss: float = 0,
     data_grade: str = "B",
@@ -47,12 +65,21 @@ def position_size(
     """
     综合计算仓位大小建议
     """
-    risk_state = load_risk_state()
-    cap = float(risk_state.get("capital_usd", DEFAULT_ACCOUNT["capital_usd"]))
-    max_risk = float(risk_state.get("max_risk_per_trade_usd", DEFAULT_ACCOUNT["max_risk_per_trade_usd"]))
-    daily_loss = float(risk_state.get("daily_loss_so_far", 0))
-    daily_limit = float(risk_state.get("max_daily_loss_usd", DEFAULT_ACCOUNT["max_daily_loss_usd"]))
-    leverage = int(risk_state.get("leverage", DEFAULT_ACCOUNT["leverage"]))
+    cap = _get_account_balance()
+    max_risk = _get_max_risk_usd(symbol)
+    leverage = _get_leverage(symbol)
+    
+    # 日损检查（从 risk_state.json）
+    daily_loss = 0.0
+    daily_limit = cap * 0.10  # 日上限 10%
+    try:
+        rs = ROOT / "data" / "risk_state.json"
+        if rs.exists():
+            state = json.loads(rs.read_text(encoding="utf-8"))
+            daily_loss = float(state.get("daily_realized_pnl", 0))
+            daily_limit = float(state.get("max_daily_loss_usd", cap * 0.10))
+    except Exception:
+        pass
     
     remaining_daily = max(0, daily_limit - daily_loss)
     max_risk = min(max_risk, remaining_daily)
@@ -129,7 +156,7 @@ def position_size(
 
 def position_advice(merged: dict, entry: float = 0, stop: float = 0,
                     data_grade: str = "B", cvd_grade: str = "C",
-                    event_ban: bool = False) -> dict:
+                    event_ban: bool = False, symbol: str = "BTCUSDT") -> dict:
     """从多模型合并结果直接计算仓位建议"""
     return position_size(
         direction=merged.get("bias", "方向不明"),
@@ -137,6 +164,7 @@ def position_advice(merged: dict, entry: float = 0, stop: float = 0,
         long_confidence=merged.get("long_confidence", 0),
         short_confidence=merged.get("short_confidence", 0),
         action=merged.get("action", "不交易"),
+        symbol=symbol,
         entry_price=entry,
         stop_loss=stop,
         data_grade=data_grade,
@@ -182,5 +210,5 @@ if __name__ == "__main__":
     result = position_advice(demo_merged, entry=65200, stop=64900, event_ban=True)
     print(format_position(result))
     print()
-    result2 = position_advice(demo_merged, entry=65200, stop=64900)
+    result2 = position_advice(demo_merged, entry=65200, stop=64900, symbol="BTCUSDT")
     print(format_position(result2))

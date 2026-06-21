@@ -1542,6 +1542,26 @@ def auto_card(symbol: str, push: bool = False) -> str:
     
     print("⑦ 渲染锁定卡片...")
     meta = build_setup_metadata(symbol, merged, results, engine_data)
+    
+    # v2.0: Protections 状态注入（社区共识防护层）
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from risk_constitution import apply_protections, load_protections
+        from datetime import datetime as _dt
+        current_bar = int(_dt.now().timestamp() // 300)
+        prot = load_protections()
+        prot_check = apply_protections(symbol, current_bar, prot)
+        meta["protections_active"] = True
+        meta["protections_passed"] = prot_check["passed"]
+        meta["protections_status"] = "通过" if prot_check["passed"] else "拦截: " + "; ".join(prot_check["violations"])
+        if not prot_check["passed"]:
+            print(f"  ⚠️ Protections拦截: {meta['protections_status']}")
+        else:
+            print(f"  🛡️ Protections通过")
+    except Exception as e:
+        meta["protections_active"] = False
+        meta["protections_status"] = f"未启用({e})"
+    
     card = render_card_locked(
         symbol, merged, results, meta, engine_data,
         grok=grok, search_sent=search_sent, community=community,
