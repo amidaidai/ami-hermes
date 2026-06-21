@@ -1292,51 +1292,53 @@ def _cvd_display(cvd, cvd_quality):
 
 
 def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None, cvd_quality=None, reason=None, tier="info", risk_text=None, derivatives_text=None, ls_text=None, taker_text=None, conflict_text=None, model_dir_text=None, setup=None, all_levels=None, macro_text=None):
-    """v7.1 精简警报 · 手机适配（≤6行·≤38字符）"""
+    """v7.5 中文警报 · 手机适配（≤6行·≤38字符）"""
     setup = setup or {}
     lines = []
     
-    # ── 🚨 标题行 ──
+    # ── 标题行 ──
     raw_status = setup.get("status") or setup.get("direction")
     status_zh = STATUS_ZH.get(str(raw_status), situation_text(tier))
     lines.append(f"🚨 {head} {status_zh} `{_fmt_price(symbol, price)}`")
     
-    # ── 指标行 ──
+    # ── 指标行（紧凑·中文优先）──
     ind_parts = []
     if cvd is not None:
-        ind_parts.append(f"CVD{_cvd_display(cvd, cvd_quality)}")
+        ind_parts.append(f"CVD {_cvd_display(cvd, cvd_quality)}")
     if taker_text:
-        ind_parts.append(f"Taker{taker_text}")
+        ind_parts.append(f"Taker {taker_text}")
+    # model_dir_text 已经是"引擎判多·位信一致✓"格式，直接使用不前缀
     if model_dir_text:
-        ind_parts.append(f"引擎{model_dir_text}")
+        ind_parts.append(model_dir_text)
     if macro_text and macro_text != "无":
         ind_parts.append(macro_text[:50])
     if ind_parts:
-        lines.append(" ".join(ind_parts))
+        lines.append(" · ".join(ind_parts))
     
-    # ── 触发位（最多2个·含距）──
+    # ── 触发位（显示中文名·含距）──
     if hits:
         for item in hits[:2]:
-            name = item.get("name", "?")
-            lvl = item.get("price", item.get("level", "?"))
+            # 优先用 display_name · 回退 name
+            display = item.get("display_name") or item.get("name", "?")
+            lvl = item.get("price") or item.get("level", "?")
             dist_str = ""
             if isinstance(lvl, (int, float)) and isinstance(price, (int, float)) and price > 0:
                 d = abs(float(lvl) - float(price)) / float(price) * 100
                 dist_str = f" 距{d:.1f}%"
-            lines.append(f"{name} `{_fmt_price(symbol, lvl)}`{dist_str}")
+            lines.append(f"{display} `{_fmt_price(symbol, lvl)}`{dist_str}")
     
-    # ── 全景 ○/● 最多4个 ──
+    # ── 全景位（显示中文名·○未触发/●已触发）──
     if all_levels:
         panorama = sort_levels_panorama(all_levels)
-        hit_names = {h.get("name") for h in (hits or [])}
+        hit_names = {h.get("display_name") or h.get("name") for h in (hits or [])}
         briefs = []
         for item in panorama[:4]:
-            n = item.get("name", "")
-            l = item.get("price", item.get("level", 0))
-            m = "●" if n in hit_names else "○"
-            briefs.append(f"{m}{n}`{_fmt_price(symbol, l)}`")
+            display = item.get("display_name") or item.get("name", "?")
+            l = item.get("price") or item.get("level", 0)
+            m = "●" if display in hit_names else "○"
+            briefs.append(f"{m}{display} `{_fmt_price(symbol, l)}`")
         if briefs:
-            lines.append(" ".join(briefs))
+            lines.append("  ".join(briefs))
     
     # ── 风控 ──
     risk_parts = []
@@ -1345,7 +1347,7 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
     if conflict_text:
         risk_parts.append(f"⚠{conflict_text}")
     if risk_parts:
-        lines.append("风控 " + " ".join(risk_parts))
+        lines.append("风控 " + " · ".join(risk_parts))
     
     lines.append("—— 你来选方向 ——")
     return "\n".join(lines) + "\n"
@@ -1478,7 +1480,9 @@ def process_block(raw, symbol, block, state):
         if ls.get("long_pct"):
             ls_text = f"{ls['long_pct']}%多·{ls.get('dir','')}"
         if tk.get("ratio"):
-            taker_text = f"{tk['dir']} {tk['ratio']:.2f}·{tk.get('q','B')}级"
+            dir_map = {"buy": "买", "sell": "卖", "neutral": "平"}
+            taker_dir_cn = dir_map.get(tk['dir'], tk['dir'])
+            taker_text = f"{taker_dir_cn} {tk['ratio']:.2f}·{tk.get('q','B')}级"
         # 方向冲突检测
         long_pct = ls.get("long_pct", 50)
         taker_dir = tk.get("dir", "neutral")
