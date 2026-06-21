@@ -1270,13 +1270,12 @@ def _check_tv_grade_change(state: dict):
         return False, grade, ""
     state["last_tv_grade"] = grade
     state["last_tv_time"] = now_local().isoformat()
-    # 仅关键等级触发推送
+    # 仅关键等级触发推送（v7.2: 移除B级→只保留A/X高置信）
     if grade.startswith("A"):
         return True, grade, cache.get("action") or cache.get("tv_data", {}).get("action") or cache.get("treatment", "优先")
     if grade == "X":
         return True, grade, cache.get("action") or cache.get("tv_data", {}).get("action") or "结构冲突"
-    if grade.startswith("B"):
-        return True, grade, cache.get("action") or cache.get("tv_data", {}).get("action") or "关注"
+    # B/C级不推送
     return False, grade, ""
 
 
@@ -1675,6 +1674,9 @@ def main():
         if "last_tv_grade" not in state:
             cache = _load_tv_dmi_cache()
             state["last_tv_grade"] = cache.get("grade") or cache.get("tv_data", {}).get("grade", "")
+        # v7.2: TV数据桥每5分钟刷新（替代cron·静默更新）
+        last_tv_refresh = 0
+        TV_REFRESH_INTERVAL = 300  # 5分钟
         while True:
             try:
                 # P0-1 fix: 心跳移到循环最顶部，确保每轮先报活
@@ -1686,6 +1688,18 @@ def main():
                     write_heartbeat("running", symbol)
                     raw, block_changed = process_block(raw, symbol, block, state)
                     changed = changed or block_changed
+
+                # v7.2:每5分钟通过TV CLI刷新DMI缓存（静默·不阻塞主循环）
+                now_ts = time.time()
+                if now_ts - last_tv_refresh >= TV_REFRESH_INTERVAL:
+                    try:
+                        subprocess.Popen(
+                            [sys.executable, str(ROOT / "scripts" / "tv_data_bridge.py")],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        )
+                    except Exception:
+                        pass
+                    last_tv_refresh = now_ts
 
                 # v6.9.15e: TV DMI 等级变化检测 → 仅关键信号触发推送
                 should_tv_push, tv_grade, tv_action = _check_tv_grade_change(state)
