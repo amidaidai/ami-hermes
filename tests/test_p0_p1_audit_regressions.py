@@ -120,3 +120,29 @@ def test_watchdog_block_sends_external_alert(tmp_path, monkeypatch):
     assert wd.start_monitor(emergency=False) is False
     assert sent
     assert "重启速率限制" in sent[-1]
+    state_row = json.loads(state.read_text(encoding="utf-8"))
+    assert state_row["status"] == "blocked"
+    assert "重启速率限制" in state_row["last_restart_reason"]
+
+def test_auto_card_cli_ignores_pytest_quiet_flag():
+    assert auto_card._parse_cli_symbol(["-q"]) == "BTCUSDT"
+    assert auto_card._parse_cli_symbol(["--push", "XAUUSD"]) == "XAUUSD"
+    assert auto_card._parse_cli_symbol(["BTCUSDT", "--push"]) == "BTCUSDT"
+
+def test_crypto_b_quality_liquidity_passes_when_sources_are_consistent():
+    import session_filter
+
+    assert session_filter.has_min_liquidity(
+        "BTCUSDT",
+        {"quality": "B", "confidence": 75, "price_spread_pct": 0.22},
+    ) is True
+    assert session_filter.has_min_liquidity(
+        "BTCUSDT",
+        {"quality": "B", "confidence": 65, "price_spread_pct": 0.22},
+    ) is False
+
+def test_monitor_ignores_invalid_cli_like_symbols():
+    rows = list(watch_monitor.iter_symbol_blocks({"symbols": {"-q": {"levels": []}, "BTCUSDT": {"levels": []}}}))
+    assert [symbol for symbol, _ in rows] == ["BTCUSDT"]
+    rows = list(watch_monitor.iter_symbol_blocks({"symbol": "-q", "levels": []}))
+    assert rows[0][0] == "BTCUSDT"

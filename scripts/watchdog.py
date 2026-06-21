@@ -75,7 +75,7 @@ def send_watchdog_alert(msg: str) -> bool:
 
 def notify_watchdog_block(reason: str, cooldown_remaining: int, restart_count: int):
     state = write_watchdog_state(
-        status="restart_blocked",
+        status="blocked",
         last_restart_reason=reason,
         restart_count_1h=restart_count,
         blocked_until=(datetime.now(TZ) + timedelta(seconds=max(0, cooldown_remaining))).isoformat(),
@@ -189,6 +189,12 @@ def start_monitor(emergency: bool = False) -> bool:
         cooldown_remaining = int(max(0, min(guard_restarts) + 3600 - now_ts))
         reason = f"重启速率限制[{kind}]：{budget}次/小时已达上限 · 冷却{cooldown_remaining}s"
         log(reason)
+        write_watchdog_state(
+            status="blocked",
+            restart_count_1h=len(guard_restarts),
+            last_restart_reason=reason,
+            blocked_until=(datetime.now(TZ) + timedelta(seconds=cooldown_remaining)).isoformat(),
+        )
         notify_watchdog_block(reason, cooldown_remaining, len(guard_restarts))
         return False
 

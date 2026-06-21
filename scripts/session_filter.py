@@ -197,11 +197,20 @@ def has_min_liquidity(symbol: str, snapshot: dict = None) -> bool:
     """F轮简单流动性门槛：crypto 优先高量，gold/forex 用时段，stock 用美股时段。"""
     ac = get_asset_class(symbol)
     if ac == "crypto":
-        # 简单：如果有 snapshot 且 quality 好
         if snapshot:
             q = snapshot.get("quality", "B")
-            return q in ("A", "A-", "B+")
-        return True  # 默认允许
+            try:
+                conf = float(snapshot.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                conf = 0
+            try:
+                spread = float(snapshot.get("price_spread_pct", 0) or 0)
+            except (TypeError, ValueError):
+                spread = 0
+            if q in ("A", "A-", "B+"):
+                return True
+            return q == "B" and conf >= 70 and spread <= 0.5
+        return True  # crypto 24/7，缺快照时不因数据桥空值静默
     if ac == "gold":
         return require_liquidity_for_gold()
     return True  # 其他由 should_trade 控制

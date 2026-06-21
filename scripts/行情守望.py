@@ -543,15 +543,29 @@ def _verify_predictions_if_needed(state: dict):
         log(f"预测回验错误: {str(e)[:80]}")
 
 
+def _valid_symbol(symbol) -> bool:
+    sym = str(symbol or "").upper().strip()
+    if not sym or sym.startswith("-"):
+        return False
+    return sym in {"BTCUSDT", "XAUUSD"} or sym.endswith(("USDT", "USD"))
+
+
 def iter_symbol_blocks(raw):
     if isinstance(raw.get("symbols"), dict):
         for symbol, block in raw["symbols"].items():
+            if not _valid_symbol(symbol):
+                log(f"跳过非法品种 {symbol}")
+                continue
             if isinstance(block, dict):
                 merged = dict(block)
                 merged.setdefault("symbol", symbol)
-                yield symbol, merged
+                yield str(symbol).upper().strip(), merged
         return
-    yield raw.get("symbol") or DEFAULT_SYMBOL, raw
+    symbol = raw.get("symbol") or DEFAULT_SYMBOL
+    if not _valid_symbol(symbol):
+        log(f"跳过非法品种 {symbol}，回退 {DEFAULT_SYMBOL}")
+        symbol = DEFAULT_SYMBOL
+    yield str(symbol).upper().strip(), raw
 
 
 def normalize_levels(block):

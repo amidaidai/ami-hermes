@@ -2576,7 +2576,19 @@ def _find_nearest_key_level(klines: dict, price: float) -> tuple:
     return candidates[0]
 
 
+def _parse_cli_symbol(argv=None) -> str:
+    """Return the first real trading symbol, ignoring pytest/hermes CLI flags."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    for arg in argv:
+        if not arg or arg.startswith("-"):
+            continue
+        symbol = arg.upper().strip()
+        if symbol in {"BTC", "BTCUSDT", "XAU", "XAUUSD"} or symbol.endswith(("USDT", "USD")):
+            return "BTCUSDT" if symbol == "BTC" else "XAUUSD" if symbol == "XAU" else symbol
+    return "BTCUSDT"
+
+
 if __name__ == "__main__":
-    sym = sys.argv[1] if len(sys.argv) > 1 else "BTCUSDT"
+    sym = _parse_cli_symbol()
     do_push = "--push" in sys.argv
     auto_card(sym, push=do_push)
