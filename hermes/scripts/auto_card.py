@@ -319,7 +319,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     asset_review = _asset_review_text(symbol)
 
     if status == "B等待" or direction == "wait":
-        plan_a_bias = _primary_plan_bias(bias_cn)
+        k4h_bias = _kl_bias(k4h)  # 高周期继承
+        plan_a_bias = _primary_plan_bias(bias_cn, k4h_bias)
         plan_b_bias = _opposite_bias(plan_a_bias)
         plan_a_dir = _dir_from_bias(plan_a_bias)
         plan_b_dir = _dir_from_bias(plan_b_bias)
@@ -1068,7 +1069,13 @@ def _plan_a_name(bias_cn: str, model_id: str) -> str:
     return f"{dir_word} · {model_id}"
 
 
-def _primary_plan_bias(bias_cn: str) -> str:
+def _primary_plan_bias(bias_cn: str, k4h_direction: str = "") -> str:
+    """主方向判定：引擎 > 4h继承 > 默认偏多。4h是低周期的'宪法'。"""
+    # 4h方向有否决权：4h偏空时，引擎中性也优先空
+    if k4h_direction in ("偏空", "bearish", "下跌"):
+        return "偏空"
+    if k4h_direction in ("偏多", "bullish", "上涨"):
+        return "偏多"
     if bias_cn in ("偏空", "空头"):
         return "偏空"
     if bias_cn in ("偏多", "多头"):
@@ -1699,8 +1706,8 @@ def auto_card(symbol: str, push: bool = False) -> str:
     except Exception as e:
         print(f"  ❌ Engine: {e}")
     
-    # ═══ Step 3: Grok验证 ═══
-    print("③ Grok验证...")
+    # ═══ Step 3: Grok催化剂验证 ═══
+    print("③ Grok催化剂...")
     grok = {}
     try:
         grok = call_grok_validation(symbol, merged, results, 
@@ -1708,20 +1715,21 @@ def auto_card(symbol: str, push: bool = False) -> str:
                                      data=engine_data)
         if grok.get("agree"):
             merged["global_confidence"] = round(merged["global_confidence"] + 0.05, 3)
-            print(f"  ✅ Grok一致 | 置信+0.05")
+            print(f"  ✅ Grok: 催化剂已验证 | 置信+0.05")
         elif grok.get("skipped"):
             print(f"  ⏭️ Grok跳过: {grok['skipped']}")
         elif grok.get("error"):
             print(f"  ⚠️ Grok错误: {grok['error'][:60]}")
         else:
+            print(f"  ⚠️ Grok: 无新热点")
             merged["action"] = "⚠Grok分歧→B等待"
             merged["confidence_5"] = min(merged.get("confidence_5", 4), 3)
             print(f"  ⚠️ Grok分歧 → B等待 | 方向: {grok.get('grok_direction','?')} {grok.get('grok_confidence',0):.3f}")
     except Exception as e:
         print(f"  ⚠️ Grok: {e}")
     
-    # ═══ Step 4: 搜索情绪 ═══
-    print("④ 搜索情绪...")
+    # ═══ Step 4: 市场热点搜索 ═══
+    print("④ 市场热点...")
     search_sent = ""
     try:
         from sentiment_search import sentiment_line
@@ -2141,11 +2149,26 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     comm_tag = f"社区{fg_tag}" if fg_tag else ""
     
     prot_tag = "🛡" if prot_status == "通过" else f"⚠{prot_status}"
+    
+    # 低周期触发状态
+    sweep_state = _sweep_state(k5m, merged) or "待扫"
+    k15m_desc = _kl_desc("15m", k15m.get("close", [0]) if isinstance(k15m.get("close"), list) else [k15m.get("close", 0)], 
+                          k15m.get("high", [0]) if isinstance(k15m.get("high"), list) else [k15m.get("high", 0)],
+                          k15m.get("low", [0]) if isinstance(k15m.get("low"), list) else [k15m.get("low", 0)],
+                          k15m.get("volume", [0]) if isinstance(k15m.get("volume"), list) else [k15m.get("volume", 0)])
+    k15m_brief = k15m.get("description", str(k15m_desc)[:30]) if k15m else "?"
+    trigger_line = f"5m {sweep_state} · 15m {k15m_brief} — 低周期触发"
+    
+    # 4h继承
+    k4h_bias_compact = _kl_bias(k4h) or "?"
+    header_4h = f"4h{k4h_bias_compact}"
+    
     lines = [
-        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {bias}",
+        f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {model_id} · {header_4h} · {bias}",
         f"③ {_fmt_price(price)} · 高 {hi} · 低 {lo}",
         f"{nearest_name} {nl_fmt} {near_str}",
         f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
+        trigger_line,
         plan_a,
         plan_b,
         f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag} · {comm_tag}",
