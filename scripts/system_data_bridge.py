@@ -170,67 +170,20 @@ def _get_asset_class_simple(symbol: str) -> str:
         return "crypto"
     if su.isalpha() and len(su) <= 5:
         return "stock"
-    def event_ban() -> tuple:
-        now = datetime.now(timezone.utc)
-        for d, (name, t, before, after) in _EVENTS.items():
-            ed = datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc)
-            h,m = map(int,t.split(":"))
-            et = ed.replace(hour=h,minute=m)
-            if et-timedelta(minutes=before) <= now <= et+timedelta(minutes=after):
-                return True, name
-        return False, ""
 
-    # ═══════════════════ 多资产扩展数据 ═══════════════════
 
-    def get_dxy() -> Optional[float]:
-        """DXY (美元指数) - 用于 gold/forex SMT 和确认。"""
-        try:
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=5m&range=1d"
-            r = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(r, timeout=8) as resp:
-                data = json.loads(resp.read())
-                meta = data["chart"]["result"][0]["meta"]
-                return float(meta.get("regularMarketPrice", meta.get("previousClose", 0)))
-        except:
-            return None
+def event_ban() -> tuple:
+    now = datetime.now(timezone.utc)
+    for d, (name, t, before, after) in _EVENTS.items():
+        ed = datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        h, m = map(int, t.split(":"))
+        et = ed.replace(hour=h, minute=m)
+        if et - timedelta(minutes=before) <= now <= et + timedelta(minutes=after):
+            return True, name
+    return False, ""
 
-    def get_basic_earnings_flag(symbol: str) -> str:
-        """简易财报/事件标记 for stocks。"""
-        su = symbol.upper()
-        if su in ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"]:
-            return "财报窗口注意（近似）"
-        return "无重大财报"
 
-    def asset_macro_enrich(symbol: str) -> dict:
-        """返回资产专属宏观/确认数据 (DXY for gold/forex, earnings for stocks)。"""
-        ac = _get_asset_class_simple(symbol)
-        out = {"dxy": None, "macro_note": "", "event_flag": ""}
-        if ac in ("gold", "forex"):
-            dxy = get_dxy()
-            out["dxy"] = dxy
-            out["macro_note"] = f"DXY {dxy:.2f}" if dxy else "DXY N/A"
-        if ac == "stock":
-            out["event_flag"] = get_basic_earnings_flag(symbol)
-        if ac == "gold":
-            out["macro_note"] += " · 美债/实际收益率"
-        return out
-
-    def _get_asset_class_simple(symbol: str) -> str:
-        su = str(symbol).upper()
-        if "XAU" in su or "GOLD" in su:
-            return "gold"
-        if "CALL" in su or "PUT" in su or (su.endswith(("C","P")) and any(c.isdigit() for c in su)):
-            return "option"
-        forex = ["EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"]
-        if any(x in su for x in forex) and not su.endswith("USDT"):
-            return "forex"
-        if su.endswith("USDT") or "BTC" in su or "ETH" in su:
-            return "crypto"
-        if su.isalpha() and len(su) <= 5:
-            return "stock"
-        return "other"
-
-    # ═══════════════════ 方向翻转 ═══════════════════
+# ═══════════════════ 方向翻转 ═══════════════════
 
 _LAST = {"BTCUSDT": None, "XAUUSD": None}
 

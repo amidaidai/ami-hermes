@@ -232,7 +232,8 @@ def get_close(symbol, interval):
 
 
 def get_cvd(symbol):
-    if not str(symbol).upper().endswith("USDT"):
+    symu = str(symbol).upper()
+    if "XAU" in symu or not symu.endswith("USDT"):
         return "不适用", "非加密"
     # v7.3: 优先用真实逐笔 aggTrades（A级），失败回退 1m K线估算（C级）。
     try:
