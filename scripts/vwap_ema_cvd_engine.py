@@ -13,7 +13,7 @@ TV不可用时，退回到本模块的K线级近似计算。
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Union, Optional as Opt
 import json
 
 ROOT = Path("D:/Hermes agent")
@@ -225,6 +225,60 @@ def calc_ema_cloud(ema_values: dict[int, list[float]]) -> dict:
     return result
 
 
+def analyze_cvd_iceberg(cvd_data: dict, price_changes: Opt[list[float]] = None) -> dict:
+    """v7.3新增: 冰山订单检测。
+    
+    检测特征：连续同向小额成交 + 价格几无位移 → 疑似冰山（大单被拆分隐藏）。
+    
+    Args:
+        cvd_data: cvd_aggtrades.py输出
+        price_changes: 同期价格变动序列（可选·用于检测价格停滞）
+    Returns:
+        {iceberg: bool, pattern: str, confidence: int (0-100)}
+    """
+    buy_count = cvd_data.get("buy_count", 0)
+    sell_count = cvd_data.get("sell_count", 0)
+    total_count = buy_count + sell_count
+    if total_count < 20:
+        return {"iceberg": False, "pattern": "数据不足", "confidence": 0}
+    
+    # 方向一致性：单方向笔数占比 > 65% 但每笔量小
+    buy_pct = buy_count / total_count if total_count else 0
+    sell_pct = sell_count / total_count if total_count else 0
+    dominant_pct = max(buy_pct, sell_pct)
+    
+    avg_size = (cvd_data.get("buy_volume", 0) + cvd_data.get("sell_volume", 0)) / total_count if total_count else 0
+    # 冰山特征：单方向主导 + 小额碎单（≤中位数2倍）
+    is_small_lots = avg_size < 0.5  # 相对小单（阈值可调）
+    
+    if dominant_pct > 0.65 and is_small_lots:
+        # 价格位移检查：若有 price_changes，确认价格停滞
+        if price_changes and len(price_changes) > 5:
+            price_range = max(price_changes) - min(price_changes)
+            if price_range < abs(price_changes[0]) * 0.003:  # 价格范围 < 0.3%
+                conf = min(85, int((dominant_pct - 0.5) * 200) + 30)
+                direction = "买方" if buy_pct > sell_pct else "卖方"
+                return {
+                    "iceberg": True,
+                    "pattern": f"{direction}冰山·小额碎单{total_count}笔·价未动",
+                    "confidence": conf,
+                    "dominant_pct": round(dominant_pct, 3),
+                    "avg_lot_size": round(avg_size, 3),
+                }
+        # 无价格数据时降低置信度
+        conf = min(60, int((dominant_pct - 0.5) * 150))
+        direction = "买方" if buy_pct > sell_pct else "卖方"
+        return {
+            "iceberg": True,
+            "pattern": f"{direction}疑似冰山·碎单占比{dominant_pct:.0%}",
+            "confidence": conf,
+            "dominant_pct": round(dominant_pct, 3),
+            "avg_lot_size": round(avg_size, 3),
+        }
+    
+    return {"iceberg": False, "pattern": "无明显冰山", "confidence": 0}
+
+
 def analyze_cvd_absorption(cvd_data: dict) -> dict:
     """
     对齐棠溪 Pine CVD参数：
@@ -330,4 +384,86 @@ def vwap_ema_cvd_summary(symbol: str, klines: list[dict] = None) -> dict:
         "ema_cloud": ema_cloud,
         "atr": round(current_atr, 2) if current_atr else None,
         "summary": " · ".join(summary_parts) if summary_parts else "数据不足",
+    }
+
+
+# ═══════════════════ 多资产相关性检查 v7.3 ═══════════════════
+
+def check_correlation_warning(btc_price: float, xau_price: float,
+                               btc_position: bool = False, xau_position: bool = False) -> dict:
+    """多资产持仓相关性警告。
+    
+    BTC和XAU通常负相关或弱相关，但极端宏观事件下可能同向。
+    双持时警告合并风险。
+    
+    Returns: {warning: bool, message: str, suggested_action: str}
+    """
+    if not (btc_position and xau_position):
+        return {"warning": False, "message": "", "suggested_action": ""}
+    
+    # 双持检查：总风险不应该 > 单笔上限×2
+    return {
+        "warning": True,
+        "message": "⚠ BTC+XAU双持 · 合并风险需评估",
+        "suggested_action": "若同向(均为多/空)：缩小任一仓位50%·若反向：确认非对冲幻觉",
+        "double_position": True,
+    }
+
+
+def check_correlation_btc_xau(btc_klines: list[dict], xau_klines: list[dict],
+                                window: int = 48) -> dict:
+    """计算BTC和XAU近期相关性（48根=4h×48=8天）。
+    
+    Returns: {correlation, strength, interpretation}
+    """
+    if not btc_klines or not xau_klines:
+        return {"available": False, "reason": "K线数据不足"}
+    
+    n = min(len(btc_klines), len(xau_klines), window)
+    btc_closes = [k.get("close", 0) for k in btc_klines[-n:]]
+    xau_closes = [k.get("close", 0) for k in xau_klines[-n:]]
+    
+    # 用百分比收益计算相关性（去量纲）
+    btc_rets = [(btc_closes[i] - btc_closes[i-1]) / btc_closes[i-1] for i in range(1, n) if btc_closes[i-1] > 0]
+    xau_rets = [(xau_closes[i] - xau_closes[i-1]) / xau_closes[i-1] for i in range(1, n) if xau_closes[i-1] > 0]
+    
+    m = min(len(btc_rets), len(xau_rets))
+    if m < 10:
+        return {"available": False, "reason": "样本不足"}
+    
+    btc_rets = btc_rets[:m]
+    xau_rets = xau_rets[:m]
+    
+    # Pearson correlation
+    import math
+    mean_b = sum(btc_rets) / m
+    mean_x = sum(xau_rets) / m
+    cov = sum((a - mean_b) * (b - mean_x) for a, b in zip(btc_rets, xau_rets)) / m
+    std_b = math.sqrt(sum((a - mean_b) ** 2 for a in btc_rets) / m)
+    std_x = math.sqrt(sum((b - mean_x) ** 2 for b in xau_rets) / m)
+    
+    if std_b < 1e-10 or std_x < 1e-10:
+        return {"available": True, "correlation": 0, "strength": "无", "interpretation": "无波动"}
+    
+    corr = cov / (std_b * std_x)
+    corr = max(-1.0, min(1.0, corr))
+    
+    abs_corr = abs(corr)
+    if abs_corr < 0.3:
+        strength, interp = "弱", "可独立持仓·无合并风险"
+    elif abs_corr < 0.5:
+        strength, interp = "中等", "轻相关·建议观察"
+    elif abs_corr < 0.7:
+        strength, interp = "较强", "高相关⚠·双持需缩减"
+    else:
+        strength, interp = "很强", "严重⚠·双持同向→合并仓位≤单笔上限"
+    
+    direction = "正" if corr > 0 else "负"
+    return {
+        "available": True,
+        "correlation": round(corr, 3),
+        "abs_correlation": round(abs_corr, 3),
+        "strength": strength,
+        "direction": direction,
+        "interpretation": f"{direction}相关·{strength}·{interp}",
     }

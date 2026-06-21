@@ -77,24 +77,71 @@ def build_setup_metadata(symbol: str, merged: dict, results: list[dict], engine_
     }
 
 
-def _adaptive_risk(engine_data: dict) -> float:
-    """按 ATR 波动率自适应单笔风险金额；取不到 ATR 或模块缺失则回退基准 2U。
+# ═══════════════════ 风控层 v7.3 ═══════════════════
+INITIAL_BALANCE = 100.0  # 棠溪本金
+MAX_RISK_USD_CAP = INITIAL_BALANCE * 0.01  # 1%硬上限（防余额膨胀）
 
-    账户余额优先用 engine_data 携带的实时余额，缺失则用本金阶段默认 67.52。
-    单笔硬上限 10U（棠溪铁律）。
+def _consecutive_losses() -> tuple[int, bool]:
+    """读取 trade_events.jsonl 统计最近连续亏损笔数。
+    返回 (consecutive_loss_count, paused)。
+    """
+    events_file = DATA / "trade_events.jsonl"
+    if not events_file.exists():
+        return 0, False
+    try:
+        with open(events_file, encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines:
+            return 0, False
+        count = 0
+        for line in reversed(lines):
+            try:
+                ev = json.loads(line)
+                pnl = float(ev.get("pnl_usd") or 0)
+                if pnl < 0:
+                    count += 1
+                else:
+                    break  # Won trade breaks the streak
+            except Exception:
+                continue
+        return count, (count >= 5)  # ≥5 = auto-pause
+    except Exception:
+        return 0, False
+
+
+def _adaptive_risk(engine_data: dict) -> float:
+    """按 ATR 波动率自适应单笔风险金额 v7.3。
+    
+    三层守卫：
+      ① 连亏≥3笔 → 风险减半 · 连亏≥5笔 → 暂停(risk=0)
+      ② 余额膨胀守卫 → max_risk_usd ≤ INITIAL_BALANCE × 1%
+      ③ 单笔硬上限 10U（棠溪铁律）
     """
     try:
         from risk_constitution import adaptive_risk_usd
         balance = float(engine_data.get("account_balance") or 67.52)
-        # ATR 占价百分比：优先用 engine_data 显式给的，否则从 spot 高低估算
+        
+        # —— 守卫①: 连亏追踪 ——
+        consec, paused = _consecutive_losses()
+        if paused:
+            return 0.0
+        shrink = 0.5 if consec >= 3 else 1.0  # ≥3笔 → 半仓
+        
+        # —— ATR自适应 ——
         atr_pct = engine_data.get("atr_pct")
         if atr_pct is None:
             spot = engine_data.get("binance_spot", {})
             hi, lo, px = spot.get("24h_high"), spot.get("24h_low"), (engine_data.get("prices", {}) or {}).get("primary")
             if hi and lo and px:
-                atr_pct = (float(hi) - float(lo)) / float(px) / 3.0  # 日内单根近似=日幅/3
+                atr_pct = (float(hi) - float(lo)) / float(px) / 3.0
         r = adaptive_risk_usd(account_balance=balance, atr_pct=float(atr_pct or 0))
-        return r["risk_usd"]
+        raw_risk = r["risk_usd"] * shrink
+        
+        # —— 守卫②: 余额膨胀硬上限 ——
+        raw_risk = min(raw_risk, MAX_RISK_USD_CAP)
+        
+        # —— 守卫③: 10U铁律 ——
+        return min(raw_risk, 10.0)
     except Exception:
         return 2.0
 
@@ -2366,7 +2413,11 @@ def _price_label(symbol: str, engine_data: dict) -> tuple[str, str]:
     return "", source or "多源"
 
 
-# ═══════════════════ 日内止损止盈（ATR夹层+结构锚定）═══════════════════
+# ═══════════════════ 日内止损止盈（对手方流动性池后方·v7.3升级）═══════════════════
+# v7.3升级: 止损放在对手方流动性池后方（社区2026共识），不再锚定结构位本身
+#   Short: 最近阻力 + 0.5×ATR缓冲 → 止损在猎杀区后方
+#   Long:  最近支撑 - 0.5×ATR缓冲 → 止损在猎杀区后方
+#   最少保底: p ± 2×ATR（极端行情兜底）
 def _calc_stop_target_atr(
     price: float, direction: str, klines: dict,
     symbol: str = "BTCUSDT", atr_mult: float = 2.0
@@ -2375,6 +2426,7 @@ def _calc_stop_target_atr(
     
     direction: "short" 或 "long"
     atr_mult: ATR 倍数（默认 2.0x，日内夹层 1.5-2.5）
+    v7.3: 止损放在对手方流动性池后方，不锚定结构位本身
     """
     p = float(price or 0)
     if p <= 0:
@@ -2395,8 +2447,9 @@ def _calc_stop_target_atr(
     
     atr_stop_dist = atr_15m * atr_mult
     atr_stop_dist = max(atr_stop_dist, MIN_MOVE)  # 最少 0.3%
+    atr_buffer = atr_15m * 0.5  # 对手方流动性池外缓冲
     
-    # 收集结构位
+    # 收集结构位（对手方流动性池）
     above_levels = []  # (level, name, tf)
     below_levels = []
     
@@ -2419,19 +2472,27 @@ def _calc_stop_target_atr(
     below_levels.sort(reverse=True)  # nearest first
     
     if direction == "short":
-        # 止损在最近阻力上方
-        stop_structural = above_levels[0][0] if above_levels else p + atr_stop_dist
-        stop = max(p + atr_stop_dist, stop_structural)
-        stop_reason = f"{above_levels[0][1]}({above_levels[0][2]})上方" if above_levels else "ATR×2"
+        # 止损在最近阻力后方（对手方流动性池+ATR缓冲）
+        if above_levels:
+            stop_structural = above_levels[0][0] + atr_buffer  # 阻力上方推0.5ATR
+            stop = max(p + atr_stop_dist, stop_structural)
+            stop_reason = f"{above_levels[0][1]}({above_levels[0][2]})+缓冲上方"
+        else:
+            stop = p + atr_stop_dist
+            stop_reason = "ATR×2"
         
         # 止盈在最近支撑
         target = below_levels[0][0] if below_levels else p - atr_stop_dist * 2
         target_reason = f"{below_levels[0][1]}({below_levels[0][2]})" if below_levels else "ATR×4"
     else:
-        # 止损在最近支撑下方
-        stop_structural = below_levels[0][0] if below_levels else p - atr_stop_dist
-        stop = min(p - atr_stop_dist, stop_structural)
-        stop_reason = f"{below_levels[0][1]}({below_levels[0][2]})下方" if below_levels else "ATR×2"
+        # 止损在最近支撑后方（对手方流动性池-ATR缓冲）
+        if below_levels:
+            stop_structural = below_levels[0][0] - atr_buffer  # 支撑下方推0.5ATR
+            stop = min(p - atr_stop_dist, stop_structural)
+            stop_reason = f"{below_levels[0][1]}({below_levels[0][2]})-缓冲下方"
+        else:
+            stop = p - atr_stop_dist
+            stop_reason = "ATR×2"
         
         # 止盈在最近阻力
         target = above_levels[0][0] if above_levels else p + atr_stop_dist * 2
