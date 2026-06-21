@@ -72,7 +72,7 @@ def build_setup_metadata(symbol: str, merged: dict, results: list[dict], engine_
         "direction": direction, "status": status, "priority_plan": "A" if status.startswith("A") else "无",
         "data_grade": data_grade, "level_confidence": int(round(engine_conf * 100)) if engine_conf else 0,
         "engine_confidence": round(engine_conf, 3), "confidence_5": int(merged.get("confidence_5") or 0),
-        "risk_usd": risk_usd, "rr1": None if status == "B等待" else 2.0, "rr2": None if status == "B等待" else 4.0,
+        "risk_usd": risk_usd, "rr1": None if status in ("B等待", "C等待") else 2.0, "rr2": None if status in ("B等待", "C等待") else 4.0,
         "invalid_price": None, "expires_at": (now + timedelta(hours=1)).isoformat(), "monitor_write": True,
     }
 
@@ -163,11 +163,29 @@ def _env_walls_line(symbol: str, price, klines: dict) -> str:
 
 
 def _parse_tv_dmi_table(tv_tables: list | None) -> dict:
-    """从 TradingView Pine table 解析 DMI 决策表数据。"""
+    """从 TradingView Pine table 解析 DMI 决策表数据。
+    MCP 格式: [{name:..., tables:[{rows:[...]}]}] — 需拆两层。
+    简化格式: [{rows:[...]}] — 直接取 rows。"""
     if not tv_tables:
         return {}
     rows = {}
-    for row_text in (tv_tables[0].get("rows", []) if tv_tables else []):
+    # 兼容两种嵌套:
+    # 格式A(MCP): studies[i].tables[j].rows
+    # 格式B(简化): tables[i].rows
+    raw_rows = None
+    if isinstance(tv_tables, list) and tv_tables:
+        first = tv_tables[0]
+        if isinstance(first, dict):
+            # 尝试格式A: 取 tables[0].rows
+            inner = first.get("tables")
+            if isinstance(inner, list) and inner:
+                raw_rows = inner[0].get("rows", []) if isinstance(inner[0], dict) else []
+            # 回退格式B: 直接取 rows
+            if not raw_rows:
+                raw_rows = first.get("rows", [])
+    if not raw_rows:
+        return {}
+    for row_text in raw_rows:
         parts = row_text.split(" | ", 1)
         if len(parts) == 2:
             key, val = parts[0].strip(), parts[1].strip()
@@ -235,8 +253,8 @@ def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
         meta["status"] = "X禁做"
         meta["direction"] = "wait"
         meta["priority_plan"] = "无"
-    else:  # C等待
-        meta["status"] = "B等待"
+    else:  # C等待 / C其他
+        meta["status"] = "C等待"
         meta["direction"] = "wait"
         meta["priority_plan"] = "无"
 
@@ -370,6 +388,9 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
             if tv_dmi_rows:
                 tv_override = _apply_tv_dmi_override(meta, engine_data, symbol, tv_dmi_rows, tv_vals)
                 engine_data["_tv_override"] = tv_override  # 存储供 compact card 使用
+                # 同步更新局部变量（TV DMI 可能覆盖了 status/direction）
+                status = meta.get("status", status)
+                direction = meta.get("direction", direction)
             # 用 TV 真实 CVD 覆盖 Binance Taker 代理
                 if tv_vals.get("CVD Value") is not None:
                     cvd_data = _tv_cvd_override(cvd_data, tv_vals)
@@ -403,7 +424,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"1h {_kl_summary(k1h, '当前') or '等待方向'}",
         f"4h {_kl_summary(k4h, '背景') or '等待方向'}",
         f"③ 现价：{price_label}{_fmt_price(price)}（{price_source}） · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
-        f"④ 状态：{status}{' · TV:' + tv_override.get('tv_grade', '') if tv_override.get('tv_active') and tv_override.get('tv_grade') not in ('C等待', '') else ''}",
+        f"④ 状态：{status}{' · TV:' + tv_override.get('tv_grade', '') if tv_override.get('tv_active') and tv_override.get('tv_grade') else ''}",
         f"⑤ 识别信号：{model_id}",
         f"⑥ 数据：{_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
         f"⑦ 风险：{_adaptive_risk(engine_data):.2f}U",
@@ -476,7 +497,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         ops.append(f"   等: {tv_override.get('tv_execution', '等关键位')} · {tv_override.get('tv_risk', '不进场')}")
         ops.append(f"   方向不定，待结构明朗后再看。")
         ops.append(f"   失效：等 TV 下一根 DMI 表更新。")
-    elif status == "B等待" or direction == "wait":
+    elif status in ("B等待", "C等待") or direction == "wait":
         k4h_bias = _kl_bias(k4h)  # 高周期继承
         plan_a_bias = _primary_plan_bias(bias_cn, k4h_bias, symbol, klines, cvd_data)
         plan_b_bias = _opposite_bias(plan_a_bias)
@@ -557,7 +578,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     
     # 决策模式：B等待但价格已锚定关键位 → 输出极简速读卡（替代60行全卡）
     anchored = _near_key_level(klines, price)
-    if not force_full and (status == "B等待" or status == "X禁做") and anchored:
+    if not force_full and status in ("B等待", "C等待", "X禁做") and anchored:
         compact = _compact_card(symbol, price, status, direction, model_id, klines, k4h, k5m, k15m,
                                 merged, cvd_dir, cvd_quality, taker_dir, taker_ratio,
                                 funding_rate, engine_data, risk_amt, risk_pct_limit,
@@ -1978,19 +1999,77 @@ def auto_card(symbol: str, push: bool = False) -> str:
     meta = build_setup_metadata(symbol, merged, results, engine_data)
 
     # v6.9.14: TV DMI 决策表数据注入（从 TradingView MCP 读取）
+    # v6.9.15b P0 fix: 优先读 engine_data._tv_pine（调用方注入）→
+    #   回退读 data/tv_dmi_cache.json（cron agent 每5分钟更新）
     tv_dmi_data = {}
     try:
-        # 尝试从 Hermes Web UI MCP 读取 TV 实时数据
-        import requests as _req, json as _j
-        # 通过本地 MCP bridge 获取 TV study values 和 Pine table
-        # 目前使用 engine_data 中已预载的 _tv_pine 字段（由调用方注入）
         tv_raw = engine_data.get("_tv_pine")
-        if tv_raw:
+        if not tv_raw:
+            # 回退：读 cron agent 维护的本地缓存
+            import json as _j
+            cache_path = ROOT / "data" / "tv_dmi_cache.json"
+            if cache_path.exists():
+                cache = _j.loads(cache_path.read_text(encoding="utf-8"))
+                # 兼容两种缓存格式:
+                # 格式A(cron agent): {"tv_data": {"grade":..., "action":...}}
+                # 格式B(tv_signal_monitor): {"grade":..., "treatment":...}
+                if "tv_data" in cache:
+                    c = cache["tv_data"]
+                    grade = c.get("grade", "C等待")
+                    treatment = c.get("action") or c.get("treatment", "?")
+                    background = c.get("background") or c.get("bias", "?")
+                    position = c.get("position", "?")
+                    cvd_state = c.get("cvd") or c.get("cvd_state", "?")
+                    execution = c.get("execution")
+                    if isinstance(execution, dict):
+                        execution = f"多:{execution.get('long','?')}|空:{execution.get('short','?')}"
+                    else:
+                        execution = execution or "?"
+                    risk = c.get("risk", "?")
+                elif "grade" in cache:
+                    # 格式C: cron agent 最新平键格式
+                    grade = cache.get("grade", "C等待")
+                    treatment = cache.get("action") or cache.get("treatment", "?")
+                    background = cache.get("background") or cache.get("bias", "?")
+                    position = cache.get("position", "?")
+                    cvd_state = cache.get("cvd") or cache.get("cvd_state", "?")
+                    execution = cache.get("execution")
+                    if isinstance(execution, dict):
+                        execution = f"多:{execution.get('long','?')}|空:{execution.get('short','?')}"
+                    else:
+                        execution = execution or "?"
+                    risk = cache.get("risk", "?")
+                else:
+                    # 格式B: tv_signal_monitor 旧格式
+                    grade = cache.get("grade", "C等待")
+                    treatment = cache.get("treatment", "?")
+                    background = cache.get("background", "?")
+                    position = cache.get("position", "?")
+                    cvd_state = cache.get("cvd_state", "?")
+                    execution = cache.get("execution", "?")
+                    risk = cache.get("risk", "?")
+                # 将缓存转换为 _tv_pine 格式: {studies: [...], tables: [...]}
+                tv_dmi_data = {
+                    "studies": [],
+                    "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": [
+                        f"等级 | {grade}",
+                        f"处理 | {treatment}",
+                        f"背景 | {background}",
+                        f"位置 | {position}",
+                        f"量能 | 量能普通",
+                        f"CVD | {cvd_state}",
+                        f"执行 | {execution}",
+                        f"风控 | {risk}",
+                    ]}]}]
+                }
+                engine_data["_tv_pine"] = tv_dmi_data
+                print(f"  ✅ TV DMI(缓存): grade={grade} · {treatment}")
+        else:
             studies = tv_raw.get("studies", [])
             tables = tv_raw.get("tables", [])
             engine_data["_tv_pine"] = {"studies": studies, "tables": tables}
             tv_dmi_data = {"studies": studies, "tables": tables}
-            print(f"  ✅ TV DMI: {len(studies)} studies · {len(tables)} tables")
+            print(f"  ✅ TV DMI(直连): {len(studies)} studies · {len(tables)} tables")
     except Exception as e:
         print(f"  ⚠ TV DMI跳过: {e}")
     
