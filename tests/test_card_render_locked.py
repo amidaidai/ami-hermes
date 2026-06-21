@@ -50,8 +50,8 @@ def test_render_card_locked_has_speed_read_block():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # 速读区八项，纯纵向 ①-⑧
-    for marker in ["① 品种", "② 周期", "③ 现价", "④ 状态", "⑤ 模型", "⑥ 评分", "⑦ 决策", "⑧ 仓位", "⑨ 失效", "⑩ 数据"]:
+    # 速读区十项，纯纵向 ①-⑩
+    for marker in ["① 品种", "② 周期", "③ 现价", "④ 状态", "⑤ 模型", "⑥ 数据", "⑦ 风险", "⑧ 仓位", "⑨ 失效", "⑩ 数据"]:
         assert marker in card, f"速读区缺少 {marker}"
 
 

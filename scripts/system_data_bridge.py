@@ -220,7 +220,7 @@ def dir_flip(sym: str) -> tuple:
     return False, old, nd
 
 def enrich_engine_data(symbol: str, engine_data: dict) -> dict:
-    """E轮增强：将 asset_macro_enrich 的结构化数据合并进 engine_data，供卡片环境段和评分使用。"""
+    """E轮增强：将 asset_macro_enrich + Polymarket 的结构化数据合并进 engine_data，供卡片环境段和评分使用。"""
     try:
         macro = asset_macro_enrich(symbol)
         ed = dict(engine_data) if engine_data else {}
@@ -230,6 +230,16 @@ def enrich_engine_data(symbol: str, engine_data: dict) -> dict:
         ed.setdefault("event_flag", macro.get("event_flag"))
         ed["_macro"] = macro
         ed["_asset_class"] = macro.get("asset_class")
+
+        # G轮: Polymarket 预测市场注入
+        try:
+            from polymarket_bridge import polymarket_context_text
+            pm_text = polymarket_context_text()
+            ed.setdefault("polymarket", pm_text)
+            ed["_polymarket"] = pm_text
+        except Exception:
+            ed.setdefault("polymarket", "")
+
         return ed
     except Exception:
         return engine_data or {}

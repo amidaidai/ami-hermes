@@ -411,6 +411,18 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     except Exception:
         pass
 
+    # ═══ G轮: 对抗式分析 (TradingAgents Bull/Bear pattern) ═══
+    adversarial = {}
+    try:
+        from adversarial_analyst import adversarial_scoring, adversarial_text_for_card
+        adversarial = adversarial_scoring(engine_data, symbol, results)
+        engine_data["_adversarial"] = adversarial
+    except Exception:
+        adversarial = {}
+
+    # ═══ Polymarket 预测市场文本 ═══
+    pm_text = engine_data.get("polymarket") or engine_data.get("_polymarket") or ""
+
     # ═══ ⑩ 头部 ═══
     chg_str = f" · 日变动 `{float(chg):+.2f}%`" if chg is not None else ""
     display_symbol = _display_symbol(symbol)
@@ -425,7 +437,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"4h {_kl_summary(k4h, '背景') or '等待方向'}",
         f"③ 现价：{price_label}{_fmt_price(price)}（{price_source}） · 高 {_fmt_price(high)} · 低 {_fmt_price(low)}{chg_str}",
         f"④ 状态：{status}{' · TV:' + tv_override.get('tv_grade', '') if tv_override.get('tv_active') and tv_override.get('tv_grade') else ''}",
-        f"⑤ 识别信号：{model_id}",
+        f"⑤ 模型：{model_id}",
         f"⑥ 数据：{_asset_data_line(symbol, engine_data, taker_data, cvd_quality)}",
         f"⑦ 风险：{_adaptive_risk(engine_data):.2f}U",
         f"⑧ 仓位：{_pos_level(data_grade, status)}",
@@ -446,6 +458,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"④ 流动性：上 `{_fmt_price(high)}` · 下 `{_fmt_price(low)}` — 止损池/前高低/价值区",
         f"⑤ 催化与情绪：{_asset_catalyst_line(symbol, engine_data, fg_v, search_sent)}{_weekend_tag()} — 只验证结构",
         f"⑥ 风控环境：{_gate_data(data_grade)} — 风险 `{risk_amt:.2f}U` · Constitution v2.0",
+        f"⑦ 预测市场：{pm_text or '数据待采集'}",
     ]
 
     # ═══ 二、结构 ═══
@@ -475,6 +488,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         f"④ 资产专属：{asset_game}",
         f"⑤ 三源裁决：结构{structure_dir} + 引擎{engine_dir} + 订单流{flow_dir} — {resonance}",
         f"⑥ 分歧处理：{resonance}才允许预案；未共振则 B等待；硬闸不过则 X禁做",
+        f"⑦ 对抗分歧：Bull {adversarial.get('bull_score', '?')} vs Bear {adversarial.get('bear_score', '?')} — {adversarial.get('div_label', '无数据')}",
     ]
 
     # ═══ 四、操作 ═══
