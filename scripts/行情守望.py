@@ -1349,7 +1349,6 @@ def render_message(head, symbol, price, plan_id, cycle, hits, urgency, cvd=None,
     if risk_parts:
         lines.append("风控 " + " · ".join(risk_parts))
     
-    lines.append("—— 你来选方向 ——")
     return "\n".join(lines) + "\n"
 
 

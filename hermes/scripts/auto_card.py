@@ -629,7 +629,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     card_lines.extend([
         f"⑩ 闸门：{_gates}",
         f"   心态{_mind} · 不到不执行",
-        f"   决策：你来选方向——",
+
     ])
 
     full = "\n".join(card_lines) + "\n"
@@ -2633,7 +2633,7 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         plan_b,
         scale_line,
         f"风控：{wd_tag}{risk_amt:.2f}U上限 · {leverage_text} · {prot_tag} · {comm_tag}",
-        f"—— 决策：你来选方向——",
+
     ])
     return "\n".join(lines) + "\n"
 
