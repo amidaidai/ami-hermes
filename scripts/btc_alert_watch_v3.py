@@ -230,7 +230,13 @@ def detect_alerts(data: dict) -> list[dict]:
     except: pass
     try: _detect_silver_bullet_displacement(data,alerts,si)
     except: pass
-    _compute_confluence(data,alerts)
+    # ═══ v3.1: CVD趋势线破 ═══
+    try:
+        _detect_cvd_trendline(data, alerts)
+    except: pass
+    
+    # ═══ v3.1: Confluence 综合评分 ═══
+    _compute_confluence(data, alerts)
     return alerts
 
 def write_pending(alerts: list[dict]) -> int:
@@ -274,3 +280,36 @@ def main():
     return 0
 
 if __name__=="__main__": raise SystemExit(main())
+
+
+# ═══ v3.2: CVD趋势线破检测 ═══
+def _detect_cvd_trendline(data: dict, alerts: list):
+    """CVD趋势线突破检测 — LEADING信号(领先价格2-5根K线)。"""
+    try:
+        sys.path.insert(0,str(Path(__file__).resolve().parent.parent/"hermes"/"scripts"))
+        sys.path.insert(0,str(Path(__file__).resolve().parent/"scripts"))
+        from orderflow_absorption import cvd_trendline_alert_line, detect_cvd_trendline_break
+        
+        # Build CVD series from TV data or use mock
+        cvd_series = []
+        cvd_val = data.get("cvd", 0)
+        cvd_slope = data.get("cvd_slope", 0)
+        if cvd_val != 0:
+            # Simulate 20-point series from current CVD value
+            cvd_series = [cvd_val - cvd_slope * (19-i)/2 for i in range(20)]
+        else:
+            return
+        
+        result = detect_cvd_trendline_break(cvd_series, window=10)
+        if result.get("trendline_broken"):
+            direction = "↑做多" if "上破" in result.get("direction","") else "↓做空" if "下破" in result.get("direction","") else "○监测"
+            alerts.append({
+                "direction": direction,
+                "model": "CVD趋势线破",
+                "reason": result.get("signal", ""),
+                "conf": round(result.get("confidence", 50) / 100, 2),
+                "weight": 3,
+                "priority": "A" if result.get("confidence", 0) >= 70 else "B",
+            })
+    except Exception:
+        pass
