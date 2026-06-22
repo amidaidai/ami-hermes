@@ -569,72 +569,50 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         "",
     ]
 
-    # ── ③ VWAP/EMA/CVD（拆2行）──
-    if vwap_ema.get("available"):
-        v = vwap_ema.get("vwap")
-        ec = vwap_ema.get("ema_cloud")
-        if v.get("vwap"):
-            card_lines.append(f"③ VWAP `{v['vwap']}` {v.get('price_vs_vwap','?')}·{v.get('in_band','?')}")
-        if ec:
-            card_lines.append(f"   EMA 快{ec.get('fast_cloud','?')}·慢{ec.get('slow_cloud','?')}·{ec.get('trend_strength','?')[:8]}")
-    card_lines.append(f"   CVD {cvd_dir} · Taker {taker_dir} · FG {fg_v}")
-    card_lines.append("")
-
-    # ── ④ 关键位（拆3行）──
-    _poc = _p(k15m.get('poc'))
-    _vah = _p(k15m.get('vah'))
-    _val = _p(k15m.get('val'))
-    card_lines.extend([
-        f"④ 阻 `{_p(res)}` POC `{_poc}`",
-        f"   VAH `{_vah}` VAL `{_val}`",
-        f"   支 `{_p(sup)}`",
-        f"   失效 `{_p(inv_line)}` 执行 `{exec_line}`",
-        "",
-    ])
-
-    # ── 预案A ──
-    if status in ("B等待", "C等待", "X禁做") or direction == "wait":
-        plan_a_label = "预案A · 主方向"
-        plan_a_entry = f"`{_p(st_a['stop'])}-{_p(st_a['target'])}`"
-        plan_a_note = "等触发"
-    else:
-        plan_a_label = f"预案A · {'空' if bearish else '多'}{'⚠优先' if resonance == '共振' else ''}"
-        plan_a_entry = f"`{_p(price)}`" if status.startswith("A") else f"`{_p(st_a['stop'])}-{_p(st_a['target'])}`"
-        plan_a_note = "限价" if status.startswith("A") else "条件触发"
-    _pos = _pos_level(data_grade, status)
-
-    card_lines.extend([
-        f"—— {plan_a_label} ——",
-        f"⑤ 入场 {plan_a_entry} {plan_a_note}",
-        f"⑥ 止损 `{_p(st_a['stop'])}` 结构位",
-        f"   止盈 `{_p(st_a['target'])}` `{_p(st_a['target'])}` 1:{rr_a:.1f}{rr_a_note}",
-        f"⑦ 仓位 {_pos} 风险{risk_amt:.2f}U {leverage_text}",
-        f"⑧ 失效 `{_p(inv_line)}` 复查3×15m",
-        "",
-    ])
-
-    # ── 预案B ──
-    plan_b_label = f"预案B · {'多' if bearish else '空'}备选"
-    card_lines.extend([
-        f"—— {plan_b_label} ——",
-        f"⑨ 入场 `{_p(st_b['stop'])}` 止损 `{_p(st_b['stop'])}`",
-        f"   止盈 `{_p(st_b['target'])}` 1:{rr_b:.1f}{rr_b_note}",
-        f"   仓位 {_pos} 风险{risk_amt:.2f}U",
-        "",
-    ])
-
-    # ── ⑩ 闸门 ──
-    _gates = f"数据{_gate_data(data_grade)} 风控{prot_status} 执行{_gate_exec(klines, price, status)}"
-    _mind = "✓" if status != "X禁做" else "⛔"
-    card_lines.extend([
-        f"⑩ 闸门：{_gates}",
-        f"   心态{_mind} · 不到不执行",
-
-    ])
-
-    full = "\n".join(card_lines) + "\n"
+    # v8.0: 叙事模板渲染
+    from render_v8 import render_v8_card
+    monitor_levels = engine_data.get("monitor_levels", {}).get("symbols", {}).get(symbol, {})
+    all_levels_list = monitor_levels.get("levels", [])
     
-    # 决策模式：B等待但价格已锚定关键位 → 输出极简速读卡（替代全卡）
+    # v8.0 需要的上下文变量
+    kill_zone = _kill_zone_name()
+    sweep_state = _sweep_state(k5m, merged) or "待扫"
+    displacement = "待判"
+    
+    # 关键位回退：从K线数据补充
+    if not all_levels_list:
+        for tf in ("4h", "1h", "15m"):
+            k = klines.get(tf, {})
+            for side, name, key in [("resistance", f"{tf}VAH", "vah"), ("support", f"{tf}VAL", "val"),
+                                      ("resistance", f"{tf}高", "high"), ("support", f"{tf}低", "low")]:
+                v = k.get(key)
+                if v:
+                    try:
+                        fv = float(v)
+                        if fv > 0:
+                            all_levels_list.append({"side": side, "display_name": name, "level": fv, "name": name})
+                    except (TypeError, ValueError):
+                        pass
+    
+    full = render_v8_card(
+        symbol=symbol, status=status, direction=direction, price=price,
+        high=high, low=low, chg=chg, tf_lines=tf_lines,
+        cvd_dir=cvd_dir, cvd_quality=cvd_quality,
+        taker_dir=taker_dir, taker_ratio=taker_ratio,
+        funding_rate=funding_rate, kill_zone=kill_zone,
+        vwap_ema=vwap_ema, fg_v=fg_v,
+        levels=all_levels_list,
+        bearish=bearish, st_a=st_a, st_b=st_b,
+        rr_a=rr_a, rr_b=rr_b, rr_a_note=rr_a_note, rr_b_note=rr_b_note,
+        risk_amt=risk_amt, leverage_text=leverage_text,
+        inv_line=inv_line, prot_status=prot_status,
+        data_grade=data_grade, sweep_state=sweep_state,
+        displacement=displacement, one_reason=one_reason,
+        model_id=model_id, n5=n5, eng_conf=eng_conf,
+        klines=klines,
+    )
+    
+    # 决策模式：B等待但价格锚定 → 极简卡
     anchored = _find_nearest_key_level(klines, price)
     if not force_full and status in ("B等待", "C等待", "X禁做") and anchored:
         compact = _compact_card(symbol, price, status, direction, model_id, klines, k4h, k5m, k15m,

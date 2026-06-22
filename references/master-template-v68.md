@@ -1,6 +1,6 @@
-# 棠溪分析卡 · 主模板 v7.1（手机适配）
+# 棠溪分析卡 · 主模板 v8.0（叙事风格 · Telegram适配）
 
-定位：Telegram 手机端 38 字符/行不换行。每条信息必须可执行。
+定位：叙事驱动，结构清晰，信息完整。每行不受38字符限制但保持紧凑。
 
 ## 权威铁律
 
@@ -8,89 +8,121 @@
 ② 价格反引号；状态仅 A做多/A做空/B等待/X禁做。
 ③ R:R 底线 1:2；不达标标 ⚠。
 ④ 单笔 ≤ 1%余额，10U 硬上限。
-⑤ 完整卡 ≤ 20 行 · 极简卡 ≤ 8 行 · 警报 ≤ 6 行。
-⑥ 每行 ≤ 38 字符（手机不折行）。
+⑤ 完整卡 ≤ 35 行 · 极简卡沿用旧格式。
+⑥ 分隔线 `━━━━━━━━━━`（Telegram 友好）。
 
 ---
 
-## 完整卡（≤20行 · 手机优先）
+## 完整卡（叙事风格）
 
 ```
-◷ 06-21 22:15 · BTCUSDT · BINANCE
+`{SYMBOL}` 日内分析 · {STATUS}
 
-① B等待 · VWAP反抽 · 3/13 · 置信3/5
-   未共振·锚定·震荡
+━━━━━━━━━━
 
-② 现价 `63884`
-   高 `64200` 低 `63600` 日-1.2%
-   4h空 · 1h震 · 15m拒 · 5m待
+现价 `{PRICE}` ({CHG}%) ｜ 高 `{HIGH}` 低 `{LOW}`
 
-③ VWAP `64000` 下·1σ-2σ
-   EMA 快空·慢空·强空排
-   CVD 卖 · Taker sell · FG 35
+━━━━━━━━━━
 
-④ 阻 `64200` POC `63900`
-   VAH `64100` VAL `63700`
-   支 `63500`
-   失效 `64500` 执行 `63800`
+① 今日结构
 
-—— 预案A 空（优先）——
-⑤ 入场 `63600-64000` 条件触发
-⑥ 止损 `64200` 结构位
-   止盈 `63200` `62600` 1:2.5
-⑦ 仓位 半仓 风险 0.67U 杠杆100x
-⑧ 失效 `64500` 复查 3×15m
+{PREV_STRUCTURE}
 
-—— 预案B 多（备选）——
-⑨ 入场 `64200` 止损 `63800`
-   止盈 `64800` 1:1.5⚠R:R
-   仓位 半仓 风险 0.67U
+关键路径：
+{KEY_PATH}
 
-⑩ 闸门：数据✓ 风控✓ 执行✓ 心态✓
-   决策：你来选方向——
+{DISPLACEMENT_TEXT}
+
+━━━━━━━━━━
+
+② 关键位
+
+— 阻力 —
+R1: {R1_RANGE} — {R1_DESC}
+R2: {R2_RANGE} — {R2_DESC}
+
+— 支撑 —
+S1: {S1_RANGE} — {S1_DESC}
+S2: {S2_RANGE} — {S2_DESC}
+S3: {S3_RANGE} — {S3_DESC}
+
+━━━━━━━━━━
+
+③ 量价分析
+
+— {CVD_ABSORPTION}
+— {TICKER_SUMMARY}
+— {VOLUME_PATTERN}
+
+━━━━━━━━━━
+
+④ 交易方案
+
+{PLAN_STATUS} {DIRECTION_EMOJI}
+
+— A 方案（{PLAN_A_LABEL}）： {PLAN_A_DESC}
+  入场 `{ENTRY_A}` 止损 `{STOP_A}` 止盈 `{TARGET_A}` R:R 1:{RR_A}
+— B 方案（{PLAN_B_LABEL}）： {PLAN_B_DESC}
+  入场 `{ENTRY_B}` 止损 `{STOP_B}` 止盈 `{TARGET_B}` R:R 1:{RR_B}
+
+防守： {DEFENSE_LINE}
+仓位： {POSITION} 风险 {RISK}U {LEVERAGE}
+
+━━━━━━━━━━
+
+⑤ 综合评分
+
+流动性扫荡 · {SWEEP_STATUS}
+CVD确认 · {CVD_STATUS}
+动能位移 · {DISPLACEMENT_STATUS}
+Kill Zone · {KILL_ZONE_STATUS}
+多级共振 · {CONFLUENCE_STATUS}
+风控门 · {RISK_GATE_STATUS}
+数据质量 · {DATA_GRADE}
+
+总结： {ONE_LINE_SUMMARY}
 ```
 
 ---
 
-## 极简卡（≤8行 · 价格锚定时）
+## 极简卡（沿用 ≤8行）
 
 ```
-◷ 06-21 22:15 · BTC · B等待 · 空头
+◷ {TIME} · {SYMBOL} · {STATUS} · {BIAS}
 
-现价 `63884` 高 `64200` 低 `63600`
-POC `63900` 距 0.2%
-VWAP `64000` 下·1σ-2σ · EMA空排
+现价 `{PRICE}` 高 `{HI}` 低 `{LO}`
+{NEAREST_LEVEL} 距 {DIST}%
 
-—— A 空 ——
-入场 `63600-64000` 止损 `64200`
-止盈 `63200` `62600` 1:2.5
+—— A {DIR_A} ——
+入场 `{ENTRY_A}` 止损 `{STOP_A}`
+止盈 `{TARGET_A}` 1:{RR_A}
 
-—— B 多 ——
-入场 `64200` 止损 `63800`
-止盈 `64800` 1:1.5
+—— B {DIR_B} ——
+入场 `{ENTRY_B}` 止损 `{STOP_B}`
+止盈 `{TARGET_B}` 1:{RR_B}
 
-风控 0.67U 100x ✓
-—— 你来选方向 ——
+风控 {RISK}U {LEVERAGE}
 ```
 
 ---
 
-## 警报（≤6行 · 关键位触发）
+## 警报（≤8行 · 触发时）
 
 ```
-🚨 BTC B等待 现价 `63884`
+🚨 {SYMBOL} · {STATUS} · `{PRICE}`
 
-VWAP `64000` 下·EMA空·CVD卖
-POC `63900` 距 0.2%
+{TRIGGER_LEVEL} 距 {DIST}%
+CVD {CVD} · Taker {TAKER} · 引擎 {MODEL}
 
-A空：入场 `63600-64000`
-止损 `64200` 止盈 `63200` 1:2.5
+—— A {DIR_A} ——
+入场 `{ENTRY_A}` 止损 `{STOP_A}`
+止盈 `{TARGET_A}` 1:{RR_A}
 
-B多：入场 `64200`
-止损 `63800` 止盈 `64800` 1:1.5
+—— B {DIR_B} ——
+入场 `{ENTRY_B}` 止损 `{STOP_B}`
+止盈 `{TARGET_B}` 1:{RR_B}
 
-风控 0.67U 100x 失效 `64500`
-—— 你来选方向 ——
+风控 {RISK}U {LEVERAGE} · {PROT}
 ```
 
 ---
@@ -101,5 +133,4 @@ B多：入场 `64200`
 |------|------|------|------|-----------|
 | BTC | BINANCE | 100x | 张 | 24/7 |
 | XAU | EXNESS | 1000x | 手 | London+NY |
-| EUR | OANDA | 50x | 手 | SilvBullet |
-```
+| 山寨 | BINANCE | 20x | 个 | 跟随BTC |
