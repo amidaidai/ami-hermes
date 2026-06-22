@@ -2012,7 +2012,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
     
     # v2.0: 合并TV数据到引擎（读取 btc_tv_data.json 缓存，由 TV 数据桥每2分钟更新）
     try:
-        _tv_path = Path.home() / "AppData/Local/hermes/data/btc_tv_data.json"
+        _ticker = symbol.upper().replace("USDT", "").replace(".P", "")
+        _tv_path = Path.home() / f"AppData/Local/hermes/data/{_ticker}_tv_data.json"
+        if not _tv_path.exists():
+            _tv_path = Path.home() / "AppData/Local/hermes/data/btc_tv_data.json"
         if _tv_path.exists():
             with open(_tv_path, "r", encoding="utf-8") as _tf:
                 _tv_raw = json.load(_tf)

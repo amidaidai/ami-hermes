@@ -9,9 +9,9 @@ SCRIPTS = Path(__file__).resolve().parent
 REPO_SCRIPTS = SCRIPTS.parent / "hermes" / "scripts" / "repo-maintenance"
 
 STEPS = [
-    ("Hermes升级", REPO_SCRIPTS / "daily_hermes_official_update.py", 30),
-    ("仓库备份", REPO_SCRIPTS / "daily_private_repo_backup.py", 30),
-    ("每日验证", SCRIPTS / "run_daily_validation.py", 60),
+    ("Hermes升级", REPO_SCRIPTS / "daily_hermes_official_update.py", 20),
+    ("仓库备份", REPO_SCRIPTS / "daily_private_repo_backup.py", 20),
+    ("每日验证", SCRIPTS / "run_daily_validation.py", 30),
 ]
 
 errors = []
