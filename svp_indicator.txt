@@ -1,0 +1,2024 @@
+//@version=5
+indicator("SVP+ICT+VWAP+EMA+CVD", overlay=true,
+     max_bars_back=3500, max_lines_count=500, max_labels_count=500, max_polylines_count=100,
+     dynamic_requests=true)
+
+//====================================================
+// Inputs
+//====================================================
+const string RANGE_GROUP        = "03 SVP - 周期"
+const string PRECISION_GROUP    = "04 SVP - 精度/性能"
+const string APPEARANCE_GROUP   = "10 外观 - SVP"
+const string VP_ELEMENTS_GROUP  = "11 外观 - 结构线/轴标"
+const string ICT_STYLE_GROUP    = "12 外观 - ICT"
+const string VWAP_GROUP         = "05 VWAP - 会话均价"
+const string MTF_VWAP_GROUP     = "06 VWAP - 周/月"
+const string DO_GROUP           = "07 日线开盘价"
+const string EMA_GROUP          = "08 EMA - 趋势过滤"
+const string SESSIONS_GROUP     = "09 ICT - 会话时间"
+const string DMI_TABLE_GROUP    = "01 决策表 - 实盘"
+const string CVD_GROUP          = "02 CVD - 主动买卖确认"
+const string PRO_GROUP          = "00 Pro - 提醒/性能"
+const string MARKET_PRESET_GROUP = "00 Pro - 市场模式"
+
+// --- Multi-Market Preset Inputs ---
+string MARKET_PRESET = input.string("自动", "市场预设", options=["自动", "贵金属", "外汇", "加密", "股票", "期权标的", "期货", "指数", "通用"], tooltip="自动会根据 syminfo.type 和品种名称判断；识别不准时可手动覆盖。", group=MARKET_PRESET_GROUP)
+bool AUTO_WEIGHT_BY_MARKET = input.bool(true, "按市场自动调整评分权重", group=MARKET_PRESET_GROUP)
+
+// --- SVP Inputs ---
+bool   AUTO_PROFILE_TF       = input.bool(true, "自动匹配分布图周期", group=RANGE_GROUP)
+string MANUAL_PROFILE_TF     = input.timeframe("D", "手动设置分布图周期", group=RANGE_GROUP)
+
+bool   USE_PRECISION         = input.bool(true, "启用高精度计算 (lower TF)", group=PRECISION_GROUP)
+bool   AUTO_PRECISION        = input.bool(true, "自动精度模式", group=PRECISION_GROUP)
+string MANUAL_PRECISION_TF   = input.timeframe("5", "手动精度周期", group=PRECISION_GROUP)
+
+bool   AUTO_DEGRADE_PRECISION = input.bool(true, "自动降级以防卡顿", group=PRECISION_GROUP)
+int    DEGRADE_THRESHOLD      = input.int(220000, "降级阈值 (估算计算量)", minval=50000, maxval=2000000, group=PRECISION_GROUP)
+
+bool   SHOW_DEGRADE_WARNINGS  = input.bool(true, "显示精度/周期自动降级提示", group=PRECISION_GROUP)
+
+int    NUM_ROWS                 = input.int(50, "分布图行数", minval=10, maxval=300, group=APPEARANCE_GROUP)
+int    MAX_WIDTH                = input.int(30, "分布图宽度 %", maxval=100, minval=5, step=5, group=APPEARANCE_GROUP)
+int    HEIGHT_PERCENTAGE_PER_ROW = input.int(68, "行高填充 %", minval=1, maxval=100, group=APPEARANCE_GROUP)
+int    VALUE_AREA_THRESHOLD      = input.int(70, "价值区域 (VA) %", minval=1, maxval=100, group=APPEARANCE_GROUP)
+
+int VP_MIN_TICK_MULT = input.int(20, "SVP 最小桶宽 (mintick倍数)", minval=1, maxval=500, group=APPEARANCE_GROUP)
+
+color VP_LABEL_BG_COLOR = input.color(#FFFFFF, "VP 标签背景色", group=APPEARANCE_GROUP)
+int    VP_LABEL_BG_TRANS = input.int(50, "VP 标签透明度", minval=0, maxval=100, group=APPEARANCE_GROUP)
+string VP_LABEL_SIZE = input.string(size.normal, "VP 左侧标签字体大小",
+     options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge], group=APPEARANCE_GROUP)
+
+color PROFILE_COLOR_LOWER    = input.color(color.new(#787B86, 75), "分布图 (非VA)", group=APPEARANCE_GROUP)
+color PROFILE_COLOR_UPPER    = input.color(color.new(#787B86, 75), "", group=APPEARANCE_GROUP)
+color VALUE_AREA_COLOR_LOWER = input.color(color.new(#2962FF, 75), "价值区域 (VA)", group=APPEARANCE_GROUP)
+color VALUE_AREA_COLOR_UPPER = input.color(color.new(#2962FF, 75), "", group=APPEARANCE_GROUP)
+
+bool SHOW_PROFILE_HIST   = input.bool(true,  "显示分布图直方图", group=VP_ELEMENTS_GROUP)
+bool SHOW_POC            = input.bool(true,  "显示 POC", group=VP_ELEMENTS_GROUP)
+bool SHOW_NPOC           = input.bool(true,  "显示未测试 POC (nPOC)", group=VP_ELEMENTS_GROUP)
+int  NPOC_LIMIT          = input.int(1, "保留最近 nPOC 数量", minval=1, maxval=20, group=VP_ELEMENTS_GROUP)
+
+bool SHOW_VAH_VAL        = input.bool(true,  "显示 VAH/VAL (标签)", group=VP_ELEMENTS_GROUP)
+bool SHOW_VAH_VAL_LINES  = input.bool(false, "显示 VAH/VAL 线条", tooltip="关闭后不显示VAH/VAL线条；右侧价格轴仍可显示价格。", group=VP_ELEMENTS_GROUP)
+bool EXTEND_POC          = input.bool(true,  "延长活跃 POC 线", group=VP_ELEMENTS_GROUP)
+bool SHOW_PRICE_LABELS   = input.bool(true,  "标签显示价格数值", group=VP_ELEMENTS_GROUP)
+bool SHOW_ACTIVE_VP_LABELS = input.bool(false, "显示当前SVP左侧POC/VAH/VAL标签", tooltip="关闭后只隐藏当前活跃SVP左侧标签；右侧价格栏轴标仍由下方轴标开关控制。", group=VP_ELEMENTS_GROUP)
+bool SHOW_RIGHT_PRICE_AXIS = input.bool(true, "右侧价格轴显示结构线价格", group=VP_ELEMENTS_GROUP)
+bool SHOW_AXIS_VP_LEVELS  = input.bool(true, "轴标: POC/VAH/VAL/nPOC", group=VP_ELEMENTS_GROUP)
+bool SHOW_AXIS_DO_LEVEL   = input.bool(true, "轴标: 日线开盘价", group=VP_ELEMENTS_GROUP)
+bool SHOW_AXIS_VWAP_LEVELS = input.bool(true, "轴标: 周/月 VWAP", group=VP_ELEMENTS_GROUP)
+bool SHOW_BACKGROUND     = input.bool(true,  "显示 VA 背景色", group=VP_ELEMENTS_GROUP)
+bool RENDER_COMPLETED_PROFILE = input.bool(true, "显示最近已完成 SVP", tooltip="开启后保留最近几个已完成周期的 SVP 分布图；数量过多会增加 TradingView 对象压力。", group=VP_ELEMENTS_GROUP)
+int  COMPLETED_PROFILE_LIMIT = input.int(1, "最近已完成 SVP 数量", minval=1, maxval=5, group=VP_ELEMENTS_GROUP)
+
+// [NEW] Custom Line Styles for VP
+color POC_COLOR        = input.color(#0F0F0F, "POC 颜色", inline="poc_col", group=VP_ELEMENTS_GROUP)
+string POC_STYLE_IN    = input.string("Solid", "线型", options=["Solid", "Dashed", "Dotted"], inline="poc_col", group=VP_ELEMENTS_GROUP)
+int    POC_WIDTH       = input.int(2, "线宽", minval=1, maxval=5, inline="poc_col", group=VP_ELEMENTS_GROUP)
+
+color NPOC_COLOR       = input.color(#787B86, "nPOC 颜色", inline="npoc_col", group=VP_ELEMENTS_GROUP)
+string NPOC_STYLE_IN   = input.string("Dashed", "线型", options=["Solid", "Dashed", "Dotted"], inline="npoc_col", group=VP_ELEMENTS_GROUP)
+int    NPOC_WIDTH      = input.int(2, "线宽", minval=1, maxval=5, inline="npoc_col", group=VP_ELEMENTS_GROUP)
+
+color VAH_COLOR        = input.color(#2962FF, "VAH 颜色", inline="vah_col", group=VP_ELEMENTS_GROUP)
+color VAL_COLOR        = input.color(#2962FF, "VAL 颜色", inline="val_col", group=VP_ELEMENTS_GROUP)
+string VAHVAL_STYLE_IN = input.string("Solid", "VAH/VAL 线型", options=["Solid", "Dashed", "Dotted"], group=VP_ELEMENTS_GROUP)
+int    VAHVAL_WIDTH    = input.int(1, "VAH/VAL 线宽", minval=1, maxval=5, group=VP_ELEMENTS_GROUP)
+
+color BACKGROUND_COLOR = input.color(#2962FF0D, "VA 背景填充色", group=VP_ELEMENTS_GROUP)
+
+// --- ICT Inputs ---
+bool   SHOW_ICT_LEVELS         = input.bool(true, "显示 ICT 关键位", group=ICT_STYLE_GROUP)
+bool   SHOW_OPEN_ONLY_ACTIVE   = input.bool(true, "活跃会话仅显示开盘价", group=ICT_STYLE_GROUP)
+bool   HIDE_SWEEPS_ON_HTF      = input.bool(true, "H1+周期隐藏已扫掠线", group=ICT_STYLE_GROUP)
+int    ICT_LINE_WIDTH          = input.int(1, "线条宽度", minval=1, maxval=5, group=ICT_STYLE_GROUP)
+string ICT_UNSWEPT_LABEL_SIZE  = input.string(size.small, "未扫标签大小",
+     options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge], group=ICT_STYLE_GROUP)
+string ICT_SWEPT_LABEL_SIZE    = input.string(size.tiny, "已扫标签大小",
+     options=[size.auto, size.tiny, size.small, size.normal, size.large, size.huge], group=ICT_STYLE_GROUP)
+int    ICT_BG_TRANSPARENCY     = input.int(88, "会话背景透明度(更淡)", minval=0, maxval=100, group=ICT_STYLE_GROUP)
+
+color ICT_LABEL_BG_COLOR = input.color(#FFFFFF, "标签背景颜色", group=ICT_STYLE_GROUP)
+int    ICT_LABEL_BG_TRANS = input.int(50, "标签背景透明度", minval=0, maxval=100, group=ICT_STYLE_GROUP)
+
+color COLOR_ASIA   = input.color(#FF9800, "亚洲盘颜色", group=ICT_STYLE_GROUP)
+color COLOR_LONDON = input.color(#089981,  "伦敦盘颜色", group=ICT_STYLE_GROUP)
+color COLOR_NY     = input.color(#F23645,    "纽约盘颜色", group=ICT_STYLE_GROUP)
+color COLOR_LONDON_NY_OVERLAP = input.color(#9C27B0, "伦敦纽约重叠颜色", group=ICT_STYLE_GROUP)
+color COLOR_ASIA_LONDON_OVERLAP = input.color(#00ff6a, "亚洲伦敦重叠颜色", group=ICT_STYLE_GROUP)
+
+// --- VWAP Inputs ---
+bool  SHOW_VWAP             = input.bool(true, "显示 S VWAP", group=VWAP_GROUP)
+string S_VWAP_ANCHOR        = input.string("自动", "S VWAP 锚定规则", options=["自动", "日", "周", "月"], tooltip="使用参考版 SVWAP 效果：1小时以下=日，1小时到4小时以下=周，4小时及以上=月；也可手动固定为日/周/月。", group=VWAP_GROUP)
+color VWAP_COLOR            = input.color(#00BCD4, "S VWAP 颜色", group=VWAP_GROUP)
+// New: SD Bands
+bool  SHOW_VWAP_BANDS       = input.bool(true, "显示 S VWAP 标准差带", group=VWAP_GROUP)
+// 独立控制
+float VWAP_SD_MULT_1        = input.float(1.0, "Band 1 (内) 倍数", step=0.1, group=VWAP_GROUP)
+color VWAP_SD_COLOR_1       = input.color(color.new(#4CAF50, 0), "Band 1 颜色", group=VWAP_GROUP)
+
+bool  SHOW_VWAP_BAND_2     = input.bool(true, "显示 Band 2 (外)", group=VWAP_GROUP)
+float VWAP_SD_MULT_2        = input.float(2.0, "Band 2 (外) 倍数", step=0.1, group=VWAP_GROUP)
+color VWAP_SD_COLOR_2       = input.color(#808000, "Band 2 颜色", group=VWAP_GROUP)
+
+
+// --- MTF VWAP Inputs ---
+bool  SHOW_WEEKLY_VWAP   = input.bool(true, "显示周 VWAP", group=MTF_VWAP_GROUP)
+bool  SHOW_MONTHLY_VWAP  = input.bool(true, "显示月 VWAP", group=MTF_VWAP_GROUP)
+bool  SMART_HIDE_VWAP    = input.bool(true, "🔥 智能隐藏图表连线", tooltip="如果周/月 VWAP 距离当前价格超过 N 倍 ATR，则图表上的线条会自动隐藏（防压缩）。", group=MTF_VWAP_GROUP)
+float VWAP_ATR_MULT      = input.float(5.0, "过滤阈值 (ATR倍数)", minval=1.0, step=0.5, group=MTF_VWAP_GROUP)
+
+color WEEKLY_VWAP_COLOR  = input.color(#9C27B0, "周 VWAP 颜色", group=MTF_VWAP_GROUP)
+color MONTHLY_VWAP_COLOR = input.color(#E91E63, "月 VWAP 颜色", group=MTF_VWAP_GROUP)
+
+// --- Daily Open Inputs ---
+bool   SHOW_DO_LINE        = input.bool(false, "显示日线开盘价线条 (DO)", group=DO_GROUP)
+color  DO_COLOR            = input.color(#FFFF00, "DO 颜色", group=DO_GROUP)
+int    DO_WIDTH            = input.int(2, "DO 线宽", minval=1, maxval=5, group=DO_GROUP)
+string DO_STYLE_IN         = input.string("Dashed", "DO 线型", options=["Solid", "Dashed", "Dotted"], group=DO_GROUP)
+
+// --- EMA Inputs ---
+bool  SHOW_EMA_FILTER = input.bool(true, "显示 EMA 趋势过滤", group=EMA_GROUP)
+
+bool  SHOW_EMA_1      = input.bool(false, "EMA 9", inline="ema1", group=EMA_GROUP)
+int   EMA_1_LEN       = input.int(9, "周期", minval=1, maxval=500, inline="ema1", group=EMA_GROUP)
+color EMA_1_COLOR     = input.color(#00FF6A, "颜色", inline="ema1", group=EMA_GROUP)
+int   EMA_1_WIDTH     = input.int(2, "EMA 9 线宽", minval=1, maxval=5, group=EMA_GROUP)
+
+bool  SHOW_EMA_2      = input.bool(false, "EMA 21", inline="ema2", group=EMA_GROUP)
+int   EMA_2_LEN       = input.int(21, "周期", minval=1, maxval=500, inline="ema2", group=EMA_GROUP)
+color EMA_2_COLOR     = input.color(#FF00FF, "颜色", inline="ema2", group=EMA_GROUP)
+int   EMA_2_WIDTH     = input.int(2, "EMA 21 线宽", minval=1, maxval=5, group=EMA_GROUP)
+
+bool  SHOW_EMA_3      = input.bool(false, "EMA 34", inline="ema3", group=EMA_GROUP)
+int   EMA_3_LEN       = input.int(34, "周期", minval=1, maxval=500, inline="ema3", group=EMA_GROUP)
+color EMA_3_COLOR     = input.color(#2962FF, "颜色", inline="ema3", group=EMA_GROUP)
+int   EMA_3_WIDTH     = input.int(2, "EMA 34 线宽", minval=1, maxval=5, group=EMA_GROUP)
+
+bool  SHOW_EMA_4      = input.bool(false, "EMA 55", inline="ema4", group=EMA_GROUP)
+int   EMA_4_LEN       = input.int(55, "周期", minval=1, maxval=500, inline="ema4", group=EMA_GROUP)
+color EMA_4_COLOR     = input.color(#FF9800, "颜色", inline="ema4", group=EMA_GROUP)
+int   EMA_4_WIDTH     = input.int(2, "EMA 55 线宽", minval=1, maxval=5, group=EMA_GROUP)
+
+bool  SHOW_EMA_12_CLOUD = input.bool(true, "显示 EMA 9/21 快速趋势云", group=EMA_GROUP)
+bool  SHOW_EMA_34_CLOUD = input.bool(true, "显示 EMA 34/55 慢速趋势云", group=EMA_GROUP)
+color EMA_12_CLOUD_BULL = input.color(color.new(#00FF6A, 60), "EMA 9/21 多头填充", inline="ema12cloud", group=EMA_GROUP)
+color EMA_12_CLOUD_BEAR = input.color(color.new(#FF00FF, 60), "空头填充", inline="ema12cloud", group=EMA_GROUP)
+color EMA_34_CLOUD_BULL = input.color(color.new(#2962FF, 75), "EMA 34/55 多头填充", inline="ema34cloud", group=EMA_GROUP)
+color EMA_34_CLOUD_BEAR = input.color(color.new(#FF9800, 75), "空头填充", inline="ema34cloud", group=EMA_GROUP)
+
+// --- Sessions Inputs ---
+string MARKET_MODE       = input.string("自动", "会话周末模式", options=["自动", "Crypto (7x24)", "Forex/Stock (No Weekend)"], tooltip="通常保持自动。加密7x24不过滤周末；外汇/股票周末过滤。", group=SESSIONS_GROUP)
+int    ICT_LOOKBACK_DAYS = input.int(1, "回溯天数", minval=1, maxval=5, group=SESSIONS_GROUP)
+
+bool   SHOW_ASIA   = input.bool(true, "亚洲盘", inline="asia", group=SESSIONS_GROUP)
+string TIME_ASIA   = input.session("0800-1600", "亚洲时段", inline="asia", tooltip="默认延长到16:00上海时间：夏令时伦敦08:00=上海15:00，可正确显示亚洲/伦敦重叠；冬令时伦敦08:00=上海16:00，重叠自然消失。", group=SESSIONS_GROUP)
+string TZ_ASIA     = input.string("Asia/Shanghai", "亚洲时区", options=["Asia/Shanghai", "Asia/Tokyo", "UTC"], group=SESSIONS_GROUP)
+
+bool   SHOW_LONDON = input.bool(true, "伦敦盘", inline="london", group=SESSIONS_GROUP)
+string TIME_LONDON = input.session("0800-1630", "伦敦本地", inline="london", group=SESSIONS_GROUP)
+string TZ_LONDON   = input.string("Europe/London", "伦敦时区(IANA自动夏冬令时)", options=["Europe/London", "UTC"], group=SESSIONS_GROUP)
+
+bool   SHOW_NY     = input.bool(true, "纽约盘", inline="ny", group=SESSIONS_GROUP)
+string TIME_NY     = input.session("0930-1600", "纽约本地", inline="ny", group=SESSIONS_GROUP)
+string TZ_NY       = input.string("America/New_York", "纽约时区(IANA自动夏冬令时)", options=["America/New_York", "UTC"], group=SESSIONS_GROUP)
+
+
+// --- DMI Path Table Inputs ---
+bool SHOW_DMI_TABLE = input.bool(true, "显示决策表", group=DMI_TABLE_GROUP)
+string TABLE_VIEW_MODE = input.string("简洁", "模式", options=["简洁", "详细"], tooltip="简洁适合实盘，只显示等级/处理/结构/量能/CVD/计划/失效；详细用于复盘和调参。", group=DMI_TABLE_GROUP)
+bool SHOW_HTF_ROW = input.bool(true, "简洁模式显示高周", group=DMI_TABLE_GROUP)
+bool USE_HTF_FILTER = input.bool(true, "高周期过滤", group=DMI_TABLE_GROUP)
+string HTF_MODE = input.string("自动", "高周期", options=["自动", "15", "60", "240", "D", "W"], group=DMI_TABLE_GROUP)
+int ACCEPT_BARS = input.int(2, "接受确认K数", minval=1, maxval=5, group=DMI_TABLE_GROUP)
+bool FILTER_CVD_DIVERGENCE_BY_KEY_LEVEL = input.bool(true, "CVD背离需靠近关键位", group=DMI_TABLE_GROUP)
+float CVD_KEY_LEVEL_ATR = input.float(0.45, "CVD关键位距离", minval=0.1, maxval=2.0, step=0.05, group=DMI_TABLE_GROUP)
+bool A_ONLY_NEAR_KEY_LEVEL = input.bool(true, "A级必须靠近关键位", tooltip="开启后，非关键位中间位置最多显示B级，减少追单。", group=DMI_TABLE_GROUP)
+float A_KEY_LEVEL_ATR = input.float(0.60, "A级关键位距离", minval=0.1, maxval=2.0, step=0.05, group=DMI_TABLE_GROUP)
+int GRADE_STABLE_BARS = input.int(2, "A级稳定K数", minval=1, maxval=5, tooltip="升级到A级需要连续确认；X风险仍立即生效。", group=DMI_TABLE_GROUP)
+int DMI_ADX_SMOOTH = input.int(10, "ADX平滑", minval=1, group=DMI_TABLE_GROUP)
+int DMI_DI_LEN = input.int(10, "DI周期", minval=1, group=DMI_TABLE_GROUP)
+float DMI_ADX_TREND = input.float(20.0, "趋势ADX阈值", minval=1, step=0.5, group=DMI_TABLE_GROUP)
+float DMI_ADX_HOT = input.float(40.0, "过热ADX阈值", minval=1, step=0.5, group=DMI_TABLE_GROUP)
+float DMI_DI_NEAR = input.float(3.0, "DI接近阈值", minval=0.1, step=0.1, group=DMI_TABLE_GROUP)
+string DMI_TABLE_POS = input.string("左下", "表格位置", options=["右上", "右中", "右下", "左上", "左中", "左下", "中上", "中下"], group=DMI_TABLE_GROUP)
+string DMI_TABLE_SIZE = input.string("小", "表格字体", options=["自动", "极小", "小", "正常"], group=DMI_TABLE_GROUP)
+color DMI_TABLE_HEADER_BG = input.color(#111827, "表头背景", group=DMI_TABLE_GROUP)
+color DMI_TABLE_CELL_BG = input.color(#0B1220, "单元格背景", group=DMI_TABLE_GROUP)
+color DMI_TABLE_TEXT = input.color(#F9FAFB, "文字颜色", group=DMI_TABLE_GROUP)
+color DMI_TABLE_KEY = input.color(#CBD5E1, "左列文字", group=DMI_TABLE_GROUP)
+color DMI_TABLE_BULL = input.color(#065F46, "偏多颜色", group=DMI_TABLE_GROUP)
+color DMI_TABLE_BEAR = input.color(#7F1D1D, "偏空颜色", group=DMI_TABLE_GROUP)
+color DMI_TABLE_WARN = input.color(#92400E, "警戒颜色", group=DMI_TABLE_GROUP)
+
+
+// --- CVD Inputs ---
+bool SHOW_CVD_CONFIRM = input.bool(true, "启用 CVD 确认/背离", group=CVD_GROUP)
+bool CVD_ANCHOR_AUTO = input.bool(true, "CVD 自动锚定周期", tooltip="自动模式：4小时以下按日重置，4小时到日线按周重置，日线及以上按月重置。", group=CVD_GROUP)
+string CVD_ANCHOR_MANUAL = input.timeframe("D", "CVD 手动锚定周期", group=CVD_GROUP)
+bool CVD_LTF_AUTO = input.bool(true, "CVD 自动低周期", tooltip="低周期越小越精细，但历史越短、计算越重。", group=CVD_GROUP)
+string CVD_LTF_MANUAL = input.timeframe("1", "CVD 手动低周期", group=CVD_GROUP)
+int CVD_SLOPE_LEN = input.int(5, "CVD 动能观察K数", minval=2, maxval=50, group=CVD_GROUP)
+int CVD_DIVERGENCE_LEN = input.int(20, "CVD 背离观察K数", minval=5, maxval=100, group=CVD_GROUP)
+int CVD_ABSORB_LEN = input.int(12, "CVD 吸收/派发观察K数", minval=5, maxval=50, group=CVD_GROUP)
+float CVD_ABSORB_PRICE_ATR = input.float(0.8, "吸收价格压缩阈值(ATR)", minval=0.2, maxval=3.0, step=0.1, group=CVD_GROUP)
+float CVD_ABSORB_DELTA_MULT = input.float(3.0, "吸收CVD变化倍数", minval=1.0, maxval=10.0, step=0.5, group=CVD_GROUP)
+float CVD_CONFIRM_WEIGHT = input.float(1.0, "CVD评分权重", minval=0.0, maxval=2.0, step=0.5, group=CVD_GROUP)
+
+// --- Pro Inputs ---
+string PRO_PERF_MODE = input.string("标准", "性能模式", options=["完整", "标准", "轻量"], tooltip="完整保留更多绘制；标准适合日内；轻量减少重型绘制和视觉噪音。", group=PRO_GROUP)
+bool ENABLE_PRO_ALERTS = input.bool(true, "启用提醒条件", group=PRO_GROUP)
+
+
+int MAX_ARRAY_SIZE = 95000
+
+int MAX_DRAW_BARS_BACK = 9000
+int CHART_LINE_VISIBLE_DAYS = input.int(30, "图表连续线显示最近天数", minval=1, maxval=365, tooltip="只限制连续图表线：S VWAP/标准带、周/月 VWAP、EMA 云。右侧价格轴、SVP/POC/VAH/VAL/nPOC、ICT 会话结构不受影响。", group=APPEARANCE_GROUP)
+
+//====================================================
+// Helpers & Logic
+//====================================================
+int FINAL_ROWS = NUM_ROWS
+int chartLineWindowMs = CHART_LINE_VISIBLE_DAYS * 24 * 60 * 60 * 1000
+bool showRecentChartLine = time >= timenow - chartLineWindowMs
+bool proLightMode = PRO_PERF_MODE == "轻量"
+
+f_dmi_pos(string p) =>
+    switch p
+        "右上" => position.top_right
+        "右中" => position.middle_right
+        "右下" => position.bottom_right
+        "左上" => position.top_left
+        "左中" => position.middle_left
+        "左下" => position.bottom_left
+        "中上" => position.top_center
+        "中下" => position.bottom_center
+        => position.top_right
+
+f_dmi_size(string s) =>
+    switch s
+        "自动" => size.auto
+        "极小" => size.tiny
+        "小" => size.small
+        "正常" => size.normal
+        => size.tiny
+
+// 智能跨市场识别
+string tickerUpper = str.upper(syminfo.ticker)
+string tickerIdUpper = str.upper(syminfo.tickerid)
+bool autoCrypto = syminfo.type == "crypto"
+bool autoForex = syminfo.type == "forex"
+bool autoStock = syminfo.type == "stock" or syminfo.type == "dr" or syminfo.type == "fund"
+bool autoFutures = syminfo.type == "futures"
+bool autoIndex = syminfo.type == "index" or syminfo.type == "indices"
+bool autoCfd = syminfo.type == "cfd"
+bool autoMetal = str.contains(tickerUpper, "XAU") or str.contains(tickerUpper, "XAG") or str.contains(tickerUpper, "GOLD") or str.contains(tickerUpper, "SILVER") or str.contains(tickerUpper, "GC") or str.contains(tickerUpper, "SI1") or str.contains(tickerIdUpper, "COMEX:GC") or str.contains(tickerIdUpper, "COMEX:SI")
+bool autoOptionLike = syminfo.type == "warrant" or syminfo.type == "right" or str.contains(tickerUpper, "CALL") or str.contains(tickerUpper, "PUT")
+
+string autoMarket = autoOptionLike ? "期权标的" : autoMetal ? "贵金属" : autoCrypto ? "加密" : autoForex ? "外汇" : autoStock ? "股票" : autoIndex ? "指数" : autoFutures ? "期货" : autoCfd ? "通用" : "通用"
+string activeMarket = MARKET_PRESET == "自动" ? autoMarket : MARKET_PRESET
+
+bool marketMetal = activeMarket == "贵金属"
+bool marketForex = activeMarket == "外汇"
+bool marketCrypto = activeMarket == "加密"
+bool marketStock = activeMarket == "股票"
+bool marketOption = activeMarket == "期权标的"
+
+
+// Crypto 默认不过滤周末；外汇/股票/贵金属/期权等默认过滤周末。
+bool forceNoWeekend = (MARKET_MODE == "Forex/Stock (No Weekend)")
+bool forceCryptoWeekend = (MARKET_MODE == "Crypto (7x24)")
+bool isCrypto = forceCryptoWeekend or (marketCrypto and not forceNoWeekend)
+
+// Crypto 默认不过滤周末；Forex/Stock 模式按各会话本地时区过滤周末。
+f_is_weekend(string tz) =>
+    int dw = dayofweek(time, tz)
+    dw == dayofweek.saturday or dw == dayofweek.sunday
+
+maxIndex(float[] a) =>
+    if array.size(a) == 0
+        na
+    else
+        float m = array.get(a, 0)
+        int idx = 0
+        for i = 1 to array.size(a) - 1
+            float v = array.get(a, i)
+            if v > m
+                m := v
+                idx := i
+        idx
+
+f_rebuild_polyline(polyline pl, array<chart.point> pts, color col) =>
+    if not na(pl)
+        polyline.delete(pl)
+    polyline newPl = na
+    if array.size(pts) > 1
+        newPl := polyline.new(pts, line_color=col, line_width=1)
+    newPl
+
+// [NEW] Helper for VP Styles
+f_get_style(str) =>
+    str == "Solid" ? line.style_solid : str == "Dotted" ? line.style_dotted : line.style_dashed
+
+poc_style_str = f_get_style(POC_STYLE_IN)
+npoc_style_str = f_get_style(NPOC_STYLE_IN)
+vahval_style_str = f_get_style(VAHVAL_STYLE_IN)
+
+f_near(float a, float b, float threshold) =>
+    not na(a) and not na(b) and math.abs(a - b) <= threshold
+
+
+f_dist_text(float price, float refWidth) =>
+    if na(price)
+        ""
+    else
+        float mt = math.max(syminfo.mintick, 1e-10)
+        float d = close - price
+        string side = d > 0 ? "+" : d < 0 ? "-" : ""
+        string tickTxt = side + str.tostring(int(math.round(math.abs(d) / mt))) + "t"
+        string rTxt = not na(refWidth) and refWidth > 0 ? "｜" + str.tostring(math.abs(d) / refWidth, "#.00") + "VA" : ""
+        tickTxt + rTxt
+
+//====================================================
+// SVP Types
+//====================================================
+type NakedPOC
+    line ln
+    float price
+    bool active
+    int startBar
+
+var array<NakedPOC> npocList = array.new<NakedPOC>()
+
+type VolumeProfileEngine
+    float[] hPrices
+    float[] lPrices
+    float[] volumes
+    float minProfilePrice
+    float maxProfilePrice
+    float priceStepSize
+    polyline profileHistLower
+    polyline profileHistUpper
+    polyline valueAreaHistLower
+    polyline valueAreaHistUpper
+    line pocLevelLine
+    line vahLevelLine
+    line valLevelLine
+    label pocLevelLabel
+    label vahLevelLabel
+    label valLevelLabel
+    linefill vaFill
+    float lastPocPrice
+    float lastVahPrice
+    float lastValPrice
+
+f_clearVpObjects(VolumeProfileEngine this) =>
+    if not na(this.profileHistLower)
+        polyline.delete(this.profileHistLower)
+    else
+        na
+    if not na(this.profileHistUpper)
+        polyline.delete(this.profileHistUpper)
+    else
+        na
+    if not na(this.valueAreaHistLower)
+        polyline.delete(this.valueAreaHistLower)
+    else
+        na
+    if not na(this.valueAreaHistUpper)
+        polyline.delete(this.valueAreaHistUpper)
+    else
+        na
+    if not na(this.pocLevelLine)
+        line.delete(this.pocLevelLine)
+    else
+        na
+    if not na(this.vahLevelLine)
+        line.delete(this.vahLevelLine)
+    else
+        na
+    if not na(this.valLevelLine)
+        line.delete(this.valLevelLine)
+    else
+        na
+    if not na(this.pocLevelLabel)
+        label.delete(this.pocLevelLabel)
+    else
+        na
+    if not na(this.vahLevelLabel)
+        label.delete(this.vahLevelLabel)
+    else
+        na
+    if not na(this.valLevelLabel)
+        label.delete(this.valLevelLabel)
+    else
+        na
+    if not na(this.vaFill)
+        linefill.delete(this.vaFill)
+    else
+        na
+    this.profileHistLower := na
+    this.profileHistUpper := na
+    this.valueAreaHistLower := na
+    this.valueAreaHistUpper := na
+    this.pocLevelLine := na
+    this.vahLevelLine := na
+    this.valLevelLine := na
+    this.pocLevelLabel := na
+    this.vahLevelLabel := na
+    this.valLevelLabel := na
+    this.vaFill := na
+
+f_clearVpData(VolumeProfileEngine this) =>
+    if not na(this.hPrices)
+        array.clear(this.hPrices)
+    if not na(this.lPrices)
+        array.clear(this.lPrices)
+    if not na(this.volumes)
+        array.clear(this.volumes)
+
+
+method initialize(VolumeProfileEngine this) =>
+    this.hPrices := array.new_float()
+    this.lPrices := array.new_float()
+    this.volumes := array.new_float()
+    this.minProfilePrice := na
+    this.maxProfilePrice := na
+    this.priceStepSize := na
+    this.lastPocPrice := na
+    this.lastVahPrice := na
+    this.lastValPrice := na
+    this
+
+method calculatePriceBucket(VolumeProfileEngine this, float price) =>
+    float raw = math.floor((price - this.minProfilePrice) / this.priceStepSize)
+    math.max(0, math.min(int(raw), FINAL_ROWS - 1))
+
+method getBucketCenterPrice(VolumeProfileEngine this, int bucketIndex) =>
+    (bucketIndex + 0.5) * this.priceStepSize + this.minProfilePrice
+
+method storeBatchBars(VolumeProfileEngine this, float[] batchHighs, float[] batchLows, float[] batchVols) =>
+    if array.size(batchHighs) > 0
+        int currentSize = array.size(this.hPrices)
+        int roomLeft = math.max(0, MAX_ARRAY_SIZE - currentSize)
+        int barsToStore = math.min(array.size(batchHighs), roomLeft)
+        if barsToStore > 0
+            for i = 0 to barsToStore - 1
+                float h = array.get(batchHighs, i)
+                float l = array.get(batchLows, i)
+                float v = array.get(batchVols, i)
+                if not na(h) and not na(l) and not na(v)
+                    array.push(this.hPrices, h)
+                    array.push(this.lPrices, l)
+                    array.push(this.volumes, v)
+                    this.minProfilePrice := na(this.minProfilePrice) ? l : math.min(this.minProfilePrice, l)
+                    this.maxProfilePrice := na(this.maxProfilePrice) ? h : math.max(this.maxProfilePrice, h)
+
+method storeSingleBar(VolumeProfileEngine this, float h, float l, float v) =>
+    if array.size(this.hPrices) < MAX_ARRAY_SIZE
+        array.push(this.hPrices, h)
+        array.push(this.lPrices, l)
+        array.push(this.volumes, v)
+        this.minProfilePrice := na(this.minProfilePrice) ? l : math.min(this.minProfilePrice, l)
+        this.maxProfilePrice := na(this.maxProfilePrice) ? h : math.max(this.maxProfilePrice, h)
+
+method createTwoTonePolyline(VolumeProfileEngine this, int[] barPositions, int profileStartBar, float stepSize, float rowHeight,
+     color lowerColor, color upperColor) =>
+    lowerPts = array.new<chart.point>()
+    upperPts = array.new<chart.point>()
+    float halfH = rowHeight / 2.0
+    float heightGap = math.max(0.0, (stepSize - rowHeight) / 2)
+
+    for [idx, barPos] in barPositions
+        if barPos > profileStartBar
+            float base = idx * stepSize + this.minProfilePrice + heightGap
+            float lowerBottom = base
+            float lowerTop    = base + halfH
+            float upperBottom = lowerTop
+            float upperTop    = base + rowHeight
+
+            array.push(lowerPts, chart.point.from_index(profileStartBar, lowerBottom))
+            array.push(lowerPts, chart.point.from_index(barPos,          lowerBottom))
+            array.push(lowerPts, chart.point.from_index(barPos,          lowerTop))
+            array.push(lowerPts, chart.point.from_index(profileStartBar, lowerTop))
+
+            array.push(upperPts, chart.point.from_index(profileStartBar, upperBottom))
+            array.push(upperPts, chart.point.from_index(barPos,          upperBottom))
+            array.push(upperPts, chart.point.from_index(barPos,          upperTop))
+            array.push(upperPts, chart.point.from_index(profileStartBar, upperTop))
+
+    polyline pLower = na
+    polyline pUpper = na
+    if array.size(lowerPts) > 1
+        pLower := polyline.new(lowerPts, closed=true, line_color=lowerColor, fill_color=lowerColor)
+    if array.size(upperPts) > 1
+        pUpper := polyline.new(upperPts, closed=true, line_color=upperColor, fill_color=upperColor)
+    [pLower, pUpper]
+
+method processAndRender(VolumeProfileEngine this, int profileStartBar, int profileEndBar, bool isActiveProfile) =>
+    if array.size(this.hPrices) > 0 and profileEndBar > profileStartBar
+        float priceRange = math.max(this.maxProfilePrice - this.minProfilePrice, syminfo.mintick)
+        float rawStep = priceRange / FINAL_ROWS
+        float minStep = syminfo.mintick * VP_MIN_TICK_MULT
+        this.priceStepSize := math.max(rawStep, minStep)
+
+        float[] volumeDistribution = array.new_float(FINAL_ROWS, 0)
+        int count = array.size(this.hPrices)
+
+        for i = 0 to count - 1
+            float pHigh = array.get(this.hPrices, i)
+            float pLow  = array.get(this.lPrices, i)
+            float pVol  = array.get(this.volumes, i)
+
+            int startBucket = this.calculatePriceBucket(pLow)
+            int endBucket   = this.calculatePriceBucket(pHigh)
+            if endBucket < startBucket
+                int tmp = startBucket
+                startBucket := endBucket
+                endBucket := tmp
+
+            int bucketsSpanned = endBucket - startBucket + 1
+            float volumePerBucket = bucketsSpanned > 0 ? pVol / bucketsSpanned : 0.0
+            for bucketIndex = startBucket to endBucket
+                array.set(volumeDistribution, bucketIndex, array.get(volumeDistribution, bucketIndex) + volumePerBucket)
+
+        float maxVolumeInProfile = array.max(volumeDistribution)
+        if maxVolumeInProfile > 0
+            int profileBarLength  = profileEndBar - profileStartBar
+            int maxHistogramWidth = math.round(profileBarLength * MAX_WIDTH / 100)
+
+            int[] nonVaPositions = array.new_int()
+            int[] vaPositions    = array.new_int()
+
+            int pocBucketIndex = maxIndex(volumeDistribution)
+            float totalProfileVolume = array.sum(volumeDistribution)
+            float valueAreaThresholdVol = totalProfileVolume * VALUE_AREA_THRESHOLD / 100
+            float currentValueAreaVolume = array.get(volumeDistribution, pocBucketIndex)
+            int valueAreaHighBucket = pocBucketIndex
+            int valueAreaLowBucket  = pocBucketIndex
+            int loopGuard = 0
+
+            while currentValueAreaVolume < valueAreaThresholdVol and loopGuard < FINAL_ROWS
+                loopGuard += 1
+                bool canUp = valueAreaHighBucket < FINAL_ROWS - 1
+                bool canDn = valueAreaLowBucket > 0
+                  
+                if not canUp and not canDn
+                    break
+                      
+                float vUp = canUp ? array.get(volumeDistribution, valueAreaHighBucket + 1) : 0
+                float vDn = canDn ? array.get(volumeDistribution, valueAreaLowBucket - 1) : 0
+                  
+                if (vUp >= vDn and canUp)
+                    currentValueAreaVolume += vUp
+                    valueAreaHighBucket += 1
+                else if canDn
+                    currentValueAreaVolume += vDn
+                    valueAreaLowBucket -= 1
+                else
+                    break
+
+            float pocPrice = this.getBucketCenterPrice(pocBucketIndex)
+            float valueAreaHighPrice = (valueAreaHighBucket + 1) * this.priceStepSize + this.minProfilePrice
+            float valueAreaLowPrice  = valueAreaLowBucket * this.priceStepSize + this.minProfilePrice
+            this.lastPocPrice := pocPrice
+            this.lastVahPrice := valueAreaHighPrice
+            this.lastValPrice := valueAreaLowPrice
+
+            bool profileSpanDrawable = (profileEndBar - profileStartBar) <= MAX_DRAW_BARS_BACK
+            bool renderProfileObjects = (isActiveProfile or (RENDER_COMPLETED_PROFILE and not proLightMode)) and profileSpanDrawable
+
+            for [bucketIndex, volumeAmount] in volumeDistribution
+                int barWidth = math.round(volumeAmount / maxVolumeInProfile * maxHistogramWidth)
+                int barEndPosition = profileStartBar + barWidth
+                bool inVA = bucketIndex >= valueAreaLowBucket and bucketIndex <= valueAreaHighBucket
+                array.push(vaPositions,    inVA ? barEndPosition : profileStartBar)
+                array.push(nonVaPositions, inVA ? profileStartBar : barEndPosition)
+
+            float rowHeight = HEIGHT_PERCENTAGE_PER_ROW / 100 * this.priceStepSize
+
+            if renderProfileObjects
+                f_clearVpObjects(this)
+
+                if SHOW_PROFILE_HIST and not proLightMode
+                    [pl1, pu1] = this.createTwoTonePolyline(nonVaPositions, profileStartBar, this.priceStepSize, rowHeight, PROFILE_COLOR_LOWER, PROFILE_COLOR_UPPER)
+                    this.profileHistLower := pl1
+                    this.profileHistUpper := pu1
+                    [pl2, pu2] = this.createTwoTonePolyline(vaPositions, profileStartBar, this.priceStepSize, rowHeight, VALUE_AREA_COLOR_LOWER, VALUE_AREA_COLOR_UPPER)
+                    this.valueAreaHistLower := pl2
+                    this.valueAreaHistUpper := pu2
+
+                int OFFSET = 1
+                int lineVisualEndX = profileEndBar
+                if isActiveProfile and EXTEND_POC
+                    lineVisualEndX := bar_index + OFFSET
+
+                int labelX = profileStartBar
+                color labelBgColor = color.new(VP_LABEL_BG_COLOR, VP_LABEL_BG_TRANS)
+                bool renderVpLeftLabels = not isActiveProfile or SHOW_ACTIVE_VP_LABELS
+
+                if SHOW_POC
+                    this.pocLevelLine := line.new(profileStartBar, pocPrice, lineVisualEndX, pocPrice, color=POC_COLOR, width=POC_WIDTH, style=poc_style_str)
+                    string txt = "POC"
+                    if SHOW_PRICE_LABELS
+                        txt += ": " + str.tostring(pocPrice, format.mintick)
+                    if renderVpLeftLabels
+                        this.pocLevelLabel := label.new(labelX, pocPrice, txt, xloc=xloc.bar_index, yloc=yloc.price,
+                              color=labelBgColor, textcolor=POC_COLOR, style=label.style_label_up, textalign=text.align_left, size=VP_LABEL_SIZE)
+
+                if SHOW_VAH_VAL
+                    color vahLineCol = SHOW_VAH_VAL_LINES ? VAH_COLOR : color.new(VAH_COLOR, 100)
+                    color valLineCol = SHOW_VAH_VAL_LINES ? VAL_COLOR : color.new(VAL_COLOR, 100)
+
+                    this.vahLevelLine := line.new(profileStartBar, valueAreaHighPrice, lineVisualEndX, valueAreaHighPrice, color=vahLineCol, width=VAHVAL_WIDTH, style=vahval_style_str)
+                    this.valLevelLine := line.new(profileStartBar, valueAreaLowPrice,  lineVisualEndX, valueAreaLowPrice,  color=valLineCol, width=VAHVAL_WIDTH, style=vahval_style_str)
+
+                    string txtVah = "VAH"
+                    string txtVal = "VAL"
+                    if SHOW_PRICE_LABELS
+                        txtVah += ": " + str.tostring(valueAreaHighPrice, format.mintick)
+                        txtVal += ": " + str.tostring(valueAreaLowPrice,  format.mintick)
+
+                    if renderVpLeftLabels
+                        this.vahLevelLabel := label.new(labelX, valueAreaHighPrice, txtVah, xloc=xloc.bar_index, yloc=yloc.price,
+                              color=labelBgColor, textcolor=VAH_COLOR, style=label.style_label_down, textalign=text.align_left, size=VP_LABEL_SIZE)
+                        this.valLevelLabel := label.new(labelX, valueAreaLowPrice,  txtVal, xloc=xloc.bar_index, yloc=yloc.price,
+                              color=labelBgColor, textcolor=VAL_COLOR, style=label.style_label_up,    textalign=text.align_left, size=VP_LABEL_SIZE)
+
+                    if SHOW_BACKGROUND and SHOW_VAH_VAL_LINES
+                        this.vaFill := linefill.new(this.vahLevelLine, this.valLevelLine, BACKGROUND_COLOR)
+
+//====================================================
+// Auto TF
+//====================================================
+getAutoProfileTF() =>
+    int sec = timeframe.in_seconds(timeframe.period)
+    sec < 2700  ? "D" :
+     sec < 10800 ? "W" :
+     sec < 86400 ? "M" : "12M"
+
+string autoProfileByMarket = marketStock or marketMetal ? "D" : marketForex ? (timeframe.in_seconds(timeframe.period) < 3600 ? "D" : "W") : marketCrypto ? getAutoProfileTF() : getAutoProfileTF()
+string targetProfileTF = AUTO_PROFILE_TF ? autoProfileByMarket : MANUAL_PROFILE_TF
+
+getAutoPrecisionTF() =>
+    int sec = timeframe.in_seconds(timeframe.period)
+    sec <= 180   ? "1"  :
+     sec <= 300  ? "1"  :
+     sec <= 900  ? "5"  :
+     sec <= 1800 ? "5"  :
+     sec <= 3600 ? "15" :
+     sec <= 14400? "60" :
+     sec <= 86400? "240": "D"
+
+string finalPrecisionTF_raw = AUTO_PRECISION ? getAutoPrecisionTF() : MANUAL_PRECISION_TF
+bool safeToUsePrecision_raw = USE_PRECISION and timeframe.in_seconds(finalPrecisionTF_raw) < timeframe.in_seconds(timeframe.period)
+
+int profSec = timeframe.in_seconds(targetProfileTF)
+int precSec = timeframe.in_seconds(finalPrecisionTF_raw)
+int estBarsInProfile = precSec > 0 ? int(math.round(profSec / precSec)) : 0
+int estCost = FINAL_ROWS * estBarsInProfile
+bool degrade = AUTO_DEGRADE_PRECISION and safeToUsePrecision_raw and estCost > DEGRADE_THRESHOLD
+string finalPrecisionTF = finalPrecisionTF_raw
+bool safeToUsePrecision = safeToUsePrecision_raw and not degrade
+
+var float[] ltfHighs = array.new_float()
+var float[] ltfLows  = array.new_float()
+var float[] ltfVols  = array.new_float()
+
+var label precisionWarnLabel = na
+
+if safeToUsePrecision
+    [tmpH, tmpL, tmpV] = request.security_lower_tf(syminfo.tickerid, finalPrecisionTF, [high, low, volume], ignore_invalid_symbol=true)
+    ltfHighs := tmpH
+    ltfLows  := tmpL
+    ltfVols  := tmpV
+else
+    array.clear(ltfHighs)
+    array.clear(ltfLows)
+    array.clear(ltfVols)
+
+//====================================================
+// VWAP Core (Calculation)
+//====================================================
+type VwapAccumulator
+    float sumW = 0.0
+    float sumWSrc = 0.0
+    float sumWSrcSq = 0.0 // Added for Variance/SD Calculation
+
+method update(VwapAccumulator this, bool reset, float w, float src) =>
+    if reset
+        this.sumW := 0.0
+        this.sumWSrc := 0.0
+        this.sumWSrcSq := 0.0
+    if na(this.sumW)
+        this.sumW := 0.0
+    if na(this.sumWSrc)
+        this.sumWSrc := 0.0
+    if na(this.sumWSrcSq)
+        this.sumWSrcSq := 0.0
+    float ww = na(w) ? 0.0 : w
+    if ww > 0 and not na(src)
+        this.sumW += ww
+        this.sumWSrc += ww * src
+        this.sumWSrcSq += ww * src * src
+
+method getVwap(VwapAccumulator this) =>
+    nz(this.sumW, 0.0) > 0 ? nz(this.sumWSrc, 0.0) / nz(this.sumW, 0.0) : na
+
+// New: Method to get Standard Deviation
+method getStDev(VwapAccumulator this, float vwapVal) =>
+    if nz(this.sumW, 0.0) > 0 and not na(vwapVal)
+        float variance = (nz(this.sumWSrcSq, 0.0) / nz(this.sumW, 0.0)) - (vwapVal * vwapVal)
+        math.sqrt(math.max(0, variance))
+    else
+        na
+
+float src_now = hlc3
+float w_now   = nz(volume)
+
+// [FIX Warning 644] Explicit check against 0
+bool isNewDayForVwap = ta.change(time("D")) != 0 
+var VwapAccumulator accDaily = VwapAccumulator.new()
+accDaily.update(isNewDayForVwap, w_now, src_now)
+float vwapDaily = accDaily.getVwap()
+float sdDaily = accDaily.getStDev(vwapDaily)
+
+bool isNewWeek  = ta.change(time("W"))   != 0
+bool isNewMonth = ta.change(time("M"))   != 0
+var VwapAccumulator accWeekly  = VwapAccumulator.new()
+var VwapAccumulator accMonthly = VwapAccumulator.new()
+accWeekly.update(isNewWeek,    w_now, src_now)
+accMonthly.update(isNewMonth, w_now, src_now)
+
+float vwapWeekly  = accWeekly.getVwap()
+float vwapMonthly = accMonthly.getVwap()
+
+// Logic for S VWAP Anchor Selection
+int tf_sec = timeframe.in_seconds(timeframe.period)
+
+// 参考版 SVWAP 效果：用累加器选择 D/W/M 主线与标准差，避免官方 anchored ta.vwap 在周期交接处拉出斜直线。
+string autoSvwByMarket = (marketMetal or marketForex or marketStock or marketOption) ? (tf_sec < 14400 ? "D" : "W") : (tf_sec < 3600 ? "D" : tf_sec < 14400 ? "W" : "M")
+string sVwapBasis = S_VWAP_ANCHOR == "自动" ? autoSvwByMarket : S_VWAP_ANCHOR == "日" ? "D" : S_VWAP_ANCHOR == "周" ? "W" : "M"
+
+//====================================================
+// CVD Confirmation Core
+//====================================================
+f_cvd_auto_ltf() =>
+    int sec = timeframe.in_seconds(timeframe.period)
+    sec <= 60 ? "1S" : sec <= 900 ? "1" : sec <= 3600 ? "5" : sec <= 14400 ? "15" : sec <= 86400 ? "60" : "240"
+
+f_auto_htf() =>
+    int sec = timeframe.in_seconds(timeframe.period)
+    sec <= 60 ? "15" : sec <= 300 ? "60" : sec <= 900 ? "240" : sec <= 3600 ? "D" : sec <= 14400 ? "D" : "W"
+
+f_htf_pack() =>
+    float eFast = ta.ema(close, 21)
+    float eSlow = ta.ema(close, 55)
+    float v = ta.vwap(hlc3)
+    [close, eFast, eSlow, v]
+
+f_tf_label(string tf) =>
+    tf == "15" ? "15m" : tf == "60" ? "1h" : tf == "240" ? "4h" : tf == "D" ? "1D" : tf == "W" ? "1W" : tf
+
+f_cvd_delta() =>
+    float upVol = close > open ? volume : close < open ? 0.0 : volume * 0.5
+    float dnVol = close < open ? volume : close > open ? 0.0 : volume * 0.5
+    upVol - dnVol
+
+string cvdAnchorTf = CVD_ANCHOR_AUTO ? (tf_sec < 14400 ? "D" : tf_sec < 86400 ? "W" : "M") : CVD_ANCHOR_MANUAL
+string cvdLowerTf = CVD_LTF_AUTO ? f_cvd_auto_ltf() : CVD_LTF_MANUAL
+bool cvdUseLowerTf = timeframe.in_seconds(cvdLowerTf) < timeframe.in_seconds(timeframe.period)
+float cvdBarDeltaRaw = f_cvd_delta()
+float[] cvdLowerDeltas = cvdUseLowerTf ? request.security_lower_tf(syminfo.tickerid, cvdLowerTf, f_cvd_delta(), ignore_invalid_symbol=true) : array.new_float()
+float cvdBarDelta = cvdUseLowerTf and array.size(cvdLowerDeltas) > 0 ? array.sum(cvdLowerDeltas) : cvdBarDeltaRaw
+bool cvdReset = ta.change(time(cvdAnchorTf)) != 0
+var float cvdValue = 0.0
+cvdValue := cvdReset ? cvdBarDelta : nz(cvdValue[1]) + cvdBarDelta
+float cvdSlope = cvdValue - nz(cvdValue[CVD_SLOPE_LEN])
+bool cvdRising = SHOW_CVD_CONFIRM and cvdSlope > 0
+bool cvdFalling = SHOW_CVD_CONFIRM and cvdSlope < 0
+bool cvdBullConfirm = SHOW_CVD_CONFIRM and cvdRising and close >= close[CVD_SLOPE_LEN]
+bool cvdBearConfirm = SHOW_CVD_CONFIRM and cvdFalling and close <= close[CVD_SLOPE_LEN]
+bool cvdBearDiv = SHOW_CVD_CONFIRM and high >= ta.highest(high, CVD_DIVERGENCE_LEN)[1] and cvdValue < ta.highest(cvdValue, CVD_DIVERGENCE_LEN)[1]
+bool cvdBullDiv = SHOW_CVD_CONFIRM and low <= ta.lowest(low, CVD_DIVERGENCE_LEN)[1] and cvdValue > ta.lowest(cvdValue, CVD_DIVERGENCE_LEN)[1]
+bool cvdLongOk = not SHOW_CVD_CONFIRM or cvdBullConfirm or cvdBullDiv or not cvdFalling
+bool cvdShortOk = not SHOW_CVD_CONFIRM or cvdBearConfirm or cvdBearDiv or not cvdRising
+string cvdStateText = not SHOW_CVD_CONFIRM ? "关闭" : cvdBearDiv ? "顶背离" : cvdBullDiv ? "底背离" : cvdBullConfirm ? "顺多确认" : cvdBearConfirm ? "顺空确认" : cvdRising ? "买盘回升" : cvdFalling ? "卖盘回落" : "中性"
+
+string htfTf = HTF_MODE == "自动" ? f_auto_htf() : HTF_MODE
+string htfTfLabel = f_tf_label(htfTf)
+[htfClose, htfEmaFast, htfEmaSlow, htfVwap] = request.security(syminfo.tickerid, htfTf, f_htf_pack(), ignore_invalid_symbol=true)
+bool htfBull = not na(htfClose) and htfClose >= htfVwap and htfEmaFast >= htfEmaSlow
+bool htfBear = not na(htfClose) and htfClose < htfVwap and htfEmaFast < htfEmaSlow
+string htfBiasText = not USE_HTF_FILTER ? "关" : htfBull ? "多" : htfBear ? "空" : "震荡"
+
+float sVwap = na
+float sVwapSD = na
+
+if sVwapBasis == "D"
+    sVwap := vwapDaily
+    sVwapSD := sdDaily
+else if sVwapBasis == "W"
+    sVwap := vwapWeekly
+    sVwapSD := accWeekly.getStDev(vwapWeekly)
+else
+    sVwap := vwapMonthly
+    sVwapSD := accMonthly.getStDev(vwapMonthly)
+
+float sVwapUpper1 = sVwap + sVwapSD * VWAP_SD_MULT_1
+float sVwapLower1 = sVwap - sVwapSD * VWAP_SD_MULT_1
+float sVwapUpper2 = sVwap + sVwapSD * VWAP_SD_MULT_2
+float sVwapLower2 = sVwap - sVwapSD * VWAP_SD_MULT_2
+
+//====================================================
+// 🔥 MTF VWAP Display Logic (Polyline + Smart Filter)
+//====================================================
+
+// 1. 基础数据准备
+float currATR = ta.atr(14)
+float cvdAbsPriceRange = ta.highest(high, CVD_ABSORB_LEN) - ta.lowest(low, CVD_ABSORB_LEN)
+float cvdAbsMove = cvdValue - nz(cvdValue[CVD_ABSORB_LEN])
+float cvdAbsAvgDelta = ta.sma(math.abs(cvdBarDelta), CVD_ABSORB_LEN)
+bool cvdAbsorbBuy = SHOW_CVD_CONFIRM and cvdAbsPriceRange <= currATR * CVD_ABSORB_PRICE_ATR and cvdAbsMove < -cvdAbsAvgDelta * CVD_ABSORB_DELTA_MULT and close >= ta.lowest(low, CVD_ABSORB_LEN) + cvdAbsPriceRange * 0.45
+bool cvdDistributeSell = SHOW_CVD_CONFIRM and cvdAbsPriceRange <= currATR * CVD_ABSORB_PRICE_ATR and cvdAbsMove > cvdAbsAvgDelta * CVD_ABSORB_DELTA_MULT and close <= ta.lowest(low, CVD_ABSORB_LEN) + cvdAbsPriceRange * 0.55
+cvdStateText := cvdDistributeSell ? "上方派发" : cvdAbsorbBuy ? "下方吸收" : cvdStateText
+float vwapDistLimit = currATR * VWAP_ATR_MULT
+bool showWeeklyVwapEffective = SHOW_WEEKLY_VWAP and (not SMART_HIDE_VWAP or na(vwapWeekly) or math.abs(close - vwapWeekly) <= vwapDistLimit)
+bool showMonthlyVwapEffective = SHOW_MONTHLY_VWAP and (not SMART_HIDE_VWAP or na(vwapMonthly) or math.abs(close - vwapMonthly) <= vwapDistLimit)
+
+// 2. 主 S VWAP 按参考版连续绘制；智能隐藏只作用于独立周/月参考线，避免主线/标准带在交接处断续后被视觉连接成斜直线。
+plot(SHOW_VWAP and showRecentChartLine ? sVwap : na, "S VWAP", color=VWAP_COLOR, linewidth=2)
+// S-VWAP Bands (Reference-style accumulator SD)
+plot(SHOW_VWAP_BANDS and SHOW_VWAP and showRecentChartLine ? sVwapUpper1 : na, "S VWAP +Band1", color=VWAP_SD_COLOR_1, linewidth=1, display=display.all)
+plot(SHOW_VWAP_BANDS and SHOW_VWAP and showRecentChartLine ? sVwapLower1 : na, "S VWAP -Band1", color=VWAP_SD_COLOR_1, linewidth=1, display=display.all)
+plot(SHOW_VWAP_BANDS and SHOW_VWAP and SHOW_VWAP_BAND_2 and showRecentChartLine ? sVwapUpper2 : na, "S VWAP +Band2", color=VWAP_SD_COLOR_2, linewidth=1, display=display.all)
+plot(SHOW_VWAP_BANDS and SHOW_VWAP and SHOW_VWAP_BAND_2 and showRecentChartLine ? sVwapLower2 : na, "S VWAP -Band2", color=VWAP_SD_COLOR_2, linewidth=1, display=display.all)
+
+// [EXISTING] Data Window
+plot(SHOW_WEEKLY_VWAP  ? vwapWeekly  : na, "Weekly VWAP Data",  color=WEEKLY_VWAP_COLOR,  display=display.data_window)
+plot(SHOW_MONTHLY_VWAP ? vwapMonthly : na, "Monthly VWAP Data", color=MONTHLY_VWAP_COLOR, display=display.data_window)
+
+// [NEW] Axis Labels (Trackprice + Price Scale for Weekly/Monthly)
+plot(SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_VWAP_LEVELS and SHOW_WEEKLY_VWAP ? vwapWeekly  : na, "W VWAP Label", color=WEEKLY_VWAP_COLOR,  show_last=1, display=display.price_scale)
+plot(SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_VWAP_LEVELS and SHOW_MONTHLY_VWAP ? vwapMonthly : na, "M VWAP Label", color=MONTHLY_VWAP_COLOR, show_last=1, display=display.price_scale)
+
+// 3. Polyline 存储结构
+var array<chart.point> ptsWeekly  = array.new<chart.point>()
+var array<chart.point> ptsMonthly = array.new<chart.point>()
+
+var polyline plWeekly  = na
+var polyline plMonthly = na
+
+int MAX_POLY_POINTS = 3000
+
+// 4. 数据收集
+if isNewWeek
+    array.clear(ptsWeekly)
+if not na(vwapWeekly) and showRecentChartLine
+    array.push(ptsWeekly, chart.point.from_index(bar_index, vwapWeekly))
+    if array.size(ptsWeekly) > MAX_POLY_POINTS
+        array.shift(ptsWeekly)
+
+if isNewMonth
+    array.clear(ptsMonthly)
+if not na(vwapMonthly) and showRecentChartLine
+    array.push(ptsMonthly, chart.point.from_index(bar_index, vwapMonthly))
+    if array.size(ptsMonthly) > MAX_POLY_POINTS
+        array.shift(ptsMonthly)
+
+// 5. 渲染逻辑
+if barstate.islast
+    if not na(plWeekly)
+        polyline.delete(plWeekly)
+        plWeekly := na
+    if not na(plMonthly)
+        polyline.delete(plMonthly)
+        plMonthly := na
+      
+    bool showW = showWeeklyVwapEffective
+    bool showM = showMonthlyVwapEffective
+
+    if showW and array.size(ptsWeekly) > 1
+        plWeekly := polyline.new(ptsWeekly, curved=false, line_color=WEEKLY_VWAP_COLOR, line_width=2)
+        
+    if showM and array.size(ptsMonthly) > 1
+        plMonthly := polyline.new(ptsMonthly, curved=false, line_color=MONTHLY_VWAP_COLOR, line_width=2)
+
+//====================================================
+// Daily Open (DO) Line Logic
+//====================================================
+do_style_str = DO_STYLE_IN == "Solid" ? line.style_solid : DO_STYLE_IN == "Dotted" ? line.style_dotted : line.style_dashed
+var line doLine = na
+var float dOpenToday = na
+if ta.change(time("D")) != 0
+    dOpenToday := open
+    if not na(doLine)
+        line.delete(doLine)
+        doLine := na
+    if SHOW_DO_LINE
+        doLine := line.new(bar_index, dOpenToday, bar_index + 1, dOpenToday, color=DO_COLOR, width=DO_WIDTH, style=do_style_str)
+if na(dOpenToday)
+    dOpenToday := open
+if SHOW_DO_LINE and na(doLine) and not na(dOpenToday)
+    doLine := line.new(bar_index, dOpenToday, bar_index + 1, dOpenToday, color=DO_COLOR, width=DO_WIDTH, style=do_style_str)
+if not na(doLine) and SHOW_DO_LINE
+    line.set_x2(doLine, bar_index)
+    line.set_color(doLine, DO_COLOR)
+    line.set_width(doLine, DO_WIDTH)
+    line.set_style(doLine, do_style_str)
+if not SHOW_DO_LINE and not na(doLine)
+    line.delete(doLine)
+    doLine := na
+
+//====================================================
+// EMA Trend Filter
+//====================================================
+float ema1 = ta.ema(close, EMA_1_LEN)
+float ema2 = ta.ema(close, EMA_2_LEN)
+float ema3 = ta.ema(close, EMA_3_LEN)
+float ema4 = ta.ema(close, EMA_4_LEN)
+
+bool showEma12Cloud = SHOW_EMA_FILTER and SHOW_EMA_12_CLOUD
+bool showEma34Cloud = SHOW_EMA_FILTER and SHOW_EMA_34_CLOUD
+pEma1 = plot(SHOW_EMA_FILTER and showRecentChartLine and (SHOW_EMA_1 or SHOW_EMA_12_CLOUD) ? ema1 : na, "EMA 9", color=SHOW_EMA_1 ? EMA_1_COLOR : color.new(EMA_1_COLOR, 100), linewidth=EMA_1_WIDTH, display=display.all - display.price_scale)
+pEma2 = plot(SHOW_EMA_FILTER and showRecentChartLine and (SHOW_EMA_2 or SHOW_EMA_12_CLOUD) ? ema2 : na, "EMA 21", color=SHOW_EMA_2 ? EMA_2_COLOR : color.new(EMA_2_COLOR, 100), linewidth=EMA_2_WIDTH, display=display.all - display.price_scale)
+pEma3 = plot(SHOW_EMA_FILTER and showRecentChartLine and (SHOW_EMA_3 or SHOW_EMA_34_CLOUD) ? ema3 : na, "EMA 34", color=SHOW_EMA_3 ? EMA_3_COLOR : color.new(EMA_3_COLOR, 100), linewidth=EMA_3_WIDTH, display=display.all - display.price_scale)
+pEma4 = plot(SHOW_EMA_FILTER and showRecentChartLine and (SHOW_EMA_4 or SHOW_EMA_34_CLOUD) ? ema4 : na, "EMA 55", color=SHOW_EMA_4 ? EMA_4_COLOR : color.new(EMA_4_COLOR, 100), linewidth=EMA_4_WIDTH, display=display.all - display.price_scale)
+fill(pEma1, pEma2, color=showEma12Cloud ? (ema1 >= ema2 ? EMA_12_CLOUD_BULL : EMA_12_CLOUD_BEAR) : na, title="EMA 9/21 快速趋势云")
+fill(pEma3, pEma4, color=showEma34Cloud ? (ema3 >= ema4 ? EMA_34_CLOUD_BULL : EMA_34_CLOUD_BEAR) : na, title="EMA 34/55 慢速趋势云")
+
+//====================================================
+// ICT Sessions + Levels (Smart Holiday)
+//====================================================
+bool allowAsiaSession = isCrypto or not f_is_weekend(TZ_ASIA)
+bool allowLondonSession = isCrypto or not f_is_weekend(TZ_LONDON)
+bool allowNYSession = isCrypto or not f_is_weekend(TZ_NY)
+
+// 核心逻辑：利用 time() 函数本身的休市检测特性
+// 如果交易所休市，time() 会返回 na，isAsia/London/NY 会自动变为 false，不会绘制线条
+bool isAsia   = allowAsiaSession   and not na(time(timeframe.period, TIME_ASIA,   TZ_ASIA))
+bool isLondon = allowLondonSession and not na(time(timeframe.period, TIME_LONDON, TZ_LONDON))
+bool isNY     = allowNYSession     and not na(time(timeframe.period, TIME_NY,     TZ_NY))
+
+int tf_sec_ict = timeframe.in_seconds()
+bool isH1OrHigher   = tf_sec_ict >= 3600
+bool anySessionAllowed = allowAsiaSession or allowLondonSession or allowNYSession
+bool show_ict_boxes = tf_sec_ict < 3600 and anySessionAllowed
+bool show_ict_lines = tf_sec_ict < 14400 and anySessionAllowed
+
+bool showAsiaBg = show_ict_boxes and SHOW_ASIA and isAsia
+bool showLondonBg = show_ict_boxes and SHOW_LONDON and isLondon
+bool showNyBg = show_ict_boxes and SHOW_NY and isNY
+bool overlapLondonNy = showLondonBg and showNyBg
+bool overlapAsiaLondon = showAsiaBg and showLondonBg and not showNyBg
+color ictSessionBg = overlapLondonNy ? color.new(COLOR_LONDON_NY_OVERLAP, ICT_BG_TRANSPARENCY) :
+     overlapAsiaLondon ? color.new(COLOR_ASIA_LONDON_OVERLAP, ICT_BG_TRANSPARENCY) :
+     showNyBg ? color.new(COLOR_NY, ICT_BG_TRANSPARENCY) :
+     showLondonBg ? color.new(COLOR_LONDON, ICT_BG_TRANSPARENCY) :
+     showAsiaBg ? color.new(COLOR_ASIA, ICT_BG_TRANSPARENCY) : na
+bgcolor(ictSessionBg)
+
+type ICTLevel
+    line ln
+    label lb
+    float price
+    bool isHigh
+    bool swept
+    int createdAt
+    string name
+    color col
+    bool isActive
+    int priority
+    bool isHidden
+
+var array<ICTLevel> levels = array.new<ICTLevel>()
+
+type SessionState
+    line lHigh
+    line lLow
+    label lbHigh
+    label lbLow
+    float sOpen = na
+    float sHigh = na
+    float sLow  = na
+    float sClose = na
+    int sHighBar = na
+    int sLowBar  = na
+    int startTime = na
+    ICTLevel lvlHighObj
+    ICTLevel lvlLowObj
+    string dayName = ""
+    bool ended = false
+
+var SessionState stAsia   = SessionState.new()
+var SessionState stLondon = SessionState.new()
+var SessionState stNY     = SessionState.new()
+
+f_delete_ict_level(ICTLevel lvl) =>
+    if not na(lvl.ln)
+        line.delete(lvl.ln)
+    else
+        na
+    if not na(lvl.lb)
+        label.delete(lvl.lb)
+    else
+        na
+
+updateLabel(label lb, line ln, string name, float price, color col, bool isHigh, bool isSwept) =>
+    int startX = line.get_x1(ln)
+    int endX   = line.get_x2(ln)
+    int midX   = int(math.avg(startX, endX))
+    bool isH1 = timeframe.in_seconds() == 3600
+    string activeSize = isH1 ? size.tiny : ICT_UNSWEPT_LABEL_SIZE
+    string sweptSize = isH1 ? size.tiny : ICT_SWEPT_LABEL_SIZE
+    string sz = isSwept ? sweptSize : activeSize
+    string dispName = name
+    if isH1
+        if str.contains(name, "亚洲盘")
+            dispName := str.replace(name, "亚洲盘", "亚")
+        else if str.contains(name, "伦敦盘")
+            dispName := str.replace(name, "伦敦盘", "伦")
+        else if str.contains(name, "纽约盘")
+            dispName := str.replace(name, "纽约盘", "纽")
+        if str.contains(dispName, " 高")
+            dispName := str.replace(dispName, " 高", "H")
+        else if str.contains(dispName, " 低")
+            dispName := str.replace(dispName, " 低", "L")
+    color txtCol = isSwept ? color.new(col, 40) : col
+    label.set_xy(lb, midX, price)
+    label.set_text(lb, dispName + ": " + str.tostring(price, format.mintick))
+    label.set_size(lb, sz)
+    label.set_color(lb, color.new(ICT_LABEL_BG_COLOR, ICT_LABEL_BG_TRANS))
+    label.set_textcolor(lb, txtCol)
+    label.set_style(lb, isHigh ? label.style_label_down : label.style_label_up)
+
+f_cutoff_ms(int lookbackDays) =>
+    int base = time - (lookbackDays * 86400 * 1000)
+    if not isCrypto
+        int dow = dayofweek(time, "Asia/Shanghai")
+        if dow == dayofweek.monday
+            base -= 2 * 86400 * 1000
+    base
+
+manageSession(bool isSession, bool showSession, bool allowDraw, color sessionColor, string sessionName, int prio, SessionState st) =>
+    int cutoffTime = f_cutoff_ms(ICT_LOOKBACK_DAYS)
+    if showSession
+        bool justStarted = isSession and not isSession[1]
+        if justStarted
+            st.ended      := false
+            st.sOpen      := open
+            st.sHigh      := high
+            st.sLow       := low
+            st.sClose     := close
+            st.sHighBar   := bar_index
+            st.sLowBar    := bar_index
+            st.startTime := time
+            int dow = dayofweek(time, "Asia/Shanghai")
+            string dayName = switch dow
+                1 => "周日"
+                2 => "周一"
+                3 => "周二"
+                4 => "周三"
+                5 => "周四"
+                6 => "周五"
+                7 => "周六"
+                => ""
+            st.dayName := dayName
+            if allowDraw and st.startTime > cutoffTime
+                string shortName = sessionName == "亚洲盘" ? "亚" : sessionName == "伦敦盘" ? "伦" : "纽"
+                string displayName = dayName + " " + shortName
+                color bgCol = color.new(ICT_LABEL_BG_COLOR, ICT_LABEL_BG_TRANS)
+                color initLineColor = SHOW_OPEN_ONLY_ACTIVE ? na : color.new(sessionColor, 0)
+                st.lHigh := line.new(st.sHighBar, st.sHigh, bar_index, st.sHigh, color=initLineColor, width=ICT_LINE_WIDTH, style=line.style_solid)
+                st.lbHigh := label.new(bar_index, st.sHigh, displayName + " 高", color=bgCol, textcolor=sessionColor, style=label.style_label_down, size=ICT_UNSWEPT_LABEL_SIZE)
+                if SHOW_OPEN_ONLY_ACTIVE
+                    label.set_text(st.lbHigh, "")
+                    label.set_style(st.lbHigh, label.style_none)
+                st.lvlHighObj := ICTLevel.new(st.lHigh, st.lbHigh, st.sHigh, true, false, time, displayName + " 高", sessionColor, true, prio, false)
+                array.push(levels, st.lvlHighObj)
+                st.lLow := line.new(st.sLowBar, st.sLow, bar_index, st.sLow, color=initLineColor, width=ICT_LINE_WIDTH, style=line.style_solid)
+                st.lbLow := label.new(bar_index, st.sLow, displayName + " 低", color=bgCol, textcolor=sessionColor, style=label.style_label_up, size=ICT_UNSWEPT_LABEL_SIZE)
+                if SHOW_OPEN_ONLY_ACTIVE
+                    label.set_text(st.lbLow, "")
+                    label.set_style(st.lbLow, label.style_none)
+                st.lvlLowObj := ICTLevel.new(st.lLow, st.lbLow, st.sLow, false, false, time, displayName + " 低", sessionColor, true, prio, false)
+                array.push(levels, st.lvlLowObj)
+        if isSession
+            st.sClose := close
+            if high > st.sHigh
+                st.sHigh := high
+                st.sHighBar := bar_index
+                if allowDraw and not na(st.lHigh)
+                    if not na(st.lvlHighObj)
+                        st.lvlHighObj.price := st.sHigh
+                    line.set_xy1(st.lHigh, st.sHighBar, st.sHigh)
+                    line.set_xy2(st.lHigh, bar_index, st.sHigh)
+                    label.set_y(st.lbHigh, st.sHigh)
+            if low < st.sLow
+                st.sLow := low
+                st.sLowBar := bar_index
+                if allowDraw and not na(st.lLow)
+                    if not na(st.lvlLowObj)
+                        st.lvlLowObj.price := st.sLow
+                    line.set_xy1(st.lLow, st.sLowBar, st.sLow)
+                    line.set_xy2(st.lLow, bar_index, st.sLow)
+                    label.set_y(st.lbLow, st.sLow)
+            if allowDraw and not na(st.lHigh) and not na(st.lLow)
+                line.set_x2(st.lHigh, bar_index)
+                line.set_x2(st.lLow,  bar_index)
+                if not SHOW_OPEN_ONLY_ACTIVE
+                    updateLabel(st.lbHigh, st.lHigh, st.lvlHighObj.name, st.sHigh, sessionColor, true,  false)
+                    updateLabel(st.lbLow,  st.lLow,  st.lvlLowObj.name,  st.sLow,  sessionColor, false, false)
+        if not isSession and isSession[1]
+            st.ended := true
+            if not na(st.lvlHighObj)
+                st.lvlHighObj.isActive := false
+            if not na(st.lvlLowObj)
+                st.lvlLowObj.isActive := false
+    int(na)
+
+bool allowDrawIct = SHOW_ICT_LEVELS and show_ict_lines
+manageSession(isAsia,   SHOW_ASIA,   allowDrawIct, COLOR_ASIA,   "亚洲盘", 2, stAsia)
+manageSession(isLondon, SHOW_LONDON, allowDrawIct, COLOR_LONDON, "伦敦盘", 1, stLondon)
+manageSession(isNY,     SHOW_NY,     allowDrawIct, COLOR_NY,     "纽约盘", 3, stNY)
+
+if SHOW_ICT_LEVELS and show_ict_lines
+    int cur_dow = dayofweek(time, "Asia/Shanghai")
+    int dynamic_days = ICT_LOOKBACK_DAYS
+    if cur_dow == 2
+        dynamic_days := 3
+    int max_duration = dynamic_days * 86400 * 1000
+    if array.size(levels) > 0
+        int i = array.size(levels) - 1
+        while i >= 0
+            ICTLevel lvl = array.get(levels, i)
+            if (time - lvl.createdAt) > max_duration
+                line.delete(lvl.ln)
+                label.delete(lvl.lb)
+                array.remove(levels, i)
+            i -= 1
+    int sz = array.size(levels)
+    if sz > 0
+        int j = 0
+        while j < sz
+            ICTLevel lvl = array.get(levels, j)
+            if not lvl.isActive
+                bool isSwept = false
+                if not lvl.swept
+                    isSwept := lvl.isHigh ? (high > lvl.price) : (low < lvl.price)
+                if isSwept
+                    lvl.swept := true
+                    if HIDE_SWEEPS_ON_HTF and isH1OrHigher
+                        line.delete(lvl.ln)
+                        label.delete(lvl.lb)
+                        lvl.isHidden := true
+                    else
+                        line.set_color(lvl.ln, color.new(lvl.col, 40))
+                        line.set_style(lvl.ln, line.style_dashed)
+                        line.set_x2(lvl.ln, bar_index)
+                        updateLabel(lvl.lb, lvl.ln, lvl.name, lvl.price, lvl.col, lvl.isHigh, true)
+                else if not lvl.swept
+                    line.set_color(lvl.ln, lvl.col)
+                    line.set_style(lvl.ln, line.style_solid)
+                    line.set_x2(lvl.ln, bar_index)
+                    updateLabel(lvl.lb, lvl.ln, lvl.name, lvl.price, lvl.col, lvl.isHigh, false)
+            j += 1
+
+var label[] mergedLabels = array.new_label()
+if barstate.islast and SHOW_ICT_LEVELS and show_ict_lines
+    if array.size(mergedLabels) > 0
+        for l in mergedLabels
+            label.delete(l)
+        array.clear(mergedLabels)
+    if array.size(levels) > 0
+        array<ICTLevel> activeLevels = array.new<ICTLevel>()
+        for lvl in levels
+            if not lvl.swept and not lvl.isHidden and (not lvl.isActive or not SHOW_OPEN_ONLY_ACTIVE)
+                label.set_style(lvl.lb, label.style_none)
+                label.set_text(lvl.lb, "")
+                array.push(activeLevels, lvl)
+        int len = array.size(activeLevels)
+        if len > 1
+            int iSort = 0
+            while iSort < len - 1
+                int jSort = 0
+                while jSort < len - iSort - 1
+                    ICTLevel a = array.get(activeLevels, jSort)
+                    ICTLevel b = array.get(activeLevels, jSort + 1)
+                    bool swap = false
+                    float priceDiff = a.price - b.price
+                    if b.price > a.price
+                        swap := true
+                    else if math.abs(priceDiff) < syminfo.mintick
+                        if b.priority > a.priority
+                            swap := true
+                    if swap
+                        array.set(activeLevels, jSort, b)
+                        array.set(activeLevels, jSort + 1, a)
+                    jSort += 1
+                iSort += 1
+        float mergeThreshold = math.max(syminfo.mintick * 8, math.abs(close) * 0.0002)
+        int k = 0
+        while k < len
+            ICTLevel currentLvl = array.get(activeLevels, k)
+            string combinedText = currentLvl.name + ": " + str.tostring(currentLvl.price, format.mintick)
+            float sumPrice = currentLvl.price
+            int cnt = 1
+            color bestColor = currentLvl.col
+            int bestPrio  = currentLvl.priority
+            int m = k + 1
+            while m < len
+                ICTLevel nextLvl = array.get(activeLevels, m)
+                if math.abs(currentLvl.price - nextLvl.price) < mergeThreshold
+                    combinedText += "\n" + nextLvl.name + ": " + str.tostring(nextLvl.price, format.mintick)
+                    sumPrice += nextLvl.price
+                    cnt += 1
+                    if nextLvl.priority > bestPrio
+                        bestPrio := nextLvl.priority
+                        bestColor := nextLvl.col
+                    m += 1
+                else
+                    break
+            float avgPrice = sumPrice / cnt
+            int startX = line.get_x1(currentLvl.ln)
+            int endX   = line.get_x2(currentLvl.ln)
+            int midX   = int(math.avg(startX, endX))
+            string style = currentLvl.isHigh ? label.style_label_down : label.style_label_up
+            bool isH1 = timeframe.in_seconds() == 3600
+            string mergeSize = isH1 ? size.tiny : ICT_UNSWEPT_LABEL_SIZE
+            label newL = label.new(midX, avgPrice, combinedText,
+                  color=color.new(ICT_LABEL_BG_COLOR, ICT_LABEL_BG_TRANS), textcolor=bestColor, style=style, size=mergeSize)
+            array.push(mergedLabels, newL)
+            k := m
+
+if barstate.islast and (not SHOW_ICT_LEVELS or not show_ict_lines)
+    if array.size(mergedLabels) > 0
+        for l in mergedLabels
+            label.delete(l)
+        array.clear(mergedLabels)
+    if array.size(levels) > 0
+        int i = array.size(levels) - 1
+        while i >= 0
+            ICTLevel lvl = array.get(levels, i)
+            f_delete_ict_level(lvl)
+            array.remove(levels, i)
+            i -= 1
+    stAsia.lHigh := na
+    stAsia.lLow := na
+    stAsia.lbHigh := na
+    stAsia.lbLow := na
+    stAsia.lvlHighObj := na
+    stAsia.lvlLowObj := na
+    stLondon.lHigh := na
+    stLondon.lLow := na
+    stLondon.lbHigh := na
+    stLondon.lbLow := na
+    stLondon.lvlHighObj := na
+    stLondon.lvlLowObj := na
+    stNY.lHigh := na
+    stNY.lLow := na
+    stNY.lbHigh := na
+    stNY.lbLow := na
+    stNY.lvlHighObj := na
+    stNY.lvlLowObj := na
+
+//====================================================
+// Object cleanup when feature toggles/timeframe guards are disabled
+//====================================================
+if barstate.islast and not SHOW_NPOC and array.size(npocList) > 0
+    for np in npocList
+        line.delete(np.ln)
+    array.clear(npocList)
+
+
+//====================================================
+// SVP Render + nPOC
+//====================================================
+var VolumeProfileEngine profileEngine = VolumeProfileEngine.new().initialize()
+var array<VolumeProfileEngine> completedProfiles = array.new<VolumeProfileEngine>()
+var int currentProfileStart = na
+if barstate.islast and (not RENDER_COMPLETED_PROFILE or proLightMode) and array.size(completedProfiles) > 0
+    for oldProfile in completedProfiles
+        f_clearVpObjects(oldProfile)
+        f_clearVpData(oldProfile)
+    array.clear(completedProfiles)
+var float  prevProfilePoc     = na
+bool isNewPeriod = ta.change(time(targetProfileTF)) != 0
+
+if isNewPeriod and not na(profileEngine.minProfilePrice) and not na(currentProfileStart)
+    int endBar = bar_index - 1
+    if endBar > currentProfileStart
+        profileEngine.processAndRender(currentProfileStart, endBar, false)
+        prevProfilePoc := profileEngine.lastPocPrice
+          
+        if SHOW_NPOC and not na(profileEngine.lastPocPrice)
+            line newNpocLine = line.new(endBar, profileEngine.lastPocPrice, endBar, profileEngine.lastPocPrice,
+                  color=NPOC_COLOR, style=npoc_style_str, width=NPOC_WIDTH)
+            NakedPOC newNpoc = NakedPOC.new(newNpocLine, profileEngine.lastPocPrice, true, endBar)
+            array.push(npocList, newNpoc)
+        if RENDER_COMPLETED_PROFILE and not proLightMode
+            f_clearVpData(profileEngine)
+            array.push(completedProfiles, profileEngine)
+            while array.size(completedProfiles) > COMPLETED_PROFILE_LIMIT
+                VolumeProfileEngine oldProfile = array.shift(completedProfiles)
+                f_clearVpObjects(oldProfile)
+                f_clearVpData(oldProfile)
+        else
+            f_clearVpObjects(profileEngine)
+            f_clearVpData(profileEngine)
+              
+    profileEngine := VolumeProfileEngine.new().initialize()
+    currentProfileStart := bar_index
+
+if na(currentProfileStart)
+    currentProfileStart := bar_index
+
+if barstate.islast
+    if not na(precisionWarnLabel)
+        label.delete(precisionWarnLabel)
+        precisionWarnLabel := na
+    bool spanTooLongForDrawing = not na(currentProfileStart) and (bar_index - currentProfileStart) > MAX_DRAW_BARS_BACK
+    bool showDegradeWarn = SHOW_DEGRADE_WARNINGS and degrade
+    bool showSpanWarn = SHOW_DEGRADE_WARNINGS and spanTooLongForDrawing
+    string warnText = showDegradeWarn and showSpanWarn ? "SVP 已自动降级为图表周期计算\nSVP 周期跨度过长，仅保留数值/轴标，跳过重型绘制" :
+         showDegradeWarn ? "SVP 已自动降级为图表周期计算" :
+         showSpanWarn ? "SVP 周期跨度过长，仅保留数值/轴标，跳过重型绘制" : ""
+    if str.length(warnText) > 0
+        precisionWarnLabel := label.new(bar_index + 1, high, warnText, xloc=xloc.bar_index, yloc=yloc.price, color=color.new(color.orange, 85), textcolor=color.orange, style=label.style_label_left, size=size.tiny)
+
+if safeToUsePrecision and array.size(ltfHighs) > 0
+    profileEngine.storeBatchBars(ltfHighs, ltfLows, ltfVols)
+else
+    profileEngine.storeSingleBar(high, low, nz(volume))
+
+if SHOW_NPOC and array.size(npocList) > 0
+    int i = array.size(npocList) - 1
+    while i >= 0
+        NakedPOC np = array.get(npocList, i)
+        if np.active
+            bool touched = bar_index > np.startBar and (high >= np.price and low <= np.price)
+            if touched
+                np.active := false
+                line.set_x2(np.ln, bar_index)
+                line.set_color(np.ln, color.new(NPOC_COLOR, 100))
+            else
+                line.set_x2(np.ln, bar_index)
+        i -= 1
+    while array.size(npocList) > NPOC_LIMIT
+        int idxRemove = 0
+        int j = 0
+        while j < array.size(npocList)
+            NakedPOC candidate = array.get(npocList, j)
+            if not candidate.active
+                idxRemove := j
+                break
+            j += 1
+        NakedPOC old = array.get(npocList, idxRemove)
+        line.delete(old.ln)
+        array.remove(npocList, idxRemove)
+
+if barstate.islast and not na(profileEngine.minProfilePrice) and not na(currentProfileStart)
+    profileEngine.processAndRender(currentProfileStart, bar_index, true)
+
+//====================================================
+// DMI Strategy Table integrated with SVP / S-VWAP / EMA / ICT context
+//====================================================
+float dmiUp = ta.change(high)
+float dmiDown = -ta.change(low)
+float dmiPlusDM = na(dmiUp) ? na : (dmiUp > dmiDown and dmiUp > 0 ? dmiUp : 0)
+float dmiMinusDM = na(dmiDown) ? na : (dmiDown > dmiUp and dmiDown > 0 ? dmiDown : 0)
+float dmiTrur = ta.rma(ta.tr, DMI_DI_LEN)
+float dmiPlus = fixnan(100 * ta.rma(dmiPlusDM, DMI_DI_LEN) / dmiTrur)
+float dmiMinus = fixnan(100 * ta.rma(dmiMinusDM, DMI_DI_LEN) / dmiTrur)
+float dmiSum = dmiPlus + dmiMinus
+float dmiAdx = 100 * ta.rma(math.abs(dmiPlus - dmiMinus) / (dmiSum == 0 ? 1 : dmiSum), DMI_ADX_SMOOTH)
+float dmiGap = math.abs(dmiPlus - dmiMinus)
+bool dmiAdxRising = dmiAdx > dmiAdx[1]
+bool dmiAdxFalling = dmiAdx < dmiAdx[1]
+bool dmiBalance = dmiAdx < DMI_ADX_TREND or dmiGap <= DMI_DI_NEAR
+bool dmiBull = dmiPlus > dmiMinus and not dmiBalance
+bool dmiBear = dmiMinus > dmiPlus and not dmiBalance
+bool dmiHot = dmiAdx >= DMI_ADX_HOT
+bool dmiBullPath = dmiBull and dmiAdxRising and dmiAdx >= DMI_ADX_TREND
+bool dmiBearPath = dmiBear and dmiAdxRising and dmiAdx >= DMI_ADX_TREND
+bool dmiBullAgainst = dmiBear or (dmiMinus > dmiPlus and dmiGap > DMI_DI_NEAR)
+bool dmiBearAgainst = dmiBull or (dmiPlus > dmiMinus and dmiGap > DMI_DI_NEAR)
+bool dmiBullConfirm = dmiBullPath or (dmiBull and not dmiAdxFalling)
+bool dmiBearConfirm = dmiBearPath or (dmiBear and not dmiAdxFalling)
+bool dmiTrendWeak = dmiBalance or dmiAdxFalling
+string dmiVerifyText = dmiHot ? "过热" : dmiBullConfirm ? "顺多" : dmiBearConfirm ? "顺空" : dmiTrendWeak ? "走弱" : "待定"
+
+float curPoc = profileEngine.lastPocPrice
+float curVah = profileEngine.lastVahPrice
+float curVal = profileEngine.lastValPrice
+float curNpocForTable = na
+if array.size(npocList) > 0
+    int npI = array.size(npocList) - 1
+    while npI >= 0
+        NakedPOC npT = array.get(npocList, npI)
+        if npT.active
+            curNpocForTable := npT.price
+            break
+        npI -= 1
+
+bool priceAboveS = not na(sVwap) and close >= sVwap
+bool priceBelowS = not na(sVwap) and close < sVwap
+bool priceAboveVah = not na(curVah) and close > curVah
+bool priceBelowVal = not na(curVal) and close < curVal
+bool priceInVA = not na(curVah) and not na(curVal) and close <= curVah and close >= curVal
+bool nearPoc = not na(curPoc) and currATR > 0 and math.abs(close - curPoc) <= currATR * 0.20
+bool nearS = not na(sVwap) and currATR > 0 and math.abs(close - sVwap) <= currATR * 0.20
+bool vwapExtendedUp = not na(sVwap) and currATR > 0 and close > sVwap + currATR * 1.5
+bool vwapExtendedDn = not na(sVwap) and currATR > 0 and close < sVwap - currATR * 1.5
+bool emaFastBull = ema1 >= ema2
+bool emaSlowBull = ema3 >= ema4
+bool emaBull = SHOW_EMA_FILTER and emaFastBull and emaSlowBull
+bool emaBear = SHOW_EMA_FILTER and not emaFastBull and not emaSlowBull
+bool trendOkBull = emaBull or not SHOW_EMA_FILTER
+bool trendOkBear = emaBear or not SHOW_EMA_FILTER
+
+f_level_short(string name, float price) =>
+    na(price) ? "--" : name
+
+// Nearest support/resistance from existing plotted levels only. Prices stay on chart/right axis to keep the table narrow.
+float supPrice = na
+string supName = "--"
+float resPrice = na
+string resName = "--"
+
+if not na(curVal) and curVal <= close
+    supPrice := curVal
+    supName := "VAL"
+if not na(curPoc) and curPoc <= close and (na(supPrice) or close - curPoc < close - supPrice)
+    supPrice := curPoc
+    supName := "POC"
+if not na(sVwap) and sVwap <= close and (na(supPrice) or close - sVwap < close - supPrice)
+    supPrice := sVwap
+    supName := "VWAP"
+if not na(sVwapLower1) and sVwapLower1 <= close and (na(supPrice) or close - sVwapLower1 < close - supPrice)
+    supPrice := sVwapLower1
+    supName := "-B1"
+if not na(curNpocForTable) and curNpocForTable <= close and (na(supPrice) or close - curNpocForTable < close - supPrice)
+    supPrice := curNpocForTable
+    supName := "nPOC"
+if not na(dOpenToday) and dOpenToday <= close and (na(supPrice) or close - dOpenToday < close - supPrice)
+    supPrice := dOpenToday
+    supName := "DO"
+
+if not na(curVah) and curVah >= close
+    resPrice := curVah
+    resName := "VAH"
+if not na(curPoc) and curPoc >= close and (na(resPrice) or curPoc - close < resPrice - close)
+    resPrice := curPoc
+    resName := "POC"
+if not na(sVwap) and sVwap >= close and (na(resPrice) or sVwap - close < resPrice - close)
+    resPrice := sVwap
+    resName := "VWAP"
+if not na(sVwapUpper1) and sVwapUpper1 >= close and (na(resPrice) or sVwapUpper1 - close < resPrice - close)
+    resPrice := sVwapUpper1
+    resName := "+B1"
+if not na(curNpocForTable) and curNpocForTable >= close and (na(resPrice) or curNpocForTable - close < resPrice - close)
+    resPrice := curNpocForTable
+    resName := "nPOC"
+if not na(dOpenToday) and dOpenToday >= close and (na(resPrice) or dOpenToday - close < resPrice - close)
+    resPrice := dOpenToday
+    resName := "DO"
+
+string ictEventName = "无新扫"
+float ictEventPrice = na
+bool sweptHighNow = false
+bool sweptLowNow = false
+bool sweptHighRejected = false
+bool sweptHighAccepted = false
+bool sweptLowReclaimed = false
+bool sweptLowAccepted = false
+if SHOW_ICT_LEVELS and array.size(levels) > 0
+    int evI = 0
+    while evI < array.size(levels)
+        ICTLevel evLvl = array.get(levels, evI)
+        bool sameBarTouch = not evLvl.isActive and not evLvl.isHidden and ((evLvl.isHigh and high > evLvl.price and high[1] <= evLvl.price) or (not evLvl.isHigh and low < evLvl.price and low[1] >= evLvl.price))
+        if sameBarTouch
+            string shortEv = str.contains(evLvl.name, "亚") ? "亚" : str.contains(evLvl.name, "伦") ? "伦" : str.contains(evLvl.name, "纽") ? "纽" : "ICT"
+            ictEventName := "扫" + shortEv + (evLvl.isHigh ? "高" : "低")
+            ictEventPrice := evLvl.price
+            sweptHighNow := sweptHighNow or evLvl.isHigh
+            sweptLowNow := sweptLowNow or not evLvl.isHigh
+            sweptHighRejected := sweptHighRejected or (evLvl.isHigh and close < evLvl.price)
+            sweptHighAccepted := sweptHighAccepted or (evLvl.isHigh and close >= evLvl.price)
+            sweptLowReclaimed := sweptLowReclaimed or (not evLvl.isHigh and close > evLvl.price)
+            sweptLowAccepted := sweptLowAccepted or (not evLvl.isHigh and close <= evLvl.price)
+        evI += 1
+
+bool npocTouchNow = not na(curNpocForTable) and high >= curNpocForTable and low <= curNpocForTable
+bool pocTouchNow = not na(curPoc) and high >= curPoc and low <= curPoc
+bool reclaimS = not na(sVwap) and ta.crossover(close, sVwap)
+bool loseS = not na(sVwap) and ta.crossunder(close, sVwap)
+
+var string lastEventName = "无新事件"
+var int lastEventBar = na
+string rawEventName = ictEventName != "无新扫" ? ictEventName : npocTouchNow ? "触nPOC" : pocTouchNow ? "触POC" : reclaimS ? "收回VWAP" : loseS ? "跌回VWAP" : ""
+if rawEventName != ""
+    lastEventName := rawEventName
+    lastEventBar := bar_index
+int eventAge = na(lastEventBar) ? na : bar_index - lastEventBar
+string eventText = na(eventAge) or eventAge > 2 ? "无新事件" : lastEventName + str.tostring(eventAge) + "K"
+
+float volMa = ta.sma(volume, 20)
+float relVol = volMa > 0 ? nz(volume) / volMa : na
+float barRangeForState = math.max(high - low, syminfo.mintick)
+float closePos = (close - low) / barRangeForState
+bool volHigh = not na(relVol) and relVol >= 1.5
+bool volLow = not na(relVol) and relVol <= 0.7
+bool closeNearHigh = closePos >= 0.70
+bool closeNearLow = closePos <= 0.30
+
+bool vahRejected = not na(curVah) and high > curVah and close < curVah
+bool valReclaimed = not na(curVal) and low < curVal and close > curVal
+bool vahAccepted = priceAboveVah and priceAboveS
+bool valAccepted = priceBelowVal and priceBelowS
+bool pocBalance = priceInVA and (nearPoc or nearS)
+bool trendBullAligned = trendOkBull and priceAboveS and (priceAboveVah or not priceBelowVal)
+bool trendBearAligned = trendOkBear and priceBelowS and (priceBelowVal or not priceAboveVah)
+bool bullStructureRaw = (sweptLowReclaimed and priceAboveS) or vahAccepted or trendBullAligned
+bool bearStructureRaw = (sweptHighRejected and priceBelowS) or valAccepted or trendBearAligned
+bool bullValidated = bullStructureRaw and not dmiBullAgainst and not dmiTrendWeak and cvdLongOk
+bool bearValidated = bearStructureRaw and not dmiBearAgainst and not dmiTrendWeak and cvdShortOk
+bool bullTestOnly = bullStructureRaw and not bullValidated
+bool bearTestOnly = bearStructureRaw and not bearValidated
+bool structureConflictBase = (priceAboveS and emaBear) or (priceBelowS and emaBull) or (priceAboveVah and volLow) or (priceBelowVal and volLow)
+bool structureConflictSweep = (sweptLowReclaimed and priceBelowS) or (sweptHighRejected and priceAboveS)
+bool structureConflictDmi = (bullStructureRaw and dmiBullAgainst) or (bearStructureRaw and dmiBearAgainst)
+bool structureConflictCvd = SHOW_CVD_CONFIRM and ((bullStructureRaw and cvdBearDiv) or (bearStructureRaw and cvdBullDiv))
+bool structureConflict = structureConflictBase or structureConflictSweep or structureConflictDmi or structureConflictCvd
+bool valueMigrating = not na(curPoc) and currATR > 0 and math.abs(close - curPoc) > currATR * 0.8 and (priceAboveVah or priceBelowVal) and volHigh and not dmiTrendWeak
+bool acceptAboveVah = not na(curVah) and ta.lowest(close, ACCEPT_BARS) > curVah
+bool acceptBelowVal = not na(curVal) and ta.highest(close, ACCEPT_BARS) < curVal
+bool acceptAboveS = not na(sVwap) and ta.lowest(close, ACCEPT_BARS) > sVwap
+bool acceptBelowS = not na(sVwap) and ta.highest(close, ACCEPT_BARS) < sVwap
+bool acceptanceBullOk = acceptAboveS and (acceptAboveVah or priceInVA or priceAboveVah)
+bool acceptanceBearOk = acceptBelowS and (acceptBelowVal or priceInVA or priceBelowVal)
+f_near_level(float level, float atrMult) =>
+    not na(level) and currATR > 0 and math.abs(close - level) <= currATR * atrMult
+
+bool nearCvdVp = f_near_level(curVah, CVD_KEY_LEVEL_ATR) or f_near_level(curVal, CVD_KEY_LEVEL_ATR) or f_near_level(curPoc, CVD_KEY_LEVEL_ATR)
+bool nearCvdVwap = f_near_level(sVwap, CVD_KEY_LEVEL_ATR) or f_near_level(sVwapUpper1, CVD_KEY_LEVEL_ATR) or f_near_level(sVwapLower1, CVD_KEY_LEVEL_ATR)
+bool nearCvdKeyLevel = nearCvdVp or nearCvdVwap or sweptHighNow or sweptLowNow
+bool cvdBearDivQualified = cvdBearDiv and (not FILTER_CVD_DIVERGENCE_BY_KEY_LEVEL or nearCvdKeyLevel)
+bool cvdBullDivQualified = cvdBullDiv and (not FILTER_CVD_DIVERGENCE_BY_KEY_LEVEL or nearCvdKeyLevel)
+cvdStateText := cvdBearDiv and not cvdBearDivQualified ? "顶背离弱" : cvdBullDiv and not cvdBullDivQualified ? "底背离弱" : cvdStateText
+bool nearAKeyVp = f_near_level(curVah, A_KEY_LEVEL_ATR) or f_near_level(curVal, A_KEY_LEVEL_ATR) or f_near_level(curPoc, A_KEY_LEVEL_ATR)
+bool nearAKeyVwap = f_near_level(sVwap, A_KEY_LEVEL_ATR) or f_near_level(sVwapUpper1, A_KEY_LEVEL_ATR) or f_near_level(sVwapLower1, A_KEY_LEVEL_ATR)
+bool nearAKeyLevel = nearAKeyVp or nearAKeyVwap or f_near_level(curNpocForTable, A_KEY_LEVEL_ATR) or sweptHighNow or sweptLowNow
+bool allowAByLocation = not A_ONLY_NEAR_KEY_LEVEL or nearAKeyLevel
+
+string valueText = na(curVah) or na(curVal) ? "SVP加载" : priceAboveVah ? "VAH上方" : priceBelowVal ? "VAL下方" : nearPoc ? "POC旁" : "VA内"
+string vwapText = na(sVwap) ? "加载" : vwapExtendedUp ? "上方延展" : vwapExtendedDn ? "下方延展" : nearS ? "贴近公平" : priceAboveS ? "上方控制" : "下方控制"
+string emaText = emaBull ? "多头云" : emaBear ? "空头云" : SHOW_EMA_FILTER ? "纠缠" : "关闭"
+string pullbackLevelName = not na(supPrice) ? supName : not na(sVwap) ? "VWAP" : "VAH"
+float pullbackLevelPrice = not na(supPrice) ? supPrice : not na(sVwap) ? sVwap : curVah
+string reboundLevelName = not na(resPrice) ? resName : not na(sVwap) ? "VWAP" : "VAL"
+float reboundLevelPrice = not na(resPrice) ? resPrice : not na(sVwap) ? sVwap : curVal
+string pullbackLevelText = na(pullbackLevelPrice) ? pullbackLevelName : pullbackLevelName + " " + str.tostring(pullbackLevelPrice, format.mintick)
+string reboundLevelText = na(reboundLevelPrice) ? reboundLevelName : reboundLevelName + " " + str.tostring(reboundLevelPrice, format.mintick)
+string directionGuideText = "方向: 等结构确认"
+string actionGuideText = "应对: 等关键位反应"
+
+string stateText = "等待结构"
+string watchText = "等关键位"
+string invalidText = "等确认"
+string detailText = "结构信号暂不一致，等待VWAP或VA边给出更清晰反应。"
+string cardLine1 = "结构未定，先等VWAP或VA边。"
+string cardLine2 = "观察关键位反应。等确认后再判断。"
+string cardLine3 = "失效看 " + invalidText + "。"
+
+if sweptLowReclaimed and priceAboveS and bullValidated
+    stateText := "偏强修复"
+    watchText := "看" + pullbackLevelName
+    invalidText := "跌回VWAP"
+    directionGuideText := "方向: 修复偏强"
+    actionGuideText := "应对: 回踩" + pullbackLevelText + "守住，再看VAH/POC延续；跌回VWAP则修复失败。"
+    detailText := "下方流动性扫完后收回，VWAP重新站上，DMI顺向验证。优先看回踩" + pullbackLevelText + "是否承接，再观察POC/VAH是否继续接受。"
+    cardLine1 := "下方扫完已收回，先看修复能否延续。"
+    cardLine2 := "重点等回踩" + pullbackLevelName + "，守住说明承接还在。"
+    cardLine3 := "跌回VWAP则修复失败。"
+else if sweptHighRejected and priceBelowS and bearValidated
+    stateText := "偏弱回落"
+    watchText := "看" + reboundLevelName
+    invalidText := "收回VWAP"
+    directionGuideText := "方向: 回落偏弱"
+    actionGuideText := "应对: 反抽" + reboundLevelText + "承压，再看VAL/POC延续；收回VWAP则回落失败。"
+    detailText := "上方流动性扫完后回落，VWAP重新跌破，DMI顺向验证。优先看反抽" + reboundLevelText + "是否承压，再观察POC/VAL是否继续接受。"
+    cardLine1 := "上方扫完后回落，先看压力是否有效。"
+    cardLine2 := "重点等反抽" + reboundLevelName + "，承压说明回落还在。"
+    cardLine3 := "收回VWAP则回落失败。"
+else if sweptLowReclaimed and priceAboveS and bullTestOnly
+    stateText := "下方修复"
+    watchText := "等确认"
+    invalidText := "跌回VWAP"
+    directionGuideText := "方向: 修复试探"
+    actionGuideText := "应对: 先看" + pullbackLevelText + "承接和DMI转强；未确认前不追延续。"
+    detailText := "下方流动性已收回，但DMI未顺向确认。先看" + pullbackLevelText + "是否承接，再看DMI是否转为顺多。"
+    cardLine1 := "下方已收回，但确认还不完整。"
+    cardLine2 := "先看" + pullbackLevelName + "能否承接，确认后再看修复。"
+    cardLine3 := "如果跌回VWAP，先停止看修复。"
+else if sweptHighRejected and priceBelowS and bearTestOnly
+    stateText := "上方拒绝"
+    watchText := "等确认"
+    invalidText := "收回VWAP"
+    directionGuideText := "方向: 回落试探"
+    actionGuideText := "应对: 先看" + reboundLevelText + "承压和DMI转弱；未确认前不追延续。"
+    detailText := "上方流动性已回落，但DMI未顺向确认。先看" + reboundLevelText + "是否承压，再看DMI是否转为顺空。"
+    cardLine1 := "上方已回落，但确认还不完整。"
+    cardLine2 := "先看" + reboundLevelName + "能否承压，确认后再看回落。"
+    cardLine3 := "如果收回VWAP，先停止看回落。"
+else if vahAccepted and trendOkBull and bullValidated
+    stateText := "上方接受"
+    watchText := "看" + pullbackLevelName
+    invalidText := "跌回VA内"
+    directionGuideText := "方向: 上方接受"
+    actionGuideText := "应对: 回踩" + pullbackLevelText + "守住，结构延续；跌回VA内则接受失败。"
+    detailText := "价格站在价值区上方，VWAP保持上方控制，DMI顺向。重点看回踩" + pullbackLevelText + "是否守住。"
+    cardLine1 := "价格离开价值区上沿，重点看能否留在上方。"
+    cardLine2 := "回踩" + pullbackLevelName + "守住，说明上方接受仍在。"
+    cardLine3 := "跌回VA内则上方接受失败。"
+else if valAccepted and trendOkBear and bearValidated
+    stateText := "下方接受"
+    watchText := "看" + reboundLevelName
+    invalidText := "收回VA内"
+    directionGuideText := "方向: 下方接受"
+    actionGuideText := "应对: 反抽" + reboundLevelText + "承压，结构延续；收回VA内则接受失败。"
+    detailText := "价格处于价值区下方，VWAP保持下方控制，DMI顺向。重点看反抽" + reboundLevelText + "是否承压。"
+    cardLine1 := "价格跌出价值区下沿，重点看能否留在下方。"
+    cardLine2 := "反抽" + reboundLevelName + "承压，说明下方接受仍在。"
+    cardLine3 := "收回VA内则下方接受失败。"
+else if vahAccepted and trendOkBull and bullTestOnly
+    stateText := "上方试探"
+    watchText := "看" + pullbackLevelName
+    invalidText := "跌回VA内"
+    directionGuideText := "方向: 上方试探"
+    actionGuideText := "应对: 回踩" + pullbackLevelText + "守住并DMI转强，才算接受；跌回VA内则失败。"
+    detailText := "价格在VAH上方，但DMI未确认趋势。先按试探处理，观察回踩" + pullbackLevelText + "。"
+    cardLine1 := "只是站到价值区上方，还不能直接确认。"
+    cardLine2 := "回踩" + pullbackLevelName + "守住，再确认上方接受。"
+    cardLine3 := "如果跌回VA内，试探失败。"
+else if valAccepted and trendOkBear and bearTestOnly
+    stateText := "下方试探"
+    watchText := "看" + reboundLevelName
+    invalidText := "收回VA内"
+    directionGuideText := "方向: 下方试探"
+    actionGuideText := "应对: 反抽" + reboundLevelText + "承压并DMI转弱，才算接受；收回VA内则失败。"
+    detailText := "价格在VAL下方，但DMI未确认趋势。先按试探处理，观察反抽" + reboundLevelText + "。"
+    cardLine1 := "只是跌到价值区下方，还不能直接确认。"
+    cardLine2 := "反抽" + reboundLevelName + "承压，再确认下方接受。"
+    cardLine3 := "如果收回VA内，试探失败。"
+else if sweptHighRejected or vahRejected
+    stateText := "上方拒绝"
+    watchText := "看" + reboundLevelName
+    invalidText := "收回扫高"
+    directionGuideText := "方向: 上方拒绝"
+    actionGuideText := "应对: 反抽" + reboundLevelText + "仍承压，则拒绝有效；重新站回扫高位则失效。"
+    detailText := "上方价格测试后未站稳。优先看反抽" + reboundLevelText + "是否继续承压。"
+    cardLine1 := "上方测试后未站稳，说明供应还在。"
+    cardLine2 := "反抽" + reboundLevelName + "继续承压，拒绝有效。"
+    cardLine3 := "重新站回扫高位则拒绝失效。"
+else if sweptLowReclaimed or valReclaimed
+    stateText := "下方修复"
+    watchText := "看" + pullbackLevelName
+    invalidText := "跌回扫低"
+    directionGuideText := "方向: 下方修复"
+    actionGuideText := "应对: 回踩" + pullbackLevelText + "守住，则修复有效；跌回扫低位下方则失败。"
+    detailText := "下方价格测试后收回。优先看回踩" + pullbackLevelText + "是否承接。"
+    cardLine1 := "下方测试后被收回，说明承接出现。"
+    cardLine2 := "回踩" + pullbackLevelName + "还能承接，修复有效。"
+    cardLine3 := "跌回扫低位下方则修复失败。"
+else if vwapExtendedUp
+    stateText := dmiHot ? "过热延展" : "上方延展"
+    watchText := "看" + pullbackLevelName
+    invalidText := "等回踩接受"
+    directionGuideText := dmiHot ? "方向: 过热延展" : "方向: 上方延展"
+    actionGuideText := "应对: 不追延展，等回踩" + pullbackLevelText + "守住；跌回VWAP则先看VWAP附近反应。"
+    detailText := dmiHot ? "价格远离VWAP且ADX过热，延展质量下降。具体看回踩" + pullbackLevelText + "能否守住，不能守住就先看VWAP附近反应。" : "价格远离VWAP上方。具体等回踩" + pullbackLevelText + "，守住才说明上方接受仍有效。"
+    cardLine1 := "价格离VWAP较远，先等靠近关键位。"
+    cardLine2 := "等回踩" + pullbackLevelName + "守住，再看上方能否继续接受。"
+    cardLine3 := "跌回VWAP则先看VWAP反应。"
+else if vwapExtendedDn
+    stateText := dmiHot ? "过热延展" : "下方延展"
+    watchText := "看" + reboundLevelName
+    invalidText := "等反抽承压"
+    directionGuideText := dmiHot ? "方向: 过热延展" : "方向: 下方延展"
+    actionGuideText := "应对: 不追延展，等反抽" + reboundLevelText + "承压；收回VWAP则先看VWAP附近反应。"
+    detailText := dmiHot ? "价格远离VWAP且ADX过热，延展质量下降。具体看反抽" + reboundLevelText + "能否承压，不能承压就先看VWAP附近反应。" : "价格远离VWAP下方。具体等反抽" + reboundLevelText + "，承压才说明下方接受仍有效。"
+    cardLine1 := "价格离VWAP较远，先等靠近关键位。"
+    cardLine2 := "等反抽" + reboundLevelName + "承压，再看下方能否继续接受。"
+    cardLine3 := "收回VWAP则先看VWAP反应。"
+else if valueMigrating
+    stateText := "价值迁移"
+    watchText := "看新VA边"
+    invalidText := "回POC旁"
+    directionGuideText := "方向: 价值迁移"
+    actionGuideText := "应对: 看价格是否在VA外继续接受；回到POC旁则迁移暂停。"
+    detailText := "价格离开POC并在价值区外停留，市场可能重新定价。重点看新VA边是否接受。"
+    cardLine1 := "价格离开成交密集区，市场可能重新定价。"
+    cardLine2 := "看VA外能否继续停留；不能停留就回POC。"
+    cardLine3 := "回到POC旁则先看震荡。"
+else if pocBalance
+    stateText := "平衡震荡"
+    watchText := "看VAH/VAL"
+    invalidText := "破区边"
+    directionGuideText := "方向: 平衡震荡"
+    actionGuideText := "应对: 中间不追，等VAH上方接受或VAL下方接受。"
+    detailText := "价格在价值区内，POC/VWAP附近反复。重点看VAH或VAL哪一边先被接受。"
+    cardLine1 := "价格还在价值区内，市场暂时平衡。"
+    cardLine2 := "中间少判断，等VAH或VAL一侧被接受。"
+    cardLine3 := "区边确认后再判断方向。"
+else if trendBullAligned and dmiBullConfirm
+    stateText := "顺势偏强"
+    watchText := "看" + pullbackLevelName
+    invalidText := "破VWAP"
+    directionGuideText := "方向: 顺势偏强"
+    actionGuideText := "应对: 回踩" + pullbackLevelText + "承接，结构延续；跌破VWAP则转弱。"
+    detailText := "VWAP、EMA与DMI方向一致，价格保持偏强背景。具体看回踩" + pullbackLevelText + "是否承接。"
+    cardLine1 := "价格和均线结构偏顺，先按强势背景看。"
+    cardLine2 := "回踩" + pullbackLevelName + "还能承接，结构延续。"
+    cardLine3 := "跌破VWAP则偏强失效。"
+else if trendBearAligned and dmiBearConfirm
+    stateText := "顺势偏弱"
+    watchText := "看" + reboundLevelName
+    invalidText := "收回VWAP"
+    directionGuideText := "方向: 顺势偏弱"
+    actionGuideText := "应对: 反抽" + reboundLevelText + "承压，结构延续；收回VWAP则转强。"
+    detailText := "VWAP、EMA与DMI方向一致，价格保持偏弱背景。具体看反抽" + reboundLevelText + "是否承压。"
+    cardLine1 := "价格和均线结构偏顺，先按弱势背景看。"
+    cardLine2 := "反抽" + reboundLevelName + "继续承压，结构延续。"
+    cardLine3 := "收回VWAP则偏弱失效。"
+else if structureConflict
+    stateText := "多空冲突"
+    watchText := "等确认"
+    invalidText := "等VWAP/VA"
+    directionGuideText := "方向: 多空冲突"
+    actionGuideText := "应对: 等VWAP重新站稳/跌破，或VAH/VAL一边被接受。"
+    detailText := "结构信号不一致，控制权尚未确认。等待VWAP或VA边给出明确方向。"
+    cardLine1 := "多空线索互相打架，控制权不清。"
+    cardLine2 := "等VWAP站稳/跌破，或VA边被接受。"
+    cardLine3 := "确认前先观望。"
+
+bool stateBullBg = stateText == "偏强修复" or stateText == "上方接受" or stateText == "顺势偏强" or stateText == "下方修复"
+bool stateBearBg = stateText == "偏弱回落" or stateText == "下方接受" or stateText == "顺势偏弱" or stateText == "上方拒绝"
+bool stateWarnBg = stateText == "上方延展" or stateText == "下方延展" or stateText == "多空冲突" or stateText == "过热延展" or stateText == "上方试探" or stateText == "下方试探"
+color stateBg = stateBullBg ? color.new(DMI_TABLE_BULL, 0) : stateBearBg ? color.new(DMI_TABLE_BEAR, 0) : stateWarnBg ? color.new(DMI_TABLE_WARN, 0) : DMI_TABLE_CELL_BG
+
+var table dmiPathTable = table.new(f_dmi_pos(DMI_TABLE_POS), 2, 18, border_width=1)
+f_dmi_cell(int col, int row, string txt, color bg, color tc) =>
+    table.cell(dmiPathTable, col, row, txt, bgcolor=bg, text_color=tc, text_size=f_dmi_size(DMI_TABLE_SIZE))
+
+//====================================================
+// Multi-market decision scoring / trigger prices
+//====================================================
+f_score_text(string side, int score) =>
+    side + str.tostring(math.min(math.max(score, 0), 10))
+
+f_price_text(string name, float price) =>
+    na(price) ? "--" : name + " " + str.tostring(price, format.mintick)
+
+f_fmt_price(float price) =>
+    na(price) ? "--" : str.tostring(price, format.mintick)
+
+f_strength_text(int score) =>
+    score >= 8 ? "强" : score >= 6 ? "可" : score >= 4 ? "弱" : "无"
+
+int trendLongScore = 0
+int trendShortScore = 0
+int reversalLongScore = 0
+int reversalShortScore = 0
+
+trendLongScore += priceAboveS ? 2 : 0
+trendLongScore += priceAboveVah ? 2 : priceInVA ? 1 : 0
+trendLongScore += emaBull ? 2 : 0
+trendLongScore += dmiBullConfirm ? 2 : 0
+trendLongScore += volHigh and closeNearHigh ? 1 : 0
+trendLongScore += AUTO_WEIGHT_BY_MARKET and marketCrypto and volHigh ? 1 : 0
+trendLongScore += AUTO_WEIGHT_BY_MARKET and marketStock and volHigh ? 1 : 0
+trendLongScore += SHOW_CVD_CONFIRM and cvdBullConfirm ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+trendLongScore -= SHOW_CVD_CONFIRM and cvdBearDivQualified ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+
+trendShortScore += priceBelowS ? 2 : 0
+trendShortScore += priceBelowVal ? 2 : priceInVA ? 1 : 0
+trendShortScore += emaBear ? 2 : 0
+trendShortScore += dmiBearConfirm ? 2 : 0
+trendShortScore += volHigh and closeNearLow ? 1 : 0
+trendShortScore += AUTO_WEIGHT_BY_MARKET and marketCrypto and volHigh ? 1 : 0
+trendShortScore += AUTO_WEIGHT_BY_MARKET and marketStock and volHigh ? 1 : 0
+trendShortScore += SHOW_CVD_CONFIRM and cvdBearConfirm ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+trendShortScore -= SHOW_CVD_CONFIRM and cvdBullDivQualified ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+
+reversalLongScore += sweptLowReclaimed ? 3 : 0
+reversalLongScore += valReclaimed ? 2 : 0
+reversalLongScore += vwapExtendedDn ? 2 : 0
+reversalLongScore += dmiHot ? 1 : 0
+reversalLongScore += volHigh and not closeNearLow ? 1 : 0
+reversalLongScore += AUTO_WEIGHT_BY_MARKET and (marketMetal or marketForex) and sweptLowReclaimed ? 1 : 0
+reversalLongScore += SHOW_CVD_CONFIRM and cvdBullDivQualified ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+reversalLongScore += SHOW_CVD_CONFIRM and cvdAbsorbBuy ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+
+reversalShortScore += sweptHighRejected ? 3 : 0
+reversalShortScore += vahRejected ? 2 : 0
+reversalShortScore += vwapExtendedUp ? 2 : 0
+reversalShortScore += dmiHot ? 1 : 0
+reversalShortScore += volHigh and not closeNearHigh ? 1 : 0
+reversalShortScore += AUTO_WEIGHT_BY_MARKET and (marketMetal or marketForex) and sweptHighRejected ? 1 : 0
+reversalShortScore += SHOW_CVD_CONFIRM and cvdBearDivQualified ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+reversalShortScore += SHOW_CVD_CONFIRM and cvdDistributeSell ? int(math.round(CVD_CONFIRM_WEIGHT)) : 0
+
+trendLongScore := math.min(math.max(trendLongScore, 0), 10)
+trendShortScore := math.min(math.max(trendShortScore, 0), 10)
+reversalLongScore := math.min(math.max(reversalLongScore, 0), 10)
+reversalShortScore := math.min(math.max(reversalShortScore, 0), 10)
+
+string trendScoreText = "多" + str.tostring(trendLongScore) + "/空" + str.tostring(trendShortScore)
+string reversalScoreText = "多" + str.tostring(reversalLongScore) + "/空" + str.tostring(reversalShortScore)
+
+
+string trendMiniText = emaText + "｜" + dmiVerifyText
+string volumeMiniText = volHigh and closeNearHigh ? "放量上收" : volHigh and closeNearLow ? "放量下收" : volHigh ? "放量分歧" : volLow ? "缩量试探" : "量能普通"
+string eventMiniText = eventText == "无新事件" ? "无新事件" : eventText
+string cvdMiniText = cvdStateText
+
+string longBreakName = not na(resPrice) ? resName : not na(curVah) ? "VAH" : not na(sVwap) ? "VWAP" : "前高"
+float longBreakPrice = not na(resPrice) ? resPrice : not na(curVah) ? curVah : sVwap
+string shortBreakName = not na(supPrice) ? supName : not na(curVal) ? "VAL" : not na(sVwap) ? "VWAP" : "前低"
+float shortBreakPrice = not na(supPrice) ? supPrice : not na(curVal) ? curVal : sVwap
+float longPlanPrice = priceAboveS ? pullbackLevelPrice : longBreakPrice
+float shortPlanPrice = priceBelowS ? reboundLevelPrice : shortBreakPrice
+string longPlanAction = priceAboveS ? "回踩" + pullbackLevelName : "破" + longBreakName
+string shortPlanAction = priceBelowS ? "反抽" + reboundLevelName : "破" + shortBreakName
+string longPlanText = "多:" + longPlanAction + " " + f_fmt_price(longPlanPrice)
+string shortPlanText = "空:" + shortPlanAction + " " + f_fmt_price(shortPlanPrice)
+string structureShortText = valueText + "｜" + vwapText
+string planShortText = longPlanText + "｜" + shortPlanText
+
+string nowAdviceText = "等确认"
+if dmiHot or vwapExtendedUp or vwapExtendedDn
+    nowAdviceText := "禁追"
+else if trendLongScore >= 7 and trendLongScore >= trendShortScore + 2
+    nowAdviceText := "偏多等回踩"
+else if trendShortScore >= 7 and trendShortScore >= trendLongScore + 2
+    nowAdviceText := "偏空等反抽"
+else if reversalLongScore >= 6 and reversalLongScore >= reversalShortScore + 2
+    nowAdviceText := "反转多等确认"
+else if reversalShortScore >= 6 and reversalShortScore >= reversalLongScore + 2
+    nowAdviceText := "反转空等确认"
+else if pocBalance or structureConflict or dmiTrendWeak
+    nowAdviceText := "观望"
+bool htfAllowLong = not USE_HTF_FILTER or not htfBear
+bool htfAllowShort = not USE_HTF_FILTER or not htfBull
+bool setupLongA = trendLongScore >= 8 and trendLongScore >= trendShortScore + 2 and cvdBullConfirm and priceAboveS and acceptanceBullOk and htfAllowLong and allowAByLocation and not dmiHot
+bool setupShortA = trendShortScore >= 8 and trendShortScore >= trendLongScore + 2 and cvdBearConfirm and priceBelowS and acceptanceBearOk and htfAllowShort and allowAByLocation and not dmiHot
+bool setupLongB = trendLongScore >= 6 and trendLongScore >= trendShortScore + 2 and cvdLongOk and htfAllowLong and not setupLongA
+bool setupShortB = trendShortScore >= 6 and trendShortScore >= trendLongScore + 2 and cvdShortOk and htfAllowShort and not setupShortA
+bool setupLongC = reversalLongScore >= 6 and reversalLongScore >= reversalShortScore + 2 and htfAllowLong
+bool setupShortC = reversalShortScore >= 6 and reversalShortScore >= reversalLongScore + 2 and htfAllowShort
+bool xHot = dmiHot
+bool xExtended = vwapExtendedUp or vwapExtendedDn
+bool xConflict = structureConflict
+bool xHtfConflict = USE_HTF_FILTER and ((trendLongScore >= 7 and htfBear) or (trendShortScore >= 7 and htfBull))
+bool setupX = xHot or xExtended or xConflict or xHtfConflict
+string xReasonText = xHot ? "过热禁追" : xHtfConflict ? "高周冲突" : xConflict ? "结构冲突" : xExtended ? "远离VWAP" : "风险禁追"
+string setupGradeRaw = setupX ? "X" : setupLongA ? "A多" : setupShortA ? "A空" : setupLongB ? "B多" : setupShortB ? "B空" : setupLongC ? "C反多" : setupShortC ? "C反空" : "C等待"
+var string setupGradeStable = "C等待"
+var string setupGradeCandidate = "C等待"
+var int setupGradeCandidateBars = 0
+bool rawIsRisk = setupGradeRaw == "X"
+bool rawIsA = setupGradeRaw == "A多" or setupGradeRaw == "A空"
+if rawIsRisk
+    setupGradeStable := setupGradeRaw
+    setupGradeCandidate := setupGradeRaw
+    setupGradeCandidateBars := 0
+else if rawIsA and setupGradeRaw != setupGradeStable
+    if setupGradeRaw == setupGradeCandidate
+        setupGradeCandidateBars += 1
+    else
+        setupGradeCandidate := setupGradeRaw
+        setupGradeCandidateBars := 1
+    if setupGradeCandidateBars >= GRADE_STABLE_BARS
+        setupGradeStable := setupGradeRaw
+else
+    setupGradeStable := setupGradeRaw
+    setupGradeCandidate := setupGradeRaw
+    setupGradeCandidateBars := 0
+string setupGradeText = setupGradeStable
+bool displayLongA = setupGradeText == "A多"
+bool displayShortA = setupGradeText == "A空"
+bool activeLongPlan = displayLongA or setupLongB or setupLongC
+bool activeShortPlan = displayShortA or setupShortB or setupShortC
+string treatmentText = setupX ? xReasonText : displayLongA ? "回踩做多" : displayShortA ? "反抽做空" : setupLongB ? "轻仓等多" : setupShortB ? "轻仓等空" : setupLongC ? "站回再多" : setupShortC ? "跌回再空" : "观望"
+float longInvalidPrice = invalidText == "跌回VWAP" or invalidText == "破VWAP" ? sVwap : invalidText == "跌回VA内" ? curVah : invalidText == "跌回扫低" ? curVal : invalidText == "等回踩接受" ? longPlanPrice : na
+float shortInvalidPrice = invalidText == "收回VWAP" ? sVwap : invalidText == "收回VA内" ? curVal : invalidText == "收回扫高" ? curVah : invalidText == "等反抽承压" ? shortPlanPrice : na
+string invalidBaseText = invalidText == "跌回VWAP" ? "破VWAP" : invalidText == "收回VWAP" ? "回VWAP" : invalidText == "跌回VA内" ? "回VAH下" : invalidText == "收回VA内" ? "回VAL上" : invalidText == "破区边" ? "破VA边" : invalidText == "收回扫高" ? "回扫高" : invalidText == "跌回扫低" ? "破扫低" : invalidText == "等VWAP/VA" ? "等VWAP/VA" : invalidText
+string longInvalidText = "多失效:" + invalidBaseText + " " + f_fmt_price(longInvalidPrice)
+string shortInvalidText = "空失效:" + invalidBaseText + " " + f_fmt_price(shortInvalidPrice)
+string invalidSpecificText = setupX ? "不进场" : activeLongPlan ? longInvalidText : activeShortPlan ? shortInvalidText : "等触发后设失效"
+string focusedPlanText = setupX ? "等:" + watchText : activeLongPlan ? longPlanText : activeShortPlan ? shortPlanText : planShortText
+
+if barstate.islast
+    if SHOW_DMI_TABLE
+        if TABLE_VIEW_MODE == "简洁"
+            f_dmi_cell(0, 0, "等级", DMI_TABLE_HEADER_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(1, 0, setupGradeText, setupX ? color.new(DMI_TABLE_WARN, 0) : stateBg, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 1, "处理", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 1, treatmentText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 2, "背景", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 2, SHOW_HTF_ROW ? htfBiasText + " " + htfTfLabel : structureShortText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 3, "位置", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 3, structureShortText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 4, "量能", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 4, volumeMiniText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 5, "CVD", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 5, cvdMiniText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 6, "执行", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 6, focusedPlanText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 7, "风控", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 7, invalidSpecificText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            table.clear(dmiPathTable, 0, 8, 1, 17)
+        else
+            f_dmi_cell(0, 0, "等级", DMI_TABLE_HEADER_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(1, 0, setupGradeText, setupX ? color.new(DMI_TABLE_WARN, 0) : stateBg, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 1, "处理", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 1, treatmentText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 2, "状态", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 2, stateText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 3, "背景", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 3, htfBiasText + " " + htfTfLabel, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 4, "位置", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 4, structureShortText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 5, "趋势", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 5, trendMiniText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 6, "量能", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 6, volumeMiniText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 7, "CVD", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 7, cvdMiniText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 8, "事件", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 8, eventMiniText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 9, "评分", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 9, trendScoreText + "｜反" + reversalScoreText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 10, "多计划", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 10, longPlanText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 11, "空计划", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 11, shortPlanText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            f_dmi_cell(0, 12, "风控", DMI_TABLE_CELL_BG, DMI_TABLE_KEY)
+            f_dmi_cell(1, 12, invalidSpecificText, DMI_TABLE_CELL_BG, DMI_TABLE_TEXT)
+            table.clear(dmiPathTable, 0, 13, 1, 17)
+    else
+        table.clear(dmiPathTable, 0, 0, 1, 17)
+
+// CVD is calculated inside the overlay script for confirmation; values are exposed in Data Window only.
+plot(SHOW_CVD_CONFIRM ? cvdValue : na, title="CVD Value", display=display.data_window, color=color.new(color.teal, 100))
+plot(SHOW_CVD_CONFIRM ? cvdSlope : na, title="CVD Slope", display=display.data_window, color=color.new(color.orange, 100))
+
+//====================================================
+// Price Scale Labels (non-ICT levels)
+//====================================================
+float show_npoc_val = na
+if array.size(npocList) > 0
+    int i = array.size(npocList) - 1
+    while i >= 0
+        NakedPOC n = array.get(npocList, i)
+        if n.active
+            show_npoc_val := n.price
+            break
+        i -= 1
+
+float axisPoc = SHOW_AXIS_VP_LEVELS and SHOW_POC ? profileEngine.lastPocPrice : na
+float axisVah = SHOW_AXIS_VP_LEVELS and SHOW_VAH_VAL ? profileEngine.lastVahPrice : na
+float axisVal = SHOW_AXIS_VP_LEVELS and SHOW_VAH_VAL ? profileEngine.lastValPrice : na
+float axisNpoc = SHOW_AXIS_VP_LEVELS and SHOW_NPOC ? show_npoc_val : na
+float axisDo = SHOW_AXIS_DO_LEVEL ? dOpenToday : na
+
+//====================================================
+// Pro markers and alerts
+//====================================================
+bool alertLongA = ENABLE_PRO_ALERTS and displayLongA
+bool alertShortA = ENABLE_PRO_ALERTS and displayShortA
+bool alertSweepLowRepair = ENABLE_PRO_ALERTS and sweptLowReclaimed and (cvdBullDivQualified or cvdAbsorbBuy)
+bool alertSweepHighReject = ENABLE_PRO_ALERTS and sweptHighRejected and (cvdBearDivQualified or cvdDistributeSell)
+bool alertNoChase = ENABLE_PRO_ALERTS and setupX
+alertcondition(alertLongA, "Pro A Long", "A long")
+alertcondition(alertShortA, "Pro A Short", "A short")
+alertcondition(alertSweepLowRepair, "Pro Sweep Low Repair", "Sweep low repair")
+alertcondition(alertSweepHighReject, "Pro Sweep High Reject", "Sweep high reject")
+alertcondition(alertNoChase, "Pro No Chase", "No chase")
+
+//====================================================
+// Price Scale Plots - right price axis only
+//====================================================
+float axisPocPlot = (SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_VP_LEVELS) ? axisPoc : na
+float axisVahPlot = (SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_VP_LEVELS) ? axisVah : na
+float axisValPlot = (SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_VP_LEVELS) ? axisVal : na
+float axisNpocPlot = (SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_VP_LEVELS and SHOW_NPOC) ? axisNpoc : na
+float axisDoPlot  = (SHOW_RIGHT_PRICE_AXIS and SHOW_AXIS_DO_LEVEL) ? axisDo : na
+plot(axisPocPlot, title="POC Price", color=POC_COLOR, show_last=1, display=display.price_scale)
+plot(axisVahPlot, title="VAH Price", color=VAH_COLOR, show_last=1, display=display.price_scale)
+plot(axisValPlot, title="VAL Price", color=VAL_COLOR, show_last=1, display=display.price_scale)
+plot(axisNpocPlot, title="nPOC Price", color=NPOC_COLOR, show_last=1, display=display.price_scale)
+plot(axisDoPlot, title="DO Price", color=DO_COLOR, show_last=1, display=display.price_scale)

@@ -57,14 +57,11 @@ def route_send(symbol: str, message: str, screenshot_path: str = None) -> bool:
     if screenshot_path and Path(screenshot_path).exists():
         full_msg += f"\nMEDIA:{screenshot_path}"
     
-    # 调用 Hermes send_message
+    # 直连 Telegram Bot API，避免 subprocess 开销
     try:
-        cp = subprocess.run(
-            ["hermes", "send-message", target, full_msg],
-            capture_output=True, text=True, timeout=15,
-            cwd=str(ROOT),
-        )
-        return cp.returncode == 0
+        from telegram_direct import send_telegram_direct
+        ok, reason = send_telegram_direct(target, full_msg)
+        return ok
     except Exception:
         return False
 

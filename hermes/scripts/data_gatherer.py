@@ -378,6 +378,18 @@ snap["available"] = {
     "cvd_a_grade": False,
 }
 
+# ═══════════════════════════════════════
+# 10. 账户余额（从Binance实时获取）
+# ═══════════════════════════════════════
+try:
+    acct = signed_futures("/fapi/v2/account", "")
+    if isinstance(acct, dict) and acct.get("totalWalletBalance"):
+        snap["account_balance"] = round(float(acct["totalWalletBalance"]), 2)
+    else:
+        snap["account_balance"] = None
+except:
+    snap["account_balance"] = None
+
 all_available = sum(1 for v in snap["available"].values() if v)
 total = len(snap["available"])
 if all_available >= total - 1:

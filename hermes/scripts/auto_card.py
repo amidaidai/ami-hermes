@@ -133,7 +133,7 @@ def _adaptive_risk(engine_data: dict) -> float:
     """
     try:
         from risk_constitution import adaptive_risk_usd
-        balance = float(engine_data.get("account_balance") or 67.52)
+        balance = float(engine_data.get("account_balance") or 0)
         
         # —— 守卫①: 连亏追踪 ——
         consec, paused = _consecutive_losses()
@@ -2009,6 +2009,36 @@ def auto_card(symbol: str, push: bool = False) -> str:
     
     # ═══ Step 2: 引擎运算 ═══
     print("② 引擎运算...")
+    
+    # v2.0: 合并TV数据到引擎（读取 btc_tv_data.json 缓存，由 TV 数据桥每2分钟更新）
+    try:
+        _tv_path = Path.home() / "AppData/Local/hermes/data/btc_tv_data.json"
+        if _tv_path.exists():
+            with open(_tv_path, "r", encoding="utf-8") as _tf:
+                _tv_raw = json.load(_tf)
+            engine_data["tv"] = {
+                "vwap": float(_tv_raw.get("vwap") or 0),
+                "vah": float(_tv_raw.get("vah") or 0),
+                "val": float(_tv_raw.get("val") or 0),
+                "poc": float(_tv_raw.get("poc") or 0),
+                "band1_high": float(_tv_raw.get("band1_high") or 0),
+                "band1_low": float(_tv_raw.get("band1_low") or 0),
+                "band2_high": float(_tv_raw.get("band2_high") or 0),
+                "band2_low": float(_tv_raw.get("band2_low") or 0),
+                "w_vwap": float(_tv_raw.get("w_vwap") or 0),
+                "m_vwap": float(_tv_raw.get("m_vwap") or 0),
+                "ema9": float(_tv_raw.get("ema9") or 0),
+                "ema21": float(_tv_raw.get("ema21") or 0),
+                "ema34": float(_tv_raw.get("ema34") or 0),
+                "ema55": float(_tv_raw.get("ema55") or 0),
+                "cvd": float(_tv_raw.get("cvd") or 0),
+                "cvd_slope": float(_tv_raw.get("cvd_slope") or 0),
+                "dopen": float(_tv_raw.get("dopen") or 0),
+            }
+            print(f"  ✅ TV数据合并: VWAP {engine_data['tv']['vwap']:.1f} | VAH {engine_data['tv']['vah']:.1f} | VAL {engine_data['tv']['val']:.1f}")
+    except Exception as _tve:
+        print(f"  ⚠️ TV数据加载: {_tve}")
+    
     merged = {}
     results = []
     try:
@@ -2541,8 +2571,8 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     if not nearest_level:
         return ""
     nl_fmt = _fmt_price(nearest_level).strip("`")
-    hi = _fmt_price(k15m.get("high") or k4h.get("high"))
-    lo = _fmt_price(k15m.get("low") or k4h.get("low"))
+    hi = _fmt_price(k15m.get("high") or k4h.get("high")).strip("`")
+    lo = _fmt_price(k15m.get("low") or k4h.get("low")).strip("`")
     taker_label = f"Taker {taker_dir}" if taker_dir not in ("N/A", None, "") else "Taker 无"
     taker_r = f" {taker_ratio}" if taker_ratio and str(taker_ratio) not in ("N/A", "") else ""
     cvd_str = f"CVD {cvd_dir}" if cvd_dir not in ("N/A", "?", None, "") else "CVD ?"
@@ -2609,12 +2639,17 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
         if v.get("vwap"):
             vwap_line = f"VWAP `{v['vwap']}` {v.get('price_vs_vwap','?')}·{ec.get('fast_cloud','?')}·{ec.get('trend_strength','?')[:8]}"
 
+    flow_line = f"{cvd_str} · {taker_label}{taker_r}"
+    if ac == "crypto":
+        flow_line += f" · Funding {funding_rate}"
+
+    price_fmt = _fmt_price(price).strip("`")
     lines = [
         f"◷ {datetime.now(TZ).strftime('%m-%d %H:%M')} · {_display_symbol(symbol)} · {bias}{' ' + grade_line if grade_line else ''}",
         "",
-        f"现价 `{_fmt_price(price)}` 高 `{hi}` 低 `{lo}`",
+        f"现价 `{price_fmt}` 高 `{hi}` 低 `{lo}`",
         f"{nearest_name} `{nl_fmt}` 距 {dist_pct:.1f}%",
-        f"{cvd_str} · {taker_label}{taker_r} · Funding {funding_rate}",
+        flow_line,
         trigger_line,
     ]
     if vwap_line:

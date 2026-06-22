@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-棠溪 · 多模型置信拼接引擎 v1.0
-输入：data_gatherer.py 的 JSON 快照
+棠溪 · 多模型置信拼接引擎 v2.0 (动态TV数据版)
+输入：data_gatherer.py 的 JSON 快照 (含 tv 子段)
 输出：所有模型的方向+置信 + 合并结果
 """
 
@@ -10,50 +10,142 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 # ═══════════════════════════════════════
-# 模型定义：(名称, 方向, 条件满足率, 数据质量, 方向加分)
+# TV 数据读取辅助（从引擎 data 的 tv 子段或 JSON 缓存）
+# ═══════════════════════════════════════
+
+TV_DATA_CACHE = {}
+
+def load_tv_data(data: dict) -> dict:
+    """从 data dict 或 btc_tv_data.json 加载动态TV数据。"""
+    # 优先使用 data dict 中已合并的 tv 子段
+    tv = data.get("tv")
+    if tv and isinstance(tv, dict) and tv.get("vwap"):
+        return tv
+    
+    # 次优：从缓存文件读取
+    if TV_DATA_CACHE.get("vwap"):
+        return TV_DATA_CACHE
+    
+    try:
+        tv_path = os.path.expanduser(
+            "~/AppData/Local/hermes/data/btc_tv_data.json"
+        )
+        if os.path.exists(tv_path):
+            with open(tv_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            tv = {
+                "vwap": _sf(raw.get("vwap")),
+                "vah": _sf(raw.get("vah")),
+                "val": _sf(raw.get("val")),
+                "poc": _sf(raw.get("poc")),
+                "band1_high": _sf(raw.get("band1_high")),
+                "band1_low": _sf(raw.get("band1_low")),
+                "band2_high": _sf(raw.get("band2_high")),
+                "band2_low": _sf(raw.get("band2_low")),
+                "w_vwap": _sf(raw.get("w_vwap")),
+                "m_vwap": _sf(raw.get("m_vwap")),
+                "ema9": _sf(raw.get("ema9")),
+                "ema21": _sf(raw.get("ema21")),
+                "ema34": _sf(raw.get("ema34")),
+                "ema55": _sf(raw.get("ema55")),
+                "cvd": _sf(raw.get("cvd")),
+                "cvd_slope": _sf(raw.get("cvd_slope")),
+                "dopen": _sf(raw.get("dopen")),
+            }
+            TV_DATA_CACHE.update(tv)
+            return tv
+    except Exception:
+        pass
+    return {}
+
+
+def _sf(val):
+    """safe float"""
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _compute_dynamic_atr(data: dict, tv: dict) -> float:
+    """动态 ATR：优先从 24h 范围估算，兜底 287。"""
+    spot = data.get("binance_spot", {}) or {}
+    hi = _sf(spot.get("24h_high"))
+    lo = _sf(spot.get("24h_low"))
+    price = _sf(spot.get("price")) or _sf(data.get("prices", {}).get("primary"))
+    if hi and lo:
+        return round((hi - lo) / 3.0, 1)
+    # 从 band 间距估算
+    b2h, b2l = _sf(tv.get("band2_high")), _sf(tv.get("band2_low"))
+    if b2h and b2l:
+        return round((b2h - b2l) / 4.0, 1)
+    return 287.0  # 最后兜底
+
+
+# ═══════════════════════════════════════
+# 模型定义 — 全改为动态 TV 数据读取
 # ═══════════════════════════════════════
 
 def model_vwap_bounce(data: dict) -> Tuple[str, float]:
     """VWAP反抽：趋势延续中回踩VWAP"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    vwap_s = 66054  # from TV
-    atr = 287
-    dist = abs(price - vwap_s) / atr
+    tv = load_tv_data(data)
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    vwap_s = _sf(tv.get("vwap")) or _sf(tv.get("w_vwap")) or 0
+    atr = _compute_dynamic_atr(data, tv)
+    if not vwap_s or not price or not atr:
+        return "null", 0.0
+    
+    dist = abs(price - vwap_s) / atr if atr > 0 else 99
     
     conditions = 0
     if dist <= 0.5:
         conditions += 1  # 靠近VWAP
     if price < vwap_s:
         conditions += 1  # 价格在VWAP下（回踩场景）
-    # 其他条件需要实时数据判断
+    # CVD 配合：CVD 收缩或转正
+    cvd_slope = _sf(tv.get("cvd_slope"))
+    if cvd_slope > 0:
+        conditions += 1  # CVD 斜率改善
+    # Taker 配合
+    taker = data.get("taker_futures", {})
+    if _sf(taker.get("ratio")) > 1.0:
+        conditions += 1
     
     rate = conditions / 4
-    quality = 0.8  # B级（依赖TV数据）
-    direction_bonus = 0
-    
-    conf = rate * quality + direction_bonus
+    quality = 0.8
+    conf = rate * quality
     direction = "long" if price < vwap_s else "null"
     return direction, min(conf, 1.0)
 
 
 def model_val_reclaim(data: dict) -> Tuple[str, float]:
     """VAL回收：跌破VAL下沿后涨回"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    val = 65601  # from TV
-    atr = 287
+    tv = load_tv_data(data)
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    val = _sf(tv.get("val")) or _sf(tv.get("band1_low")) or 0
+    atr = _compute_dynamic_atr(data, tv)
+    if not val or not price or not atr:
+        return "null", 0.0
     
     conditions = 0
     if price < val:
         conditions += 1  # 价格在VAL下方
     if val - price < atr * 1.5:
         conditions += 1  # 距VAL不太远可回收
-    # 触发条件需要实时观察
-    # 价格需回到VAL内 + 5m/15m收线确认
+    # CVD 改善
+    cvd_slope = _sf(tv.get("cvd_slope"))
+    if cvd_slope > 0:
+        conditions += 1
+    # Taker 买盘
+    taker = data.get("taker_futures", {})
+    if _sf(taker.get("ratio")) > 1.0:
+        conditions += 1
     
     rate = conditions / 4
     quality = 0.8
-    direction_bonus = 0.1  # Taker买盘+多头数据支持
-    
+    direction_bonus = 0.1
     conf = rate * quality + direction_bonus
     direction = "long"
     return direction, min(conf, 1.0)
@@ -61,21 +153,29 @@ def model_val_reclaim(data: dict) -> Tuple[str, float]:
 
 def model_poc_reject(data: dict) -> Tuple[str, float]:
     """POC拒绝：价格回到POC失败"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    poc = 65847  # from TV
-    atr = 287
-    dist = abs(price - poc) / atr
+    tv = load_tv_data(data)
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    poc = _sf(tv.get("poc")) or 0
+    atr = _compute_dynamic_atr(data, tv)
+    if not poc or not price or not atr:
+        return "null", 0.0
+    
+    dist = abs(price - poc) / atr if atr > 0 else 99
+    if dist > 2.0:
+        return "null", 0.0
     
     conditions = 0
     if dist <= 0.5:
         conditions += 1  # 靠近POC
-    if dist > 2.0:
-        rate = 0  # 太远
-    else:
-        rate = conditions / 3
+    if _sf(tv.get("cvd")) < 0 and _sf(tv.get("cvd_slope")) < 0:
+        conditions += 1  # CVD 顺空
+    taker = data.get("taker_futures", {})
+    if _sf(taker.get("ratio")) < 0.9:
+        conditions += 1  # Taker 卖方
     
+    rate = conditions / 3
     quality = 0.8
-    direction_bonus = -0.1 if price < poc else 0.1  # 价格低方向偏空
+    direction_bonus = -0.1 if price < poc else 0.1
     
     conf = rate * quality + direction_bonus
     direction = "short" if price < poc else "null"
@@ -84,20 +184,21 @@ def model_poc_reject(data: dict) -> Tuple[str, float]:
 
 def model_sweep_reclaim(data: dict) -> Tuple[str, float]:
     """扫流动性回收：刺破关键位快速收回"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    low_24 = data.get("binance_spot", {}).get("24h_low", 0)
-    high_24 = data.get("binance_spot", {}).get("24h_high", 0)
-    atr = 287
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    low_24 = _sf(data.get("binance_spot", {}).get("24h_low"))
+    high_24 = _sf(data.get("binance_spot", {}).get("24h_high"))
+    atr = _compute_dynamic_atr(data, load_tv_data(data))
+    if not price or not atr:
+        return "null", 0.0
     
-    # 检查是否接近今日低点（可能被扫）
-    dist_to_low = (price - low_24) / atr
-    dist_to_high = (high_24 - price) / atr
+    dist_to_low = (price - low_24) / atr if low_24 else 99
+    dist_to_high = (high_24 - price) / atr if high_24 else 99
     
     conditions = 0
     if dist_to_low < 0.3:
-        conditions += 1  # 接近低点
+        conditions += 1
     if dist_to_high < 0.3:
-        conditions += 1  # 接近高点
+        conditions += 1
     
     rate = conditions / 3 if conditions > 0 else 0
     quality = 0.8
@@ -111,49 +212,71 @@ def model_sweep_reclaim(data: dict) -> Tuple[str, float]:
 
 def model_breakout_accept(data: dict) -> Tuple[str, float]:
     """突破接受：突破关键位回踩不破"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    val = 65601
-    vah = 66692
-    atr = 287
+    tv = load_tv_data(data)
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    val = _sf(tv.get("val")) or _sf(tv.get("band1_low"))
+    vah = _sf(tv.get("vah")) or _sf(tv.get("band1_high"))
+    atr = _compute_dynamic_atr(data, tv)
+    if not price or not atr or (not val and not vah):
+        return "null", 0.0
     
-    # 检查突破状态
+    d_val = abs(price - val) / atr if val else 99
+    d_vah = abs(price - vah) / atr if vah else 99
+    
     conditions = 0
-    if abs(price - val) < atr * 0.3:
-        conditions += 1  # 接近边界
-    if abs(price - vah) < atr * 0.3:
+    if d_val < 0.3 if val else False:
+        conditions += 1
+    if d_vah < 0.3 if vah else False:
         conditions += 1
     
     rate = conditions / 4
     quality = 0.8
-    
     conf = rate * quality
     if conf < 0.15:
         return "null", 0
-    direction = "long" if abs(price - val) < abs(price - vah) else "short"
+    direction = "long" if d_val < d_vah else "short"
     return direction, min(conf, 1.0)
 
 
 def model_ema_trend(data: dict) -> Tuple[str, float]:
-    """EMA趋势延续：EMA排列方向"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    ema9 = 65153
-    ema21 = 65457
-    ema55 = 65601
+    """EMA趋势延续：EMA排列方向（动态TV数据）"""
+    tv = load_tv_data(data)
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    ema9 = _sf(tv.get("ema9"))
+    ema21 = _sf(tv.get("ema21"))
+    ema55 = _sf(tv.get("ema55"))
+    if not price or not ema9:
+        return "null", 0.0
+    if not ema21:
+        ema21 = ema9 * 0.99
+    if not ema55:
+        ema55 = ema9 * 0.98
     
     conditions = 0
-    if price < ema9 < ema21 < ema55:
-        conditions += 3  # 完美空头排列
-    elif price < ema9:
-        conditions += 2  # 空头
-    elif price < ema21:
-        conditions += 1
-    elif price > ema9 > ema21:
-        conditions += 2  # 多头
+    if ema9 < ema21 < ema55:
+        if price < ema9:
+            conditions += 3  # 完美空头排列
+        elif price < ema21:
+            conditions += 2
+        elif price < ema55:
+            conditions += 1
+    elif ema9 > ema21 > ema55:
+        if price > ema9:
+            conditions += 3  # 完美多头排列
+        elif price > ema21:
+            conditions += 2
+        elif price > ema55:
+            conditions += 1
+    else:
+        # 混合排列
+        if price > ema9:
+            conditions += 1
+        if price > ema21:
+            conditions += 1
     
     rate = conditions / 3
-    quality = 0.9  # EMA数据可靠
+    quality = 0.9
     direction = "short" if price < ema21 else "long" if price > ema21 else "null"
-    
     conf = rate * quality
     return direction, min(conf, 1.0)
 
@@ -267,10 +390,13 @@ def model_oi_divergence(data: dict) -> Tuple[str, float]:
 
 
 def model_m_vwap_magnet(data: dict) -> Tuple[str, float]:
-    """M_VWAP磁吸：价格向月VWAP回归"""
-    price = data.get("binance_spot", {}).get("price", 0)
-    m_vwap = 64288
-    atr = 287
+    """M_VWAP磁吸：价格向月VWAP回归（动态TV数据）"""
+    tv = load_tv_data(data)
+    price = _sf(data.get("binance_spot", {}).get("price"))
+    m_vwap = _sf(tv.get("m_vwap")) or _sf(tv.get("vwap")) or 0
+    atr = _compute_dynamic_atr(data, tv)
+    if not m_vwap or not price or not atr:
+        return "null", 0.0
     
     dist = (price - m_vwap) / atr
     

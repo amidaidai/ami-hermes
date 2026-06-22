@@ -226,6 +226,9 @@ while True:
     last_taker = state.get("last_taker", 1.0)
     kz = get_killzone(now)
     sb = is_silver_bullet(now)
+    sb_label = "银弹窗口🔥" if sb else ""
+    kz_label_map = {"asia": "亚洲", "london": "伦敦", "ny_am": "纽约", "outside": "盘外"}
+    kz_cn = kz_label_map.get(kz, "盘外")
     alerts = []
     div = None
 
@@ -257,8 +260,8 @@ while True:
         if div and lb.get("d") != block:
             lb["d"] = block
             label = "空背离" if div == "bear" else "多背离"
-            kz_tag = f" · {kz}" if kz != "outside" else ""
-            alerts.append(f"🔮 CVD{label}{kz_tag} · {ts}\n价`{price:,.0f}` · CVD`{cvd_s:+.0f}`" + (" · Silver Bullet🔥" if sb else ""))
+            sb_tag = f" · {sb_label}" if sb_label else ""
+            alerts.append(f"🔮 CVD{label} · {ts}\n价`{price:,.0f}` · {kz_cn} · CVD{cvd_s:+.0f}{sb_tag}")
 
     # === 3. 流动性扫荡 ===
     if cnt > 10:
@@ -280,8 +283,8 @@ while True:
             lb["z"] = block
             direction = "多" if far_down and taker > 1.0 else "空" if far_up and taker < 1.0 else None
             if direction:
-                tags = f" · {kz}" if kz != "outside" else ""
-                if sb: tags += " · Silver Bullet🔥"
+                tags = f" · {kz_cn}" if kz != "outside" else ""
+                if sb_label: tags += f" · {sb_label}"
                 alerts.append(f"⭐ 反转信号({direction}) · {ts}\n价`{price:,.0f}` · Taker`{taker}`{tags}")
         if far_down and taker and taker < 0.4 and lb.get("e") != block:
             lb["e"] = block; alerts.append(f"⭐ 空头延续 · {ts}\n价`{price:,.0f}` · VWAP`{vwap:,.0f}` · Taker卖`{taker}")
@@ -308,7 +311,7 @@ while True:
     p_or_d = premium_or_discount(price, vah, val)
     signals = {
         "ts": ts, "price": price, "vwap": vwap, "val": val, "vah": vah,
-        "cvd": cvd_s, "killzone": kz, "silver_bullet": sb,
+        "cvd": cvd_s, "killzone": kz_cn, "silver_bullet": sb_label,
         "premium_discount": p_or_d, "divergence": div,
         "taker": taker, "session": "亚盘" if kz == "asia" else "伦敦" if kz == "london" else "纽约" if kz == "ny_am" else "盘外"
     }

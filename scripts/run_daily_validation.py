@@ -44,7 +44,20 @@ def main() -> int:
     now = datetime.now(TZ)
     stamp = now.strftime("%Y%m%d_%H%M%S")
     if not DATA_FILE.exists():
-        raise FileNotFoundError(f"missing backtest data: {DATA_FILE}")
+        # 静默降级：数据文件缺失时不是失败，跳过回测
+        summary = {
+            "time": now.isoformat(),
+            "error": f"数据文件缺失 {DATA_FILE}",
+            "backtest": None,
+            "walk_forward": None,
+            "coverage": None,
+            "human_backtest": f"⚠️ 跳过：{DATA_FILE.name} 不存在",
+            "human_walk_forward": "",
+        }
+        print(json.dumps({"ok": False, "skipped": True,
+                          "reason": f"数据文件 {DATA_FILE.name} 不存在",
+                          "summary": summary}, ensure_ascii=False))
+        return 0  # 返回0而非抛异常，让日间维护正常完成
     rows = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     cfg = BTConfig(fee_bps=4.0, max_hold=96, risk_per_trade=3.0, min_rr=2.0, warmup=200, startup_candle_count=400, asset="BTCUSDT")
 

@@ -50,18 +50,18 @@ def test_render_card_locked_has_speed_read_block():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v7.1: 速读①②③④四块 + 预案AB + 闸门（③仅在有VWAP/EMA数据时出现）
-    for marker in ["① ", "② 现价", "④ 阻", "预案A", "预案B", "闸门"]:
-        assert marker in card, f"v7.1卡缺少 {marker}"
+    # v8.0: 五段叙事结构 + 交易方案
+    for marker in ["① 今日结构", "② 关键位", "③ 量价分析", "④ 交易方案", "⑤ 综合评分"]:
+        assert marker in card, f"v8.0卡缺少 {marker}"
 
 
 def test_render_card_locked_has_five_sections():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v7.0: 五段整合为四块连续结构，不再分章标题
-    for marker in ["预案A", "预案B", "闸门", "止损", "止盈"]:
-        assert marker in card, f"v7.0卡缺少操作要素 {marker}"
+    # v8.0: 操作要素集中在A/B方案和风控行
+    for marker in ["A方案", "B方案", "风控门", "止损", "止盈"]:
+        assert marker in card, f"v8.0卡缺少操作要素 {marker}"
 
 
 def test_render_card_locked_hides_machine_fields():
@@ -85,8 +85,7 @@ def test_render_card_locked_hides_machine_fields():
     ]
     for token in forbidden:
         assert token not in card, f"分析卡正文泄漏机器字段/枚举: {token}"
-    # 中文模型名可以作为人读策略名出现，但字段名 model_id 不允许出现。
-    assert "VWAP反抽" in card
+    # 中文模型名允许作为人读策略名出现，但 v8.0 不强制渲染。
 
 
 def test_render_card_locked_no_engine_log_format():

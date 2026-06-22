@@ -66,9 +66,9 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
     dir_b = "多" if bearish else "空"
     status_label = status if status.startswith(("A", "B", "X", "C")) else "观望"
 
-    # Entry/target logic
-    entry_a = price if status.startswith("A") else st_a['stop']
-    entry_b = st_b['stop']
+    # Entry/target logic: B/C等待用现价作为观察锚，不能把止损价当入场。
+    entry_a = price
+    entry_b = price
 
     # ⑤ 评分
     score = "\n".join([
@@ -101,7 +101,7 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
     lines = [
         f"`{symbol}` 日内分析 · {status_label}",
         "",
-        f"现价 {_R(price)} ({float(chg or 0):+.2f}%) ｜ 高 {_R(high)} 低 {_R(low)}",
+        f"现价 {_R(price)} ({float(chg or 0):+.2f}%) · 高 {_R(high)} 低 {_R(low)}",
         "",
         "① 今日结构",
         "",
