@@ -610,6 +610,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         displacement=displacement, one_reason=one_reason,
         model_id=model_id, n5=n5, eng_conf=eng_conf,
         klines=klines,
+        tv_dmi=tv_dmi_rows if tv_dmi_rows else None,
     )
     
     # 决策模式：B等待但价格锚定 → 极简卡

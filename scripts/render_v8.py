@@ -12,11 +12,11 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
                    leverage_text: str, inv_line, prot_status: str,
                    data_grade: str, sweep_state: str, displacement: str,
                    one_reason: str, model_id: str, n5, eng_conf,
-                   klines: dict = None) -> str:
+                   klines: dict = None, tv_dmi: dict = None) -> str:
     """v8.0 完整分析卡 · 叙事风格。"""
     from datetime import datetime, timezone, timedelta
     TZ = timezone(timedelta(hours=8))
-    SEP = "━━━━━━━━━━"
+    SEP = ""
 
     _R = lambda v: f"`{v:,.0f}`" if isinstance(v, (int, float)) else str(v)
 
@@ -80,20 +80,32 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         f"风控门 · {prot_status}",
     ])
 
+    lines_vol = [
+        "③ 量价分析",
+        "",
+        f"CVD {cvd_dir} · {cvd_quality}级" if cvd_dir and cvd_dir not in ("?", "N/A") else "CVD 待确认",
+        f"Taker {taker_dir} {taker_ratio}" if taker_dir and str(taker_ratio) not in ("N/A", "", "None") else f"Taker {taker_dir or '待采集'}",
+        f"Funding {funding_rate}" if funding_rate and str(funding_rate) not in ("N/A", "") else "",
+    ]
+    
+    # TV DMI 决策表注入
+    if tv_dmi and tv_dmi.get("grade"):
+        dmi = tv_dmi
+        lines_vol.append("")
+        lines_vol.append(f"📺 TV DMI：{dmi.get('grade','?')} · {dmi.get('action','?')}")
+        lines_vol.append(f"   背景{dmi.get('bias_4h','?')} · CVD{dmi.get('cvd','?')} · {dmi.get('position','?')}")
+        lines_vol.append(f"   执行{dmi.get('execute','?')} · 风控{dmi.get('risk','?')}")
+    
+    lines_vol.append("")
+
     lines = [
         f"`{symbol}` 日内分析 · {status_label}",
         "",
-        SEP,
-        "",
         f"现价 {_R(price)} ({float(chg or 0):+.2f}%) ｜ 高 {_R(high)} 低 {_R(low)}",
-        "",
-        SEP,
         "",
         "① 今日结构",
         "",
         struct,
-        "",
-        SEP,
         "",
         "② 关键位",
         "",
@@ -103,16 +115,7 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         "— 支撑 —",
         s_txt,
         "",
-        SEP,
-        "",
-        "③ 量价分析",
-        "",
-        f"CVD {cvd_dir} · {cvd_quality}级" if cvd_dir and cvd_dir not in ("?", "N/A") else "CVD 待确认",
-        f"Taker {taker_dir} {taker_ratio}" if taker_dir and str(taker_ratio) not in ("N/A", "", "None") else f"Taker {taker_dir or '待采集'}",
-        f"Funding {funding_rate}" if funding_rate and str(funding_rate) not in ("N/A", "") else "",
-        "",
-        SEP,
-        "",
+    ] + lines_vol + [
         "④ 交易方案",
         "",
         f"{status_label} · {one_reason}",
