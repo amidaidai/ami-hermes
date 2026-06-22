@@ -536,7 +536,7 @@ def _gen_next_step(longs: list, shorts: list, neutrals: list,
 # ═══════════════ v4.0: DMI决策卡片 ═══════════════
 
 def build_decision_card(data: dict, decision: dict, dmi: dict, atr: float) -> str:
-    """对标 Pine 指标决策表格式: 等级+处理+背景+位置+量能+CVD+执行+风控"""
+    """v4.2: 卡片格式对齐棠溪偏好 — ①②③结构·冒号对齐·禁emoji·禁表格·价格反引号"""
     price = data.get("price", 0)
     vwap = data.get("vwap", 0)
     vah = data.get("vah", 0)
@@ -551,49 +551,32 @@ def build_decision_card(data: dict, decision: dict, dmi: dict, atr: float) -> st
     rev_l = decision["reversal_long"]
     rev_s = decision["reversal_short"]
 
+    # Direction prefix
+    if bias == "偏多": prefix = "↑做多"
+    elif bias == "偏空": prefix = "↓做空"
+    elif grade == "X": prefix = "×禁做"
+    else: prefix = "○等待"
+
     lines = []
-    lines.append(f"══ BTC · {price:,.0f} · VWAP {vwap:,.0f} · {now_str} ══")
 
-    # ── 等级+处理 ──
-    grade_symbol = {"A": "🟢", "B": "🟡", "C": "⚪", "X": "🔴"}.get(grade, "⚪")
-    lines.append(f"等级: {grade_symbol} {grade} {bias} · 处理: {treatment}")
+    # ── 首行：方向+等级+价格+VWAP ──
+    lines.append(f"{prefix} {grade} {price:,.0f} · VWAP {vwap:,.0f} · {now_str}")
 
-    # ── 评分 ──
-    lines.append(f"趋势: 多{trend_l}/空{trend_s} · 反转: 多{rev_l}/空{rev_s}")
+    # ── ① 方向+处理+评分 ──
+    lines.append(f"① 方向：{bias} · 处理：{treatment}")
+    lines.append(f"   趋势 {trend_l}/{trend_s} · 反转 {rev_l}/{rev_s}")
 
-    # ── DMI ──
-    dmi_text = f"ADX {dmi['adx']} · DI+{dmi['di_plus']}/DI-{dmi['di_minus']}"
+    # ── ② DMI+CVD ──
+    cvd_val = data.get("cvd", 0)
+    cvd_state = decision["cvd_state"]
+    dmi_text = f"ADX {dmi['adx']}"
     if dmi["bull_confirm"]: dmi_text += " · 顺多"
     elif dmi["bear_confirm"]: dmi_text += " · 顺空"
-    elif dmi["hot"]: dmi_text += " · 过热⚠"
+    elif dmi["hot"]: dmi_text += " · 过热"
     elif dmi["trend_weak"]: dmi_text += " · 走弱"
-    lines.append(f"DMI: {dmi_text}")
+    lines.append(f"② DMI {dmi_text} · CVD {cvd_val:+,.0f} · {cvd_state}")
 
-    # ── CVD ──
-    cvd = data.get("cvd", 0)
-    cvd_state = decision["cvd_state"]
-    lines.append(f"CVD: {cvd:+,.0f} · {cvd_state}")
-
-    # ── 位置 ──
-    pos_parts = []
-    if decision["price_above_vah"]: pos_parts.append("VAH上方")
-    elif decision["price_below_val"]: pos_parts.append("VAL下方")
-    elif decision["price_in_va"]: pos_parts.append("VA内")
-    if decision["price_above_s"]: pos_parts.append("VWAP上方")
-    else: pos_parts.append("VWAP下方")
-    lines.append(f"位置: {' · '.join(pos_parts)}")
-
-    # ── EMA ──
-    ema9 = data.get("ema9", 0)
-    ema21 = data.get("ema21", 0)
-    ema34 = data.get("ema34", 0)
-    ema55 = data.get("ema55", 0)
-    if decision["ema_bull"]: ema_text = "多头排列 ✓"
-    elif decision["ema_bear"]: ema_text = "空头排列 ✓"
-    else: ema_text = "纠缠"
-    lines.append(f"EMA: 9={ema9:,.0f} 21={ema21:,.0f} 34={ema34:,.0f} 55={ema55:,.0f} · {ema_text}")
-
-    # ── 关键位 ──
+    # ── ③ 关键位 ──
     key_parts = []
     if vwap: key_parts.append(f"VWAP {vwap:,.0f}")
     if vah: key_parts.append(f"VAH {vah:,.0f}")
@@ -603,21 +586,32 @@ def build_decision_card(data: dict, decision: dict, dmi: dict, atr: float) -> st
     if b2h: key_parts.append(f"B2上 {b2h:,.0f}")
     if b2l: key_parts.append(f"B2下 {b2l:,.0f}")
     if key_parts:
-        lines.append(f"关键位: {' · '.join(key_parts)}")
+        lines.append(f"③ {' — '.join(key_parts)}")
 
-    # ── 指标速览 ──
+    # ── ④ 位置+主动买卖 ──
     taker = data.get("taker", 1)
     oi = data.get("oi", 0)
-    metrics = []
-    if taker != 1: metrics.append(f"Taker {taker:.2f}")
-    if oi and oi > 1000: metrics.append(f"OI {oi/1000:,.0f}K")
-    vol = decision.get("rel_vol", 0)
-    if vol > 0: metrics.append(f"相对量 {vol:.1f}x")
-    if metrics:
-        lines.append(f"指标: {' · '.join(metrics)}")
+    pos_parts = []
+    if decision["price_above_vah"]: pos_parts.append("VAH上方")
+    elif decision["price_below_val"]: pos_parts.append("VAL下方")
+    elif decision["price_in_va"]: pos_parts.append("VA内")
+    if decision["price_above_s"]: pos_parts.append("VWAP上方")
+    else: pos_parts.append("VWAP下方")
+    m_text = f"位置：{' · '.join(pos_parts)}"
+    if taker != 1: m_text += f" · 主动买卖 {taker:.2f}"
+    if oi and oi > 1000: m_text += f" · 持仓 {oi/1000:,.0f}K"
+    lines.append(f"④ {m_text}")
 
-    # ── 下一步 — 复用旧函数 ──
-    # Build simplified alerts list for the old next_step generator
+    # ── ⑤ 处理+失效 ──
+    ema9 = data.get("ema9", 0)
+    ema21 = data.get("ema21", 0)
+    ema_text = f"EMA {ema9:,.0f}/{ema21:,.0f}"
+    if decision["ema_bull"]: ema_text += " · 多头排列"
+    elif decision["ema_bear"]: ema_text += " · 空头排列"
+    else: ema_text += " · 纠缠"
+    lines.append(f"⑤ {treatment} · {ema_text}")
+
+    # ── 下一步 ──
     fake_longs = []
     fake_shorts = []
     fake_neutrals = []
@@ -631,11 +625,7 @@ def build_decision_card(data: dict, decision: dict, dmi: dict, atr: float) -> st
     next_step = _gen_next_step(fake_longs, fake_shorts, fake_neutrals, data, bias, grade)
     if next_step:
         lines.append("")
-        lines.append(f"下一步: {next_step}")
-
-    # ── 风控 ──
-    lines.append("")
-    lines.append(f"风控: {treatment} · 失效条件见决策表")
+        lines.append(next_step)
 
     return "\n".join(lines) + "\n"
 
