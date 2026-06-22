@@ -366,6 +366,12 @@ def write_pending(alerts: list[dict], data: dict) -> int:
     if metrics:
         lines.append(f"指标: {' · '.join(metrics)}")
 
+    # ── 下一步: 作战建议 ──
+    next_step = _gen_next_step(longs, shorts, neutrals, data, dominant, grade)
+    if next_step:
+        lines.append("")
+        lines.append(f"下一步: {next_step}")
+
     # 写入
     content = "\n".join(lines) + "\n"
     with open(PENDING, "w", encoding="utf-8") as f:
@@ -430,6 +436,79 @@ def _gen_summary(longs: list, shorts: list, neutrals: list,
         return f"价格{price:,.0f}贴VWAP({vwap:,.0f})，多空均衡，等信号"
 
     return ""
+
+# ═══════════════ 下一步作战建议 ═══════════════
+
+def _gen_next_step(longs: list, shorts: list, neutrals: list,
+                   data: dict, dominant: str, grade: str) -> str:
+    """根据信号方向 + 关键位，生成'看哪、做什么'的行动建议。"""
+    price = data.get("price", 0)
+    vwap = data.get("vwap", 0)
+    vah = data.get("vah", 0)
+    val = data.get("val", 0)
+    b2h = data.get("band2_high", 0)
+    b2l = data.get("band2_low", 0)
+    taker = data.get("taker", 1)
+    has_sb = any("SilverBullet" in n.get("model","") for n in neutrals)
+
+    # ── 选最紧关键位 ──
+    levels_above = []
+    levels_below = []
+    # 阻力：在价格上方
+    if vah and vah > price: levels_above.append(("VAH", vah))
+    if b2h and b2h > price: levels_above.append(("B2上", b2h))
+    if b2l and b2l > price: levels_above.append(("B2下", b2l))
+    # 支撑：在价格下方
+    if b2h and b2h < price: levels_below.append(("B2上", b2h))
+    if vwap and vwap < price: levels_below.append(("VWAP", vwap))
+    if b2l and b2l < price: levels_below.append(("B2下", b2l))
+    if val and val < price: levels_below.append(("VAL", val))
+
+    nearest_resist = min(levels_above, key=lambda x: x[1]) if levels_above else None
+    nearest_support = min(levels_below, key=lambda x: price-x[1]) if levels_below else None
+
+    def _fmt(lv): return f"{lv[0]}({lv[1]:,.0f})" if lv else ""
+
+    if dominant == "偏多":
+        watch = nearest_support if nearest_support else ("VWAP", vwap)
+        if nearest_resist:
+            target_str = _fmt(nearest_resist)
+        else:
+            target_str = f"新高(>{price:,.0f})"
+        if has_sb:
+            return (f"守{_fmt(watch)}上方等银弹窗(14-15UTC)确认。"
+                    f"若突破向上，目标{target_str}；"
+                    f"若跌破{_fmt(watch)}则观望")
+        if taker < 0.7:
+            return (f"多头控盘但Taker背离({taker:.1f})，"
+                    f"关注{_fmt(watch)}能否守稳。"
+                    f"守稳做多目标{target_str}；失守则减仓")
+        return (f"守{_fmt(watch)}上方做多，目标{target_str}。"
+                f"若破{_fmt(watch)}则止损观望；若站上{target_str}则加仓")
+
+    elif dominant == "偏空":
+        watch = nearest_resist if nearest_resist else ("VWAP", vwap)
+        target = nearest_support if nearest_support else ("VAL", val)
+        return (f"守{_fmt(watch)}下方做空，目标{_fmt(target)}。"
+                f"若站回{_fmt(watch)}则止损；若跌破{_fmt(target)}则空头加速")
+
+    else:  # 中性
+        if has_sb:
+            sup = _fmt(nearest_support) if nearest_support else f"VWAP({vwap:,.0f})"
+            if price > b2h > 0:
+                return (f"银弹窗(14-15UTC)内观望。"
+                        f"守{sup}做多看新高；若跌破{sup}则转空")
+            if price < b2l and b2l > 0:
+                return (f"银弹窗(14-15UTC)内观望。"
+                        f"站回{sup}做多；若继续下破则等VWAP")
+            return (f"银弹窗(14-15UTC)内观望。"
+                    f"上破{_fmt(nearest_resist) if nearest_resist else 'B2上'}做多，"
+                    f"下破{sup}做空")
+        if nearest_resist and nearest_support:
+            return (f"价格{price:,.0f}拉锯。"
+                    f"上破{_fmt(nearest_resist)}做多，"
+                    f"下破{_fmt(nearest_support)}做空，区间内观望")
+        return f"价格{price:,.0f}附近等方向确认，观望为宜"
 
 def main():
     data=load_data()
