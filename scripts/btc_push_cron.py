@@ -55,9 +55,19 @@ DIRECTION_MAP = {
 }
 
 def _infer_direction(text: str, alert_type: str = "") -> str:
-    """根据推送内容推断方向。"""
+    """根据推送内容推断方向。v3: 支持新告警格式 ↑↓○ 前缀。"""
     direction = ""
-    if "站回VWAP" in text or "站回VAL" in text:
+    # v3: 如果行首已有方向标记，直接使用
+    if text.startswith("↑") or "↑做多" in text[:10]:
+        return "↑做多"
+    if text.startswith("↓") or "↓做空" in text[:10]:
+        return "↓做空"
+    if text.startswith("○") or "○等待" in text[:10]:
+        return "○等待"
+    
+    if "VWAP+B2" in text or "VWAP-B2" in text:
+        direction = "↑做多" if "+B2" in text else "↓做空"
+    elif "站回VWAP" in text or "站回VAL" in text:
         direction = "↑做多"
     elif "破VAL" in text:
         direction = "↓做空"
@@ -104,13 +114,17 @@ def _clean_line(line: str) -> str | None:
     return stripped
 
 
-# ===== 每条告警首行匹配规则 =====
+# ===== 每条告警首行匹配规则 (v3.0: 多因子扩展) =====
 _ALERT_HEADER_RE = re.compile(
-    r'^(?:[🟡🔴🟢🟠📊🔮🎯💧⭐★◆]+\s*)?'  # 可选 emoji 前缀
+    r'^(?:[🟡🔴🟢🟠📊🔮🎯💧⭐★◆🔼🔽⏺️]+?\s*)?'  # 可选 emoji 前缀
+    r'[↑↓○]'  # 方向标记 (v3格式)
+    r'|'
+    r'^[★⭐]?'  # 高胜率标记
     r'('
-    r'VWAP测试|站回VWAP|站回VAL|'
-    r'.*破VAL.*|.*破VAH.*|'         # 新破/持续破/刚破VAL/VAH
-    r'CVD[多空]背离|流动性扫荡|CVD吸收|'
+    r'VWAP[+-]B2|站回VWAP|站回VAL|站回VAH|'
+    r'破VAL|破VAH|VWAP测试|'
+    r'CVD[多空]背离|CVD强[买卖]|'
+    r'Taker碾压|EMA完美|'
     r'Sweep|Silver|银弹|KillZone|'
     r'管线|信号|告警|监测'
     r')'
