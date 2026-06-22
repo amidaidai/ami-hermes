@@ -2192,6 +2192,13 @@ def auto_card(symbol: str, push: bool = False) -> str:
         meta["protections_status"] = f"未启用({e})"
     
     # ═══ Step 5: 双卡渲染 ═══
+    # Screenshot (async, non-blocking)
+    screenshot_path = None
+    try:
+        screenshot_path = _tv_screenshot(symbol, direction)
+    except Exception:
+        pass
+    
     # Card A: 完整分析卡（始终输出）
     full_card = render_card_locked(
         symbol, merged, results, meta, engine_data,
@@ -2234,13 +2241,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
     if push:
         print("⑥ 推送...")
         try:
+            from topic_router import get_target
+            target = get_target(symbol)
+            msg = card[:3000]
+            if screenshot_path:
+                msg += f"\nMEDIA:{screenshot_path}"
             import subprocess
             subprocess.run([
                 sys.executable, "-m", "hermes_cli.main", "send",
-                "-t", "telegram:-1003733144325:416",
-                "-q", card[:3000]
+                "-t", target,
+                "-q", msg
             ], timeout=15, capture_output=True)
-            print("  ✅ Telegram已推送")
+            print(f"  ✅ Telegram已推送 → {target}")
         except Exception as e:
             print(f"  ⚠️ Push: {e}")
     
