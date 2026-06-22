@@ -2007,8 +2007,38 @@ def auto_card(symbol: str, push: bool = False) -> str:
             print(f"  ⚠️ XAU: {e}")
             engine_data["prices"] = {"primary": 4310}
     
-    # ═══ Step 2: 引擎运算 ═══
+    # v2.1: 实时事件禁做（Jin10日历 + 宏观过滤）
     print("② 引擎运算...")
+    
+    # Session 策略诊断
+    try:
+        from session_strategy import get_session, get_session_summary
+        _session = get_session()
+        engine_data["_session"] = _session
+        print(f"  🕐 Session: {_session['name']} | Strategy: {_session['strategy']} | Bonus: {_session.get('confidence_bonus',0):+.2f}")
+    except Exception:
+        engine_data["_session"] = {"key": "default", "name": "未知", "strategy": "default"}
+    
+    # Jin10 实时事件禁做
+    try:
+        from event_ban_live import check_event_ban_live
+        _banned_live, _ban_reason = check_event_ban_live(symbol)
+        if _banned_live:
+            print(f"  🚫 事件禁做: {_ban_reason}")
+    except Exception:
+        _banned_live = False
+        _ban_reason = ""
+    
+    # 宏观过滤器
+    try:
+        from macro_filter import fetch_macro_snapshot, macro_filter_bias
+        _macro = fetch_macro_snapshot()
+        engine_data["_macro"] = _macro
+        _macro_bias, _macro_strength, _macro_label = macro_filter_bias(_macro)
+        print(f"  🌍 宏观: {_macro_label} (强度{_macro_strength})")
+    except Exception:
+        _macro_bias, _macro_strength, _macro_label = "neutral", 0.0, "宏观数据不可用"
+        engine_data["_macro"] = {}
     
     # v2.0: 合并TV数据到引擎（读取 btc_tv_data.json 缓存，由 TV 数据桥每2分钟更新）
     try:
@@ -2047,8 +2077,25 @@ def auto_card(symbol: str, push: bool = False) -> str:
     try:
         from multi_model_engine import run_all_models, merge_directions, check_event_ban, call_grok_validation
         results = run_all_models(engine_data, symbol)
-        banned, ban_reason = check_event_ban(engine_data, symbol)
-        merged = merge_directions(results, event_ban=banned, event_ban_reason=ban_reason)
+        
+        # v2.1: 事件禁做 — 优先使用 Jin10 实时日历，兜底关键词检查
+        if _banned_live:
+            banned, ban_reason = True, _ban_reason
+        else:
+            banned, ban_reason = check_event_ban(engine_data, symbol)
+        
+        # 宏观过滤：risk_off 时额外扣分
+        if _macro_bias == "short" and _macro_strength > 0.2:
+            if not banned:
+                ban_reason = f"宏观risk_off({_macro_label}) → 半仓"
+            merged = merge_directions(results, event_ban=banned, event_ban_reason=ban_reason)
+            # 宏观偏空时压制做多方向
+            if merged.get("bias") == "偏多":
+                merged["bias"] = "方向不明/震荡"
+                merged["global_confidence"] = round(merged["global_confidence"] * 0.7, 3)
+                merged["action"] = "⚠宏观risk_off→B等待"
+        else:
+            merged = merge_directions(results, event_ban=banned, event_ban_reason=ban_reason)
         print(f"  ✅ Bias: {merged['bias']} | Conf: {merged['global_confidence']:.3f} | n/5: {merged.get('confidence_5','?')}")
     except Exception as e:
         print(f"  ❌ Engine: {e}")
@@ -2094,6 +2141,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print(f"  ✅ {community[:80]}...")
     except Exception as e:
         print(f"  ⚠️ 社区: {e}")
+    
+    # v2.1: Polymarket 预测市场情绪
+    try:
+        import importlib, sys as _sys
+        _sys.path.insert(0, str(ROOT / "hermes" / "scripts"))
+        from polymarket_bridge import get_polymarket_line
+        poly_line = get_polymarket_line()
+        print(f"  📊 {poly_line}")
+        engine_data["poly_sentiment"] = poly_line
+    except Exception as e:
+        engine_data["poly_sentiment"] = ""
+        print(f"  ⚠️ Poly: {e}")
     
     # ═══ Step 6: 市场体制（用于速读区一句话） ═══
     print("⑥ 市场体制...")

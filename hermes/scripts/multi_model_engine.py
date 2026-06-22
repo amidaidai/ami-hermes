@@ -464,16 +464,36 @@ ALL_MODELS = [
 # ═══════════════════════════════════════
 
 def run_all_models(data: dict, symbol: str = "BTCUSDT") -> List[dict]:
-    """运行所有模型，返回结果列表。F轮：应用 asset_weight_adapter 按资产调整置信度。"""
+    """运行所有模型，返回结果列表。应用session策略过滤 + 三层确认 + 资产权重。"""
     results = []
+    
+    # v2.1: Session策略 — 按KillZone动态激活模型
+    try:
+        from session_strategy import get_session, model_priority_filter
+        session = get_session()
+    except Exception:
+        session = {"key": "default", "priority_models": [], "avoid_models": [], "confidence_bonus": 0.0}
+    session_bonus = session.get("confidence_bonus", 0.0)
+    
     for name, fn in ALL_MODELS:
         try:
+            # Session过滤：不活跃时段的模型直接跳过
+            active, weight = model_priority_filter(name, session) if session["key"] != "default" else (True, 1.0)
+            if not active:
+                results.append({"name": name, "direction": "null", "confidence": 0, 
+                               "strength": "会话抑制", "session_blocked": True})
+                continue
+            
             direction, confidence = fn(data)
-            # F轮多资产权重适配 (同一模块直接调用)
+            confidence = confidence * weight + session_bonus
+            confidence = min(max(confidence, 0.0), 1.0)
+            
+            # F轮多资产权重适配
             try:
                 confidence = asset_weight_adapter(symbol, confidence, name)
             except Exception:
                 pass
+            
             results.append({
                 "name": name,
                 "direction": direction,
@@ -482,6 +502,43 @@ def run_all_models(data: dict, symbol: str = "BTCUSDT") -> List[dict]:
             })
         except Exception as e:
             results.append({"name": name, "direction": "error", "confidence": 0, "strength": "错误", "error": str(e)[:50]})
+    
+    # v2.1: 三层确认模型（FVG+OB+Sweep）
+    try:
+        from triple_confirm import triple_confirmation_score
+        ohlcv = data.get("klines", {}).get("15m", [])
+        tv_data = data.get("tv", {})
+        price = data.get("binance_spot", {}).get("price", 0)
+        tc_dir, tc_conf, tc_reason = triple_confirmation_score(price, ohlcv or [], tv_data, session)
+        if tc_dir != "null" and tc_conf > 0.30:
+            results.append({
+                "name": "三层确认(OB+FVG+Sweep)",
+                "direction": tc_dir,
+                "confidence": round(tc_conf, 3),
+                "strength": "强" if tc_conf >= 0.6 else "中等",
+                "triple_reason": tc_reason,
+            })
+    except Exception:
+        pass
+    
+    # v2.1: Silver Bullet 检测
+    try:
+        from triple_confirm import detect_silver_bullet
+        ohlcv = data.get("klines", {}).get("15m", [])
+        tv_data = data.get("tv", {})
+        price = data.get("binance_spot", {}).get("price", 0)
+        sb_dir, sb_conf, sb_reason = detect_silver_bullet(price, ohlcv or [], tv_data, session)
+        if sb_dir != "null" and sb_conf > 0.40:
+            results.append({
+                "name": "★Silver Bullet",
+                "direction": sb_dir,
+                "confidence": round(sb_conf, 3),
+                "strength": "强" if sb_conf >= 0.65 else "中等",
+                "silver_bullet_reason": sb_reason,
+            })
+    except Exception:
+        pass
+    
     return results
 
 

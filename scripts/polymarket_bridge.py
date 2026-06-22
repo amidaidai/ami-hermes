@@ -242,7 +242,13 @@ def polymarket_context_text() -> str:
 
 # CLI 测试
 if __name__ == "__main__":
-    import sys
+    from pathlib import Path as _P
+    import sys as _sys
+    _sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "hermes" / "scripts"))
+    from polymarket_bridge import get_polymarket_line
+    print("Polymarket桥已加载")
+    print(get_polymarket_line())
+    
     if len(sys.argv) > 1 and sys.argv[1] == "--force":
         if CACHE_FILE.exists():
             CACHE_FILE.unlink()
