@@ -677,8 +677,23 @@ def main():
     dmi = compute_dmi(highs, lows, closes)
     atr = compute_atr(highs, lows, closes)
 
+    # Detect KillZone + SilverBullet
+    killzone_active = False
+    try:
+        from session_strategy import get_active_killzone
+        kz = get_active_killzone()
+        if kz:
+            killzone_active = True
+    except Exception:
+        pass
+
+    # Read TV decision table grade from data bridge (v4.1)
+    tv_grade = data.get("tv_grade", "")
+    tv_treatment = data.get("tv_treatment", "")
+
     # DMI Decision Engine → grade
-    decision = compute_scores(data, dmi, atr, ohlcv_bars)
+    decision = compute_scores(data, dmi, atr, ohlcv_bars,
+                              tv_grade=tv_grade, killzone_active=killzone_active)
     grade = decision["grade"]
 
     # Save state

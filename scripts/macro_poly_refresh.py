@@ -12,29 +12,28 @@ try:
     from macro_filter import fetch_macro_snapshot
     snap = fetch_macro_snapshot()
     if not snap.get("dxy"):
-        errors.append("DXY缺失")
+        errors.append("DXY missing")
 except Exception as e:
-    errors.append(f"宏观: {e}")
+    errors.append(f"macro: {e}")
 
 # Poly
 try:
     from polymarket_bridge import polymarket_sentiment_score
     poly = polymarket_sentiment_score()
     if not poly.get("markets"):
-        errors.append("Poly无市场")
+        errors.append("Poly no markets")
 except Exception as e:
-    errors.append(f"Poly: {e}")
+    errors.append(f"poly: {e}")
 
-# Event calendar
+# Event calendar — False means no events, not an error
 try:
     from event_ban_live import refresh_event_cache
-    if not refresh_event_cache():
-        errors.append("日历刷新失败")
+    refresh_event_cache()
 except Exception as e:
-    errors.append(f"日历: {e}")
+    errors.append(f"event: {e}")
 
 if errors:
-    safe = "; ".join(errors).encode("ascii", "replace").decode("ascii")
+    safe = "; ".join(str(e) for e in errors)
     print(f"ERROR: {safe}")
     sys.exit(1)
-# 成功静默
+# success silent
