@@ -25,7 +25,13 @@ record = {"ts": ts, "ts_unix": time.time()}
 # 逐字段单次请求，用 try/except 隔离
 try:
     record["price"] = float(http_get(f"{BINANCE}/api/v3/ticker/price?symbol=BTCUSDT")["price"])
-except: pass
+except:
+    # fallback: try fapi mark price
+    try:
+        mark = http_get(f"{FAPI}/fapi/v1/premiumIndex?symbol=BTCUSDT")
+        record["price"] = float(mark["markPrice"])
+    except:
+        record["price"] = None  # 显式标记缺失，不做静默
 
 try:
     k = http_get(f"{BINANCE}/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=30")
