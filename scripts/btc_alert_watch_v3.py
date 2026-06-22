@@ -79,29 +79,29 @@ def _detect_basic(data: dict, alerts: list, si: dict):
     if b2h>0 and p>b2h:
         s=min(0.65+(p-b2h)/b2h*10,0.85)
         alerts.append({"direction":"↑做多","model":"VWAP+B2突破",
-            "reason":f"价格{p:.0f}>+B2{b2h:.0f}·>VWAP{vwap:.0f}",
+            "reason":f"价{p:,.0f}>B2上{b2h:,.0f}",
             "conf":round(s,2),"weight":3,"priority":"A"})
     if b2l>0 and p<b2l:
         s=min(0.65+(b2l-p)/b2l*10,0.85)
         alerts.append({"direction":"↓做空","model":"VWAP-B2跌破",
-            "reason":f"价格{p:.0f}<-B2{b2l:.0f}",
+            "reason":f"价{p:,.0f}<B2下{b2l:,.0f}",
             "conf":round(s,2),"weight":3,"priority":"A"})
     
     if data["cvd_slope"]>3000 and data["cvd"]>10000:
         alerts.append({"direction":"↑做多","model":"CVD强买",
-            "reason":f"CVD+{data['cvd']:.0f}·斜率+{data['cvd_slope']:.0f}",
+            "reason":f"+{data['cvd']:,.0f}·斜率+{data['cvd_slope']:,.0f}",
             "conf":0.70,"weight":3,"priority":"A"})
     if data["cvd_slope"]<-3000 and data["cvd"]<-10000:
         alerts.append({"direction":"↓做空","model":"CVD强卖",
-            "reason":f"CVD{data['cvd']:.0f}·斜率{data['cvd_slope']:.0f}",
+            "reason":f"{data['cvd']:,.0f}·斜率{data['cvd_slope']:,.0f}",
             "conf":0.70,"weight":3,"priority":"A"})
     
     if data["taker"]>1.5:
         alerts.append({"direction":"↑做多","model":"Taker碾压买",
-            "reason":f"Taker{data['taker']:.2f}·买方碾压","conf":0.60,"weight":2,"priority":"B"})
+            "reason":f"{data['taker']:.2f}买方主导","conf":0.60,"weight":2,"priority":"B"})
     if data["taker"]<0.7:
-        alerts.append({"direction":"↓做空","model":"Taker碾压卖",
-            "reason":f"Taker{data['taker']:.2f}·卖方碾压","conf":0.60,"weight":2,"priority":"B"})
+        alerts.append({"direction":"↓做空","model":"Taker卖压",
+            "reason":f"{data['taker']:.2f}卖方主导","conf":0.55,"weight":2,"priority":"B"})
     
     e9,e21,e34,e55=data["ema9"],data["ema21"],data["ema34"],data["ema55"]
     if all(x>0 for x in[e9,e21,e34,e55]):
@@ -121,7 +121,7 @@ def _detect_basic(data: dict, alerts: list, si: dict):
     
     if si.get("is_silver_bullet"):
         alerts.append({"direction":"○监测","model":"★SilverBullet窗",
-            "reason":"14-15UTC银弹·待位移确认","conf":0.50,"weight":2,"priority":"A"})
+            "reason":"14-15UTC银弹·待位移确认","conf":0.50,"weight":2,"priority":"B"})
     
     if data["ls_ratio"]>2.0:
         alerts.append({"direction":"↓做空","model":"多拥挤反转",
@@ -239,25 +239,197 @@ def detect_alerts(data: dict) -> list[dict]:
     _compute_confluence(data, alerts)
     return alerts
 
-def write_pending(alerts: list[dict]) -> int:
-    now_ts=time.time(); written=0
+def write_pending(alerts: list[dict], data: dict) -> int:
+    """v3.4: 分层可读格式 — 短信风格 + conf过滤 + 精简reason"""
+    now_ts = time.time()
+    # 过滤: 冷却 + 低置信 + 纯噪音
+    active = []
     for a in alerts:
-        model=a["model"]; last=_last_alerts.get(model,0)
-        if now_ts-last<COOLDOWN_S and a.get("priority","B")!="A+": continue
-        _last_alerts[model]=now_ts
-        star=a.get("star",""); d=a["direction"]
-        
-        # 决策驾驶舱格式
+        model = a["model"]
+        last = _last_alerts.get(model, 0)
+        # 冷却跳过（A+除外）
+        if now_ts - last < COOLDOWN_S and a.get("priority", "B") != "A+":
+            continue
+        # confluence 行永远通过
         if a.get("is_confluence"):
-            line=(f"{star}{d} | Confluence {a['priority']}: {a['reason']}\n"
-                  f"  → {a.get('key_levels','')}")
-        else:
-            line=f"{star}{d} | {model}: {a['reason']} (conf:{a['conf']:.0%})"
-        
-        with open(PENDING,"a",encoding="utf-8") as f:
-            f.write(f"{line}\n---\n")
-        written+=1
-    return written
+            _last_alerts[model] = now_ts
+            active.append(a)
+            continue
+        # 低置信跳过
+        conf = a.get("conf", 0.5)
+        priority = a.get("priority", "B")
+        if priority == "D":
+            continue
+        if conf < 0.35:
+            continue
+        # ○等待类如果没有方向信号则跳过
+        if "等待" in a.get("direction", "") or "监测" in a.get("direction", ""):
+            if _last_alerts.get(model, 0) > 0:
+                _last_alerts[model] = now_ts
+                continue  # 只推一次，之后冷却
+        _last_alerts[model] = now_ts
+        active.append(a)
+    if not active:
+        return 0
+
+    # 分离 confluence 行和信号行
+    confluence = next((a for a in active if a.get("is_confluence")), None)
+    signals = [a for a in active if not a.get("is_confluence")]
+
+    # 按方向分组
+    longs = [s for s in signals if "做多" in s.get("direction", "")]
+    shorts = [s for s in signals if "做空" in s.get("direction", "")]
+    neutrals = [s for s in signals if s not in longs and s not in shorts]
+
+    # ── 数据快照 ──
+    price = data.get("price", 0)
+    vwap = data.get("vwap", 0)
+    now_str = datetime.now(TZ).strftime("%H:%M")
+
+    lines = []
+    lines.append(f"══ BTC · {price:,.0f} · VWAP {vwap:,.0f} · {now_str} ══")
+
+    # ── 综合评定 ──
+    grade = confluence["priority"] if confluence else "?"
+    n_long = len(longs)
+    n_short = len(shorts)
+    dominant = ""
+    if n_long > n_short:
+        dominant = "偏多"
+    elif n_short > n_long:
+        dominant = "偏空"
+    else:
+        dominant = "中性"
+
+    star_mark = ""
+    if confluence and confluence.get("star"):
+        star_mark = " ★高胜率"
+    lines.append(f"综合: {grade} {dominant} (多{n_long} vs 空{n_short}){star_mark}")
+
+    # ── 一句话总结 ──
+    summary = _gen_summary(longs, shorts, neutrals, data, dominant, grade)
+    if summary:
+        lines.append(f"  {summary}")
+
+    # ── 多头信号 ──
+    if longs:
+        lines.append("")
+        for s in longs:
+            model = s["model"]
+            reason = s["reason"]
+            conf = s.get("conf", 0)
+            conf_str = f" · {conf:.0%}" if conf > 0 else ""
+            lines.append(f"  + {model} → {reason}{conf_str}")
+
+    # ── 空头信号 ──
+    if shorts:
+        lines.append("")
+        for s in shorts:
+            model = s["model"]
+            reason = s["reason"]
+            conf = s.get("conf", 0)
+            conf_str = f" · {conf:.0%}" if conf > 0 else ""
+            lines.append(f"  - {model} → {reason}{conf_str}")
+
+    # ── 中性/窗口 ──
+    if neutrals:
+        lines.append("")
+        for s in neutrals:
+            model = s["model"]
+            reason = s["reason"]
+            lines.append(f"  ~ {model} → {reason}")
+
+    # ── 关键位 ──
+    vah = data.get("vah", 0)
+    val = data.get("val", 0)
+    poc = data.get("poc", 0)
+    b2h = data.get("band2_high", 0)
+    b2l = data.get("band2_low", 0)
+    key_parts = []
+    if vwap: key_parts.append(f"VWAP {vwap:,.0f}")
+    if vah: key_parts.append(f"VAH {vah:,.0f}")
+    if val: key_parts.append(f"VAL {val:,.0f}")
+    if b2h: key_parts.append(f"B2上 {b2h:,.0f}")
+    if b2l: key_parts.append(f"B2下 {b2l:,.0f}")
+    if key_parts:
+        lines.append("")
+        lines.append(f"关键位: {' · '.join(key_parts)}")
+
+    # ── 指标速览 ──
+    cvd = data.get("cvd", 0)
+    taker = data.get("taker", 1)
+    oi = data.get("oi", 0)
+    metrics = []
+    if cvd: metrics.append(f"CVD {cvd:+,.0f}")
+    if taker != 1: metrics.append(f"Taker {taker:.2f}")
+    if oi and oi > 1000: metrics.append(f"OI {oi/1000:,.0f}K")
+    if metrics:
+        lines.append(f"指标: {' · '.join(metrics)}")
+
+    # 写入
+    content = "\n".join(lines) + "\n"
+    with open(PENDING, "w", encoding="utf-8") as f:
+        f.write(content)
+    return len(active)
+
+# ═══════════════ 一句话总结生成 ═══════════════
+
+def _gen_summary(longs: list, shorts: list, neutrals: list,
+                 data: dict, dominant: str, grade: str) -> str:
+    """v3.4: 精炼预警句 — ≤40字，带'谨慎/关注/警惕'关键词。"""
+    price = data.get("price", 0)
+    vwap = data.get("vwap", 0)
+    vah = data.get("vah", 0)
+    val = data.get("val", 0)
+    b2h = data.get("band2_high", 0)
+    b2l = data.get("band2_low", 0)
+    cvd = data.get("cvd", 0)
+    taker = data.get("taker", 1)
+
+    # ── 核心矛盾检测 ──
+    has_b2_break = any("B2" in s.get("model","") for s in longs)
+    has_b2_fall = any("B2" in s.get("model","") for s in shorts)
+    has_cvd_long = any("CVD" in s.get("model","") and "强买" in s.get("direction","") for s in longs)
+    has_cvd_short = any("CVD" in s.get("model","") and "强卖" in s.get("direction","") for s in shorts)
+    has_taker_sell = taker < 0.7
+    has_taker_buy = taker > 1.5
+    has_sb = any("SilverBullet" in n.get("model","") for n in neutrals)
+    has_kz = any("KillZone" in n.get("model","") for n in neutrals)
+    has_fvg = any("FVG" in s.get("model","") for s in longs+shorts)
+
+    # ── 核心逻辑: 方向 + 矛盾 + 行动提示 ──
+    if dominant == "偏多":
+        if has_b2_break and has_taker_sell:
+            return f"多头控盘但Taker卖压({taker:.1f})，关注B2({b2h:,.0f})能否守稳"
+        if has_b2_break:
+            if has_sb:
+                return f"站上B2({b2h:,.0f})，银弹窗临，关注14-15UTC突破确认"
+            return f"站上B2({b2h:,.0f})，多头控盘，回踩{price:,.0f}上方做多"
+        if has_cvd_long:
+            return f"CVD强买支撑，守VWAP({vwap:,.0f})上方偏多"
+        if has_sb:
+            return f"价格{price:,.0f}偏多，银弹窗临，注意追高风险"
+        return f"VWAP({vwap:,.0f})上方偏多，关注{price:,.0f}附近阻力"
+
+    elif dominant == "偏空":
+        if has_b2_fall:
+            return f"失守B2({b2l:,.0f})，空头加速，关注VWAP({vwap:,.0f})支撑"
+        if has_cvd_short and has_taker_sell:
+            return f"CVD+Taker双卖压，若破VWAP({vwap:,.0f})则空头确认"
+        if has_taker_sell:
+            return f"Taker卖压({taker:.1f})持续，谨慎追空，等VWAP({vwap:,.0f})确认"
+        return f"VWAP({vwap:,.0f})下方偏空，关注{val:,.0f}能否回收"
+
+    else:  # 中性
+        if has_sb:
+            return f"多空均衡，银弹窗(14-15UTC)待选方向，观望为宜"
+        if has_kz:
+            return f"价格{price:,.0f}贴VWAP({vwap:,.0f})拉锯，KillZone活，等突破"
+        if has_fvg:
+            return f"价格{price:,.0f}附近拉锯，关注FVG回补方向"
+        return f"价格{price:,.0f}贴VWAP({vwap:,.0f})，多空均衡，等信号"
+
+    return ""
 
 def main():
     data=load_data()
@@ -270,7 +442,7 @@ def main():
             "price":data["price"],"count":len(alerts),"cooldowns":_last_alerts},
             ensure_ascii=False,indent=2),encoding="utf-8")
     except: pass
-    w=write_pending(alerts)
+    w=write_pending(alerts, data)
     if w>0:
         stars=[a for a in alerts if a.get("star")]
         cc=next((a for a in alerts if a.get("is_confluence")),None)
