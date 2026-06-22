@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-棠溪 · 统一多因子告警探测器 v3.1
-替代旧的 level-based btc_alert_watch.py
+棠溪 · 统一多因子告警探测器 v4.0
+对标 SVP+ICT+VWAP+EMA+CVD 指标内 DMI 决策表
 
-检测矩阵（14维度 + Confluence评分）:
+检测矩阵（14维度 → DMI决策引擎）:
   ① VWAP Band 突破 ② CVD 买卖压力 ③ Taker 极值
   ④ EMA 完美排列 ⑤ KillZone ⑥ Silver Bullet 窗
   ⑦ 多空比极端 ⑧ OI背离 ⑨ 事件禁做
   ⑩ 三层确认(OB+FVG+Sweep) ⑪ SilverBullet位移
   ⑫ VAH/VAH回收 ⑬ POC磁吸 ⑭ 宏观风险
 
-Confluence评分: 所有激活信号加权求和→A+/A/B/C/D五级
+v4.0: DMI决策引擎 — 趋势分+反转分双轨 → A/B/C/X四级
+      对标 Pine 指标内 DMI Strategy Table
+      仅 A 级推送（趋势分≥8·CVD确认·关键位门控·HTF过滤）
 """
 
 import json, os, sys, time
@@ -23,10 +25,18 @@ DIR = Path.home() / "AppData/Local/hermes/data"
 PENDING = DIR / "btc_pending.txt"
 STATE = DIR / "detector_state.json"
 LATEST = DIR / "btc_latest.json"
-TV_DATA = DIR / "btc_tv_data.json"
+TV_DATA = DIR / "BTCUSDT.P_tv_data.json"  # matches fetch_tv_data.cjs output
 
 COOLDOWN_S = 900  # 15min 同模型冷却
 _last_alerts: dict[str, float] = {}
+
+# v4.0: DMI决策引擎
+try:
+    from dmi_decision import compute_scores, compute_dmi, compute_atr
+except ImportError:
+    # fallback: add scripts dir to path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from dmi_decision import compute_scores, compute_dmi, compute_atr
 
 def emit_error(text: str):
     sys.stdout.write(text.encode("ascii","replace").decode("ascii").rstrip()+"\n")
@@ -39,7 +49,8 @@ def load_data() -> dict:
     d = {"price":0,"vwap":0,"vah":0,"val":0,"poc":0,
          "band1_high":0,"band1_low":0,"band2_high":0,"band2_low":0,
          "ema9":0,"ema21":0,"ema34":0,"ema55":0,
-         "cvd":0,"cvd_slope":0,"taker":1.0,"ls_ratio":1.0,"oi":0,"funding":0,"vol24":0}
+         "cvd":0,"cvd_slope":0,"taker":1.0,"ls_ratio":1.0,"oi":0,"funding":0,"vol24":0,
+         "w_vwap":0,"m_vwap":0,"labels":[],"levels":[],"ohlcv_bars":[]}
     try:
         if LATEST.exists():
             r=json.loads(LATEST.read_text(encoding="utf-8"))
@@ -57,7 +68,15 @@ def load_data() -> dict:
         if TV_DATA.exists():
             tv=json.loads(TV_DATA.read_text(encoding="utf-8"))
             for k in d:
-                if k in tv: d[k]=_sf(tv[k])
+                if k in tv: d[k]=_sf(tv[k]) if k not in ("labels","levels","ohlcv_bars") else tv.get(k,d[k])
+            # Extract OHLCV bars for DMI computation
+            if "ohlcv" in tv and "bars" in tv.get("ohlcv",{}):
+                d["ohlcv_bars"] = tv["ohlcv"]["bars"]
+            # Labels/levels for ICT sweep detection
+            if "labels" in tv:
+                d["labels"] = tv["labels"]
+            if "levels" in tv:
+                d["levels"] = tv["levels"]
     except: pass
     return d
 
@@ -514,27 +533,193 @@ def _gen_next_step(longs: list, shorts: list, neutrals: list,
                     f"下破{_fmt(nearest_support)}做空，区间内观望")
         return f"价格{price:,.0f}附近等方向确认，观望为宜"
 
+# ═══════════════ v4.0: DMI决策卡片 ═══════════════
+
+def build_decision_card(data: dict, decision: dict, dmi: dict, atr: float) -> str:
+    """对标 Pine 指标决策表格式: 等级+处理+背景+位置+量能+CVD+执行+风控"""
+    price = data.get("price", 0)
+    vwap = data.get("vwap", 0)
+    vah = data.get("vah", 0)
+    val = data.get("val", 0)
+    now_str = datetime.now(TZ).strftime("%H:%M")
+
+    grade = decision["grade"]
+    bias = decision["bias"]
+    treatment = decision["treatment"]
+    trend_l = decision["trend_long"]
+    trend_s = decision["trend_short"]
+    rev_l = decision["reversal_long"]
+    rev_s = decision["reversal_short"]
+
+    lines = []
+    lines.append(f"══ BTC · {price:,.0f} · VWAP {vwap:,.0f} · {now_str} ══")
+
+    # ── 等级+处理 ──
+    grade_symbol = {"A": "🟢", "B": "🟡", "C": "⚪", "X": "🔴"}.get(grade, "⚪")
+    lines.append(f"等级: {grade_symbol} {grade} {bias} · 处理: {treatment}")
+
+    # ── 评分 ──
+    lines.append(f"趋势: 多{trend_l}/空{trend_s} · 反转: 多{rev_l}/空{rev_s}")
+
+    # ── DMI ──
+    dmi_text = f"ADX {dmi['adx']} · DI+{dmi['di_plus']}/DI-{dmi['di_minus']}"
+    if dmi["bull_confirm"]: dmi_text += " · 顺多"
+    elif dmi["bear_confirm"]: dmi_text += " · 顺空"
+    elif dmi["hot"]: dmi_text += " · 过热⚠"
+    elif dmi["trend_weak"]: dmi_text += " · 走弱"
+    lines.append(f"DMI: {dmi_text}")
+
+    # ── CVD ──
+    cvd = data.get("cvd", 0)
+    cvd_state = decision["cvd_state"]
+    lines.append(f"CVD: {cvd:+,.0f} · {cvd_state}")
+
+    # ── 位置 ──
+    pos_parts = []
+    if decision["price_above_vah"]: pos_parts.append("VAH上方")
+    elif decision["price_below_val"]: pos_parts.append("VAL下方")
+    elif decision["price_in_va"]: pos_parts.append("VA内")
+    if decision["price_above_s"]: pos_parts.append("VWAP上方")
+    else: pos_parts.append("VWAP下方")
+    lines.append(f"位置: {' · '.join(pos_parts)}")
+
+    # ── EMA ──
+    ema9 = data.get("ema9", 0)
+    ema21 = data.get("ema21", 0)
+    ema34 = data.get("ema34", 0)
+    ema55 = data.get("ema55", 0)
+    if decision["ema_bull"]: ema_text = "多头排列 ✓"
+    elif decision["ema_bear"]: ema_text = "空头排列 ✓"
+    else: ema_text = "纠缠"
+    lines.append(f"EMA: 9={ema9:,.0f} 21={ema21:,.0f} 34={ema34:,.0f} 55={ema55:,.0f} · {ema_text}")
+
+    # ── 关键位 ──
+    key_parts = []
+    if vwap: key_parts.append(f"VWAP {vwap:,.0f}")
+    if vah: key_parts.append(f"VAH {vah:,.0f}")
+    if val: key_parts.append(f"VAL {val:,.0f}")
+    b2h = data.get("band2_high", 0)
+    b2l = data.get("band2_low", 0)
+    if b2h: key_parts.append(f"B2上 {b2h:,.0f}")
+    if b2l: key_parts.append(f"B2下 {b2l:,.0f}")
+    if key_parts:
+        lines.append(f"关键位: {' · '.join(key_parts)}")
+
+    # ── 指标速览 ──
+    taker = data.get("taker", 1)
+    oi = data.get("oi", 0)
+    metrics = []
+    if taker != 1: metrics.append(f"Taker {taker:.2f}")
+    if oi and oi > 1000: metrics.append(f"OI {oi/1000:,.0f}K")
+    vol = decision.get("rel_vol", 0)
+    if vol > 0: metrics.append(f"相对量 {vol:.1f}x")
+    if metrics:
+        lines.append(f"指标: {' · '.join(metrics)}")
+
+    # ── 下一步 — 复用旧函数 ──
+    # Build simplified alerts list for the old next_step generator
+    fake_longs = []
+    fake_shorts = []
+    fake_neutrals = []
+    if bias == "偏多":
+        fake_longs.append({"model": "DMI决策", "direction": "↑做多"})
+    elif bias == "偏空":
+        fake_shorts.append({"model": "DMI决策", "direction": "↓做空"})
+    else:
+        fake_neutrals.append({"model": "DMI决策", "direction": "○等待"})
+
+    next_step = _gen_next_step(fake_longs, fake_shorts, fake_neutrals, data, bias, grade)
+    if next_step:
+        lines.append("")
+        lines.append(f"下一步: {next_step}")
+
+    # ── 风控 ──
+    lines.append("")
+    lines.append(f"风控: {treatment} · 失效条件见决策表")
+
+    return "\n".join(lines) + "\n"
+
+# ═══════════════ main (v4.0) ═══════════════
+
 def main():
-    data=load_data()
-    if data["price"]<=0: emit_error("ERROR: no price"); return 1
-    alerts=detect_alerts(data)
-    if not alerts: return 0
+    data = load_data()
+    if data["price"] <= 0:
+        emit_error("ERROR: no price")
+        return 1
+
+    ohlcv_bars = data.get("ohlcv_bars", [])
+    if not ohlcv_bars or len(ohlcv_bars) < 20:
+        # Fallback: use Binance Klines if TV OHLCV not available
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=30",
+                headers={"User-Agent": "D/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw = json.loads(resp.read())
+                ohlcv_bars = [
+                    {"time": k[0] // 1000, "open": float(k[1]), "high": float(k[2]),
+                     "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])}
+                    for k in raw
+                ]
+        except Exception:
+            pass
+
+    if not ohlcv_bars or len(ohlcv_bars) < 20:
+        emit_error("ERROR: no OHLCV data")
+        return 1
+
+    # Compute DMI + ATR
+    highs = [b.get("high", 0) for b in ohlcv_bars]
+    lows = [b.get("low", 0) for b in ohlcv_bars]
+    closes = [b.get("close", 0) for b in ohlcv_bars]
+
+    dmi = compute_dmi(highs, lows, closes)
+    atr = compute_atr(highs, lows, closes)
+
+    # DMI Decision Engine → grade
+    decision = compute_scores(data, dmi, atr, ohlcv_bars)
+    grade = decision["grade"]
+
+    # Save state
     try:
-        STATE.parent.mkdir(parents=True,exist_ok=True)
-        STATE.write_text(json.dumps({"last_check":datetime.now(TZ).strftime("%H:%M"),
-            "price":data["price"],"count":len(alerts),"cooldowns":_last_alerts},
-            ensure_ascii=False,indent=2),encoding="utf-8")
-    except: pass
-    w=write_pending(alerts, data)
-    if w>0:
-        stars=[a for a in alerts if a.get("star")]
-        cc=next((a for a in alerts if a.get("is_confluence")),None)
-        grade=cc["priority"] if cc else "?"
-        safe=f"alerts={w} grade={grade} stars={len(stars)}".encode("ascii","replace").decode("ascii")
-        sys.stdout.write(safe+"\n")
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps({
+            "last_check": datetime.now(TZ).strftime("%H:%M"),
+            "price": data["price"],
+            "grade": grade,
+            "trend_long": decision["trend_long"],
+            "trend_short": decision["trend_short"],
+            "reversal_long": decision["reversal_long"],
+            "reversal_short": decision["reversal_short"],
+            "dmi_adx": dmi["adx"],
+            "dmi_di_plus": dmi["di_plus"],
+            "dmi_di_minus": dmi["di_minus"],
+            "atr": atr,
+            "cvd_state": decision["cvd_state"],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    # Only push A grade
+    if grade != "A":
+        return 0
+
+    # Build & write decision card
+    card = build_decision_card(data, decision, dmi, atr)
+    if not card:
+        return 0
+
+    with open(PENDING, "w", encoding="utf-8") as f:
+        f.write(card)
+
+    safe = f"alerts=1 grade={grade} bias={decision['bias']} trend={decision['trend_long']}/{decision['trend_short']}".encode("ascii", "replace").decode("ascii")
+    sys.stdout.write(safe + "\n")
     return 0
 
-if __name__=="__main__": raise SystemExit(main())
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 # ═══ v3.2: CVD趋势线破检测 ═══
