@@ -272,8 +272,12 @@ def write_pending(alerts: list[dict], data: dict) -> int:
     if not active:
         return 0
 
-    # 分离 confluence 行和信号行
+    # ── v3.6: 只有A+/A高胜率信号才推送（≥80%）──
     confluence = next((a for a in active if a.get("is_confluence")), None)
+    if not confluence or confluence.get("priority", "D") not in ("A+", "A"):
+        return 0  # B/C/D: 静默，不写pending文件
+
+    # 分离信号行
     signals = [a for a in active if not a.get("is_confluence")]
 
     # 按方向分组
