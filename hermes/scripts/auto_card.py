@@ -274,6 +274,81 @@ def _parse_tv_study_values(tv_studies: list | None) -> dict:
     return result
 
 
+def _parse_tv_sub_table(tv_tables: list | None) -> dict:
+    """从TV表格解析副指标(Volume Aggregated)行动格数据。
+    副指标行动格包含：信号/结论/高周/持仓/流向/量能/占比/爆仓/操作。
+    支持两种分隔符：' | ' 和 '：'。"""
+    if not tv_tables:
+        return {}
+    rows = {}
+    raw_rows = None
+    if isinstance(tv_tables, list) and tv_tables:
+        for t in tv_tables:
+            if not isinstance(t, dict):
+                continue
+            name = t.get("name", "")
+            # 副指标识别：名称含 Volume/Aggregated/ACT 或第二个表
+            inner = t.get("tables")
+            if isinstance(inner, list) and inner:
+                for inner_t in inner:
+                    if isinstance(inner_t, dict):
+                        r = inner_t.get("rows", [])
+                        if r and any("信号" in str(x) for x in r[:3]):
+                            raw_rows = r
+                            break
+                if raw_rows:
+                    break
+            # 回退：直接取 rows
+            raw_rows = t.get("rows", [])
+            if raw_rows:
+                break
+    if not raw_rows:
+        return {}
+    for row_text in raw_rows:
+        row_str = str(row_text)
+        # 尝试 pip 分隔
+        if " | " in row_str:
+            parts = row_str.split(" | ", 1)
+        elif "｜" in row_str:
+            parts = row_str.split("｜", 1)
+        elif "：" in row_str:
+            parts = row_str.split("：", 1)
+        else:
+            continue
+        if len(parts) == 2:
+            key, val = parts[0].strip(), parts[1].strip()
+            # 标准化键名
+            key_map = {"信号": "signal", "结论": "conclusion", "高周": "htf",
+                       "持仓": "oi", "流向": "cvd_flow", "量能": "volume",
+                       "占比": "share", "爆仓": "liquidation", "操作": "operation"}
+            mapped_key = key_map.get(key, key)
+            rows[mapped_key] = val
+    return rows
+
+
+def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict:
+    """从TV DMI表+study values构建主指标完整数据字典，供render_tv_card使用。"""
+    main = {}
+    if dmi_rows:
+        main["grade"] = dmi_rows.get("等级", "C等待")
+        main["treatment"] = dmi_rows.get("处理", dmi_rows.get("结论", ""))
+        main["background"] = dmi_rows.get("背景", "")
+        main["position"] = dmi_rows.get("位置", "")
+        main["cvd_state"] = dmi_rows.get("CVD", "")
+        main["volume_state"] = dmi_rows.get("量能", "")
+        main["execution"] = dmi_rows.get("执行", "")
+        main["risk"] = dmi_rows.get("风控", "")
+    if tv_vals:
+        for tv_key, dict_key in [
+            ("S VWAP", "vwap"), ("VAH Price", "vah"), ("VAL Price", "val"),
+            ("POC Price", "poc"), ("CVD Value", "cvd_value"), ("CVD Slope", "cvd_slope"),
+            ("EMA 9", "ema9"), ("EMA 21", "ema21"), ("EMA 34", "ema34"), ("EMA 55", "ema55"),
+        ]:
+            if tv_key in tv_vals:
+                main[dict_key] = tv_vals[tv_key]
+    return main
+
+
 def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
                            dmi_rows: dict, tv_vals: dict) -> dict:
     """用 TV DMI 数据覆盖引擎的 bias/grade/status。返回变更标记。"""
@@ -442,12 +517,13 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         if not tv_raw:
             # 尝试从 engine_data 的 cvd_tv 预注入字段读取
             pass
-        # 如果有 TV Pine table 数据，解析它
+        # 如果有 TV Pine table 数据，解析它（v9: 同时解析主/副双指标）
         tv_pine = engine_data.get("_tv_pine", {})
         if tv_pine:
-            tv_dmi_rows = _parse_tv_dmi_table(tv_pine.get("tables"))
-            tv_vals = _parse_tv_study_values(tv_pine.get("studies"))
+            tables = tv_pine.get("tables")
+            tv_dmi_rows = _parse_tv_dmi_table(tables)
             if tv_dmi_rows:
+                tv_vals = _parse_tv_study_values(tv_pine.get("studies"))
                 tv_override = _apply_tv_dmi_override(meta, engine_data, symbol, tv_dmi_rows, tv_vals)
                 engine_data["_tv_override"] = tv_override  # 存储供 compact card 使用
                 # 同步更新局部变量（TV DMI 可能覆盖了 status/direction）
@@ -456,6 +532,12 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
             # 用 TV 真实 CVD 覆盖 Binance Taker 代理
                 if tv_vals.get("CVD Value") is not None:
                     cvd_data = _tv_cvd_override(cvd_data, tv_vals)
+            # 解析副指标(Volume)行动格
+            tv_sub_rows = _parse_tv_sub_table(tables)
+            if tv_sub_rows:
+                engine_data["_tv_sub"] = tv_sub_rows
+            # 构建主指标完整数据
+            engine_data["_tv_main"] = _build_tv_main_data(tv_dmi_rows, tv_vals, price)
         # 注入 TV 价格轴数据到 klines（POC/VAH/VAL 更精确）
         if tv_vals:
             for tf_dict, tf_name in [(k4h, "4h"), (k1h, "1h"), (k15m, "15m"), (k5m, "5m")]:
@@ -613,6 +695,20 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         tv_dmi=tv_dmi_rows if tv_dmi_rows else None,
     )
     
+    # v9: TV双指标直出卡（优先：主+副指标数据齐全时使用）
+    tv_main = engine_data.get("_tv_main", {})
+    tv_sub = engine_data.get("_tv_sub", {})
+    if not force_full and tv_main and tv_sub:
+        try:
+            import sys as _tv_sys
+            _tv_sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+            from render_tv_card import render_tv_card as _render_tv
+            tv_card = _render_tv(tv_main, tv_sub, symbol, price or 0, mode="push")
+            if tv_card:
+                return tv_card
+        except Exception:
+            pass
+
     # 决策模式：B等待但价格锚定 → 极简卡
     anchored = _find_nearest_key_level(klines, price)
     if not force_full and status in ("B等待", "C等待", "X禁做") and anchored:
@@ -2213,9 +2309,13 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     grade = cache.get("grade", "C等待")
                     # 优先用 table_raw（最可靠：直接就是TV Pine表行）
                     if "table_raw" in cache and isinstance(cache["table_raw"], list):
+                        tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": cache["table_raw"]}]}]
+                        # v9: 副指标数据（单独缓存或与 table_raw 并列）
+                        if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
+                            tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
                         tv_dmi_data = {
-                            "studies": [],
-                            "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": cache["table_raw"]}]}]
+                            "studies": cache.get("studies", []),
+                            "tables": tables,
                         }
                     else:
                         treatment = cache.get("action") or cache.get("treatment", "?")
@@ -2239,18 +2339,23 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     risk = cache.get("risk", "?")
                 # 将缓存变量转换为 _tv_pine 格式（格式B/C未内联构建时走此处）
                 if not tv_dmi_data:
+                    dmi_rows_data = [
+                        f"等级 | {grade}",
+                        f"处理 | {treatment}",
+                        f"背景 | {background}",
+                        f"位置 | {position}",
+                        f"量能 | 量能普通",
+                        f"CVD | {cvd_state}",
+                        f"执行 | {execution}",
+                        f"风控 | {risk}",
+                    ]
+                    tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": dmi_rows_data}]}]
+                    # v9: 副指标缓存注入
+                    if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
+                        tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
                     tv_dmi_data = {
                         "studies": [],
-                        "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": [
-                            f"等级 | {grade}",
-                            f"处理 | {treatment}",
-                            f"背景 | {background}",
-                            f"位置 | {position}",
-                            f"量能 | 量能普通",
-                            f"CVD | {cvd_state}",
-                            f"执行 | {execution}",
-                            f"风控 | {risk}",
-                        ]}]}]
+                        "tables": tables,
                     }
                 engine_data["_tv_pine"] = tv_dmi_data
                 tv_grade = cache.get("grade") if "grade" in cache else (cache.get("tv_data", {}).get("grade") if "tv_data" in cache else "?")
