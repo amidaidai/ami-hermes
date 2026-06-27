@@ -338,6 +338,15 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
         main["volume_state"] = dmi_rows.get("量能", "")
         main["execution"] = dmi_rows.get("执行", "")
         main["risk"] = dmi_rows.get("风控", "")
+        # 行动格 v2 字段：结论/方向/进场/止损/目标/核对/磁吸↑/磁吸↓。
+        # v2 不再有 Data Window 编码导出，进出场价格必须优先从这些表格行进入渲染器。
+        for src_key, dst_key in [
+            ("方向", "direction_text"), ("进场", "entry"), ("止损", "stop"),
+            ("目标", "target"), ("核对", "check"), ("磁吸↑", "magnet_up"),
+            ("磁吸↓", "magnet_down"), ("结论", "conclusion"),
+        ]:
+            if dmi_rows.get(src_key):
+                main[dst_key] = dmi_rows[src_key]
     if tv_vals:
         for tv_key, dict_key in [
             ("S VWAP", "vwap"), ("VAH Price", "vah"), ("VAL Price", "val"),
@@ -2027,6 +2036,31 @@ def auto_card(symbol: str, push: bool = False) -> str:
             engine_data["fear_greed"] = fg
             print(f"  ✅ 恐慌贪婪: {fg.get('value','?')} ({fg.get('classification','?')})")
             
+            # CoinGecko top coins → 板块轮动检测
+            try:
+                from multi_source_collector import cg_top_coins, cg_trending
+                top = cg_top_coins(10)
+                engine_data["cg_top"] = top
+                print(f"  ✅ CoinGecko Top10: {top.get('rotation','?')} | BTC {top.get('btc_change_24h',0):+.1f}% vs Alt {top.get('avg_alt_change_24h',0):+.1f}%")
+            except Exception:
+                pass
+            try:
+                trend = cg_trending()
+                engine_data["cg_trending"] = trend
+                hot = ", ".join(c["symbol"] for c in trend.get("trending", [])[:3]) or "无"
+                print(f"  🔥 Trending: {hot}")
+            except Exception:
+                pass
+            
+            # Macro overview (SPX/VIX/US10Y/DXY)
+            try:
+                from multi_source_collector import macro_overview
+                macro = macro_overview()
+                engine_data["macro"] = macro
+                print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
+            except Exception:
+                pass
+            
         except Exception as e:
             print(f"  ⚠️ CMC: {e}")
             engine_data["binance_spot"] = {"price": 64000}
@@ -2060,6 +2094,22 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     print(f"  ✅ DXY: {dxy_price:.2f}")
             except Exception:
                 engine_data["dxy"] = 100.85
+            
+            # FMP macro: SPX/VIX/US10Y + EURUSD (黄金宏观三件套)
+            try:
+                from multi_source_collector import macro_overview, fmp_forex
+                macro = macro_overview()
+                engine_data["macro"] = macro
+                print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | US10Y {macro.get('us10y',{}).get('price','?')}% | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
+            except Exception:
+                pass
+            try:
+                eur = fmp_forex("EURUSD")
+                engine_data["eurusd"] = eur
+                if eur.get("price"):
+                    print(f"  💱 EURUSD: {eur['price']:.4f} ({eur.get('change_pct',0):+.2f}%)")
+            except Exception:
+                pass
             
             # K-lines from Yahoo GC=F (futures, adjusted for spot)
             try:
@@ -2165,6 +2215,31 @@ def auto_card(symbol: str, push: bool = False) -> str:
                 "dopen": float(_tv_raw.get("dopen") or 0),
             }
             print(f"  ✅ TV数据合并: VWAP {engine_data['tv']['vwap']:.1f} | VAH {engine_data['tv']['vah']:.1f} | VAL {engine_data['tv']['val']:.1f}")
+            # v4.3: 行动格 v2 解码桥接 —— fetch_tv_data.cjs 现在直接写入
+            # tv_grade/tv_conclusion/tv_entry/tv_stop/tv_target（行动格 v2 无 等级/处理 行，
+            # 等级嵌在 结论 内）。把这些字段重组成下游 _parse_tv_dmi_table/_apply_tv_dmi_override
+            # 期望的 等级|处理 行 + study values，旧消费链零改动即可吃到实时等级。
+            _tv_grade = _tv_raw.get("tv_grade")
+            if _tv_grade:
+                _dmi_rows = [
+                    f"等级 | {_tv_grade}",
+                    f"处理 | {_tv_raw.get('tv_treatment') or _tv_raw.get('tv_conclusion') or '?'}",
+                    f"背景 | {_tv_raw.get('tv_direction') or '?'}",
+                    f"位置 | {_tv_raw.get('tv_entry') or '?'}",
+                    f"执行 | 进:{_tv_raw.get('tv_entry') or '?'} 损:{_tv_raw.get('tv_stop') or '?'} 标:{_tv_raw.get('tv_target') or '?'}",
+                ]
+                _study_vals = []
+                for _t, _k in [("S VWAP", "vwap"), ("VAH Price", "vah"), ("VAL Price", "val"),
+                               ("POC Price", "poc"), ("EMA 9", "ema9"), ("EMA 21", "ema21"),
+                               ("EMA 34", "ema34"), ("EMA 55", "ema55")]:
+                    _v = _tv_raw.get(_k)
+                    if _v:
+                        _study_vals.append({"name": "SVP+ICT+VWAP+EMA+CVD", "values": {_t: _v}})
+                engine_data["_tv_pine"] = {
+                    "studies": _study_vals,
+                    "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": _dmi_rows}]}],
+                }
+                print(f"  ✅ 行动格v2解码: 等级={_tv_grade} | 进场={_tv_raw.get('tv_entry') or '—'} | 止损={_tv_raw.get('tv_stop') or '—'} | 目标={_tv_raw.get('tv_target') or '—'}")
     except Exception as _tve:
         print(f"  ⚠️ TV数据加载: {_tve}")
     
@@ -2309,7 +2384,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     grade = cache.get("grade", "C等待")
                     # 优先用 table_raw（最可靠：直接就是TV Pine表行）
                     if "table_raw" in cache and isinstance(cache["table_raw"], list):
-                        tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": cache["table_raw"]}]}]
+                        # v4.3: 行动格 v2 行标是 结论/方向/进场/止损/目标 而非 等级/处理。
+                        # cache 顶层已有 grade + treatment；在 table_raw 前合成 等级|处理 行，
+                        # 让 _parse_tv_dmi_table/_apply_tv_dmi_override 旧消费链无缝吃到等级。
+                        _raw_rows = list(cache["table_raw"])
+                        _synth = []
+                        if grade:
+                            _synth.append(f"等级 | {grade}")
+                        if cache.get("treatment"):
+                            _synth.append(f"处理 | {cache['treatment']}")
+                        if _synth:
+                            _raw_rows = _synth + _raw_rows
+                        tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": _raw_rows}]}]
                         # v9: 副指标数据（单独缓存或与 table_raw 并列）
                         if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
                             tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
