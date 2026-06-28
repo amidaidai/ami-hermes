@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -15,11 +16,24 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# Windows Hermes no_agent cron 默认 stdout/stderr 可能走 cp936，中文/emoji 会乱码。
+# 在任何 print 之前强制 UTF-8，保证 Telegram 推送可读。
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 TZ = timezone(timedelta(hours=8))
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / "AppData" / "Local" / "hermes")
 SKILLS_ROOT = HERMES_HOME / "skills"
 REPO_ROOT = Path("D:/Hermes agent")
 LOG_DIR = REPO_ROOT / "outputs" / "maintenance-logs"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+try:
+    from telegram_reliable import flush_pending, send_telegram_reliable
+except Exception:  # noqa: BLE001
+    flush_pending = None
+    send_telegram_reliable = None
 
 # ── helpers ──────────────────────────────────────────────
 
@@ -219,8 +233,9 @@ def main() -> int:
     if mcp_results:
         lines.append(ok(f"MCP 服务器 — {mcp_ok}/{len(mcp_results)} 正常" + (f", {mcp_fail} 异常" if mcp_fail else "")))
         for r in mcp_results:
-            if r["status"] != "ok":
-                detail = f"{r['name']}: {r['detail']}"
+            if r.get("status") != "ok":
+                detail_text = r.get("detail") or r.get("reason") or f"code={r.get('code', '?')}"
+                detail = f"{r.get('name', 'unknown')}: {detail_text}"
                 lines.append(f"  {warn(detail)}")
     else:
         lines.append(warn("MCP 服务器 — 未检测"))
@@ -281,12 +296,20 @@ def main() -> int:
     log_path = LOG_DIR / f"daily-audit-{start_ts.strftime('%Y%m%d')}.log"
     log_path.write_text(report, encoding="utf-8")
 
+    # Hermes cron 自带 delivery 曾出现 Telegram timeout；这里直连可靠推送并失败落盘。
+    if total_issues > 0 and send_telegram_reliable is not None:
+        if flush_pending is not None:
+            flush_pending(limit=10)
+        send_telegram_reliable("telegram:-1003733144325:846", report, retries=5, timeout=15)
+
     # 静默模式：仅异常时输出
     if total_issues > 0:
         print(report)
     # 全干净时完全静默
 
-    return 0 if total_issues == 0 else 1
+    # no_agent 语义：stdout 非空即推送；非零退出会被 Hermes 标记为脚本错误。
+    # 审计发现异常不是脚本失败，因此成功产出报告后仍返回 0。
+    return 0
 
 
 if __name__ == "__main__":
