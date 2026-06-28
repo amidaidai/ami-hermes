@@ -1799,12 +1799,15 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     api_key, secret = _load_binance_keys()
     
     # ── K-lines (public, no sign needed) ──
+    # v4.4: 拉长 15m/1h 回溯以支撑 FVG/OB 检测（lookback 50/100）
     klines = {}
-    for tf, limit in [("5m", 12), ("15m", 20), ("1h", 20), ("4h", 20)]:
+    _raw_klines_multi = {}
+    for tf, limit in [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]:
         try:
             r = requests.get(f"{base}/fapi/v1/klines", params={"symbol": sym, "interval": tf, "limit": limit}, timeout=8)
             data = r.json()
             if isinstance(data, list) and data:
+                _raw_klines_multi[tf] = data  # v4.4: 原始 OHLCV 供 FVG/OB/吸收检测
                 closes = [float(c[4]) for c in data]
                 highs = [float(c[2]) for c in data]
                 lows = [float(c[3]) for c in data]
@@ -1827,7 +1830,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
         except Exception:
             pass
     engine_data["klines"] = klines
-    
+    engine_data["_raw_klines_multi"] = _raw_klines_multi  # v4.4: 原始 OHLCV 供高级订单流分析
     if not api_key:
         # No API key — fallback to public endpoints only
         try:
@@ -1953,6 +1956,75 @@ def validate_card_rules(card: str, meta: dict) -> list[str]:
         errors.append("机器字段缺失：setup_id/model_id/entry_tag/exit_tag 必填")
     return errors
 
+
+def _parse_bjt_dt(value) -> datetime | None:
+    """Parse BJT/ISO timestamps used by cache files."""
+    if not value:
+        return None
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)
+        return dt.astimezone(TZ)
+    except Exception:
+        return None
+
+
+def _norm_symbol_for_cache(symbol: str) -> str:
+    s = str(symbol or "").upper()
+    s = s.replace("BINANCE:", "").replace("OANDA:", "").replace("TVC:", "")
+    s = s.replace(".P", "")
+    return s
+
+
+def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dict:
+    """Validate TV cache before it can influence a formal card."""
+    now = datetime.now(TZ)
+    ts = _parse_bjt_dt(cache.get("timestamp") or cache.get("time") or cache.get("updated"))
+    age_min = None
+    if ts:
+        age_min = max(0.0, (now - ts).total_seconds() / 60.0)
+    cache_symbol = cache.get("symbol") or cache.get("ticker") or cache.get("tv_symbol") or ""
+    want = _norm_symbol_for_cache(symbol)
+    got = _norm_symbol_for_cache(cache_symbol)
+    symbol_ok = (not got) or got.startswith(want) or want.startswith(got)
+    fresh = age_min is not None and age_min <= max_age_minutes
+    usable = bool(symbol_ok and fresh)
+    reason = "实时/新鲜" if usable else ""
+    if not symbol_ok:
+        reason = f"品种不匹配 {cache_symbol or '?'}"
+    elif age_min is None:
+        reason = "无时间戳"
+    elif not fresh:
+        reason = f"缓存过期 {age_min:.0f}分钟"
+    return {
+        "usable": usable,
+        "source": "cache",
+        "symbol": cache_symbol,
+        "timestamp": ts.isoformat() if ts else "",
+        "age_minutes": age_min,
+        "reason": reason,
+    }
+
+
+def _freshness_line(engine_data: dict) -> str:
+    """Human-readable freshness line for the cockpit card."""
+    tvs = engine_data.get("_tv_cache_status") or {}
+    if tvs:
+        age = tvs.get("age_minutes")
+        if tvs.get("usable"):
+            tv_part = f"TV缓存{age:.0f}分钟前" if age is not None else "TV缓存新鲜"
+        else:
+            tv_part = f"TV未采用({tvs.get('reason','未知')})"
+    elif engine_data.get("_tv_override", {}).get("tv_active"):
+        tv_part = "TV实时/直连"
+    else:
+        tv_part = "TV未接入"
+    src = (engine_data.get("prices") or {}).get("source") or "多源"
+    return f"数据新鲜度：{tv_part} · 价格源{src} · {datetime.now(TZ).strftime('%m-%d %H:%M')} BJT"
+
+
 def append_trade_plan(meta: dict, card: str) -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     row = dict(meta); row["card_excerpt"] = card[:500]
@@ -1980,6 +2052,187 @@ def _safe_import(module, func):
     except Exception as e:
         print(f"  ⚠️ {module}.{func}: {e}")
         return None
+
+
+def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict) -> dict:
+    """v4.4: 接通5个闲置分析模块 — 吸收/FVG/OB/相关性/Meta门控 + 多周期共振闸门。
+
+    社区2026共识落地：单信号不够，多工具共振(≥4/6)才入场；相邻周期冲突=不交易。
+    全部 try/except 隔离，任一模块失败不影响主卡。返回:
+        {section: str(卡片段), gate: dict(放行/否决), factors: dict}
+    """
+    import sys as _sys
+    _sp = str(ROOT / "scripts")
+    if _sp not in _sys.path:
+        _sys.path.insert(0, _sp)
+
+    out = {"section": "", "gate": {}, "factors": {}}
+    lines = ["", "## 高级订单流确认 (v4.4)"]
+
+    raw = engine_data.get("_raw_klines_multi", {}) or {}
+    klines = engine_data.get("klines", {}) or {}
+    price = (engine_data.get("prices", {}) or {}).get("primary", 0) or 0
+    cvd = engine_data.get("cvd", {}) or {}
+    cvd_dir = cvd.get("direction", "?")
+    cvd_qual = cvd.get("quality", "C")
+    bias = merged.get("bias", "?")
+    direction = "long" if "多" in str(bias) else "short" if "空" in str(bias) else "neutral"
+    is_crypto = symbol.upper().endswith("USDT")
+
+    # ── ① 订单流吸收（社区#1：真支撑要看吸收）──
+    try:
+        from orderflow_absorption import detect_absorption
+        k15 = klines.get("15m", {}) or {}
+        chg5 = (klines.get("5m", {}) or {}).get("change_pct", 0) or 0
+        avg_v = k15.get("avg_volume", 0) or 1
+        cur_v = k15.get("volume", 0) or 0
+        vol_ratio = (cur_v / avg_v) if avg_v else 1.0
+        atr = k15.get("atr", 0) or 0
+        # 距最近关键位 ATR 倍数：用 VAH/VAL/POC 最近者
+        tv = engine_data.get("tv", {}) or {}
+        levels = [tv.get(k, 0) for k in ("vah", "val", "poc")] + [k15.get("poc", 0)]
+        levels = [l for l in levels if l]
+        prox = min((abs(price - l) / atr for l in levels), default=1.0) if atr else 1.0
+        ab = detect_absorption(symbol, price, cvd_dir, cvd_qual, chg5, vol_ratio, prox)
+        out["factors"]["absorption"] = ab
+        if ab.get("absorption_detected"):
+            lines.append(f"- 吸收：{ab['pattern']}·{ab['direction_bias']}·StopRun{ab['stop_run_risk']} (置信{ab['confidence']}%)")
+        else:
+            lines.append(f"- 吸收：订单流正常·无异常")
+    except Exception as e:
+        lines.append(f"- 吸收：跳过({str(e)[:40]})")
+
+    # ── ② FVG + Order Block（ICT 进场位）──
+    try:
+        from fvg_detector import detect_fvg, update_fvg_status, best_fvg
+        from order_block import detect_obs, nearest_ob
+        k15_raw = raw.get("15m", [])
+        if k15_raw and price:
+            fvgs = update_fvg_status(detect_fvg(k15_raw, 50), price, k15_raw)
+            bf = best_fvg(fvgs)
+            obs = detect_obs(k15_raw, 100)
+            side = "bullish" if direction == "long" else "bearish" if direction == "short" else None
+            nob = nearest_ob(obs, price, side)
+            out["factors"]["fvg"] = bf
+            out["factors"]["ob"] = nob
+            fvg_txt = f"{bf['type']} {bf['bottom']}–{bf['top']} ({bf.get('status','?')})" if bf else "无活跃FVG"
+            ob_txt = f"{nob['type']} @{nob['price']} 强度{nob['strength']}/5" if nob else "无OB"
+            lines.append(f"- ICT进场：FVG {fvg_txt} | OB {ob_txt}")
+        else:
+            lines.append("- ICT进场：原始K线不足")
+    except Exception as e:
+        lines.append(f"- ICT进场：跳过({str(e)[:40]})")
+
+    # ── ③ 跨市场相关性风险乘数（仅在 BTC/XAU 同时分析时有意义）──
+    try:
+        from correlation_matrix import compute_correlation
+        corr = compute_correlation()
+        if corr.get("status") == "ok":
+            out["factors"]["correlation"] = corr
+            lines.append(f"- 跨市场：BTC×XAU相关{corr.get('correlation_full','?')}·{corr.get('regime','?')}·{corr.get('advice','')[:30]}")
+    except Exception as e:
+        pass  # 相关性是可选增强，静默
+
+    # ── ④ 多周期共振计数 + 相邻周期冲突硬门（社区核心）──
+    try:
+        def _tf_dir(tf):
+            d = (klines.get(tf, {}) or {}).get("direction", "")
+            if "多" in d or "涨" in d:
+                return 1
+            if "空" in d or "跌" in d:
+                return -1
+            return 0
+        d4, d1, d15 = _tf_dir("4h"), _tf_dir("1h"), _tf_dir("15m")
+        # 相邻周期冲突：4h vs 1h 明确反向 = 不交易
+        conflict = (d4 * d1 == -1) or (d1 * d15 == -1)
+        # 共振计数（0-6）
+        factors_hit = 0
+        f_detail = []
+        # 1. HTF方向一致(4h+1h同向)
+        if d4 != 0 and d4 == d1:
+            factors_hit += 1; f_detail.append("HTF同向✓")
+        # 2. 价在关键位(吸收检测到 prox<0.5)
+        ab = out["factors"].get("absorption", {})
+        if ab.get("absorption_detected"):
+            factors_hit += 1; f_detail.append("关键位吸收✓")
+        # 3. CVD配合方向
+        if (cvd_dir in ("买", "buy") and direction == "long") or (cvd_dir in ("卖", "sell") and direction == "short"):
+            factors_hit += 1; f_detail.append("CVD配合✓")
+        # 4. 结构(FVG/OB存在且同向)
+        if out["factors"].get("fvg") or out["factors"].get("ob"):
+            factors_hit += 1; f_detail.append("ICT结构✓")
+        # 5. VWAP位置有利
+        tv = engine_data.get("tv", {}) or {}
+        vwap = tv.get("vwap", 0)
+        if vwap and price:
+            if (direction == "long" and price >= vwap) or (direction == "short" and price <= vwap):
+                factors_hit += 1; f_detail.append("VWAP位置✓")
+        # 6. 量能确认
+        if (klines.get("15m", {}) or {}).get("volume", 0) > (klines.get("15m", {}) or {}).get("avg_volume", 0):
+            factors_hit += 1; f_detail.append("量能✓")
+        out["factors"]["confluence_count"] = factors_hit
+        out["factors"]["tf_conflict"] = conflict
+        if conflict:
+            lines.append(f"- **周期冲突：4h/1h/15m方向矛盾 → 观望不交易**")
+        else:
+            pos = "满仓" if factors_hit >= 5 else "半仓" if factors_hit == 4 else "轻仓/观望" if factors_hit == 3 else "不交易"
+            lines.append(f"- 多周期共振：{factors_hit}/6 ({'·'.join(f_detail) or '无'}) → {pos}")
+    except Exception as e:
+        lines.append(f"- 多周期共振：跳过({str(e)[:40]})")
+        conflict = False
+        factors_hit = 0
+
+    # ── ⑤ 多空比反向票（散户拥挤）──
+    try:
+        ls = engine_data.get("long_short", {}) or {}
+        ls_long = ls.get("long")
+        if ls_long is not None:
+            ratio = float(ls_long) / max(1e-9, (1 - float(ls_long))) if float(ls_long) < 1 else float(ls_long)
+            # long account fraction → ratio
+            if float(ls_long) <= 1:
+                ratio = float(ls_long) / max(0.01, 1 - float(ls_long))
+            contra = ""
+            if ratio > 2.5:
+                contra = "散户极度拥挤多→反向警惕顶"
+            elif ratio < 0.5:
+                contra = "散户极度拥挤空→反向警惕底"
+            if contra:
+                lines.append(f"- 多空比反指：{ratio:.2f} {contra}")
+                out["factors"]["ls_contra"] = contra
+    except Exception:
+        pass
+
+    # ── ⑥ Meta-Labeling 执行门控（共振闸门，最终放行/否决）──
+    try:
+        from meta_labeler import check_meta_label
+        score = int(round((merged.get("global_confidence", 0.5) or 0.5) * 10))
+        sess = (engine_data.get("_session", {}) or {}).get("key", "off")
+        signal = {
+            "model_score": score,
+            "data_quality": engine_data.get("quality", "C"),
+            "cvd_direction": cvd_dir,
+            "cvd_quality": cvd_qual,
+            "session": sess,
+            "direction": direction,
+            "loss_streak": 0,
+            "rr_ratio": meta.get("rr1", 0) or 0,
+        }
+        gate = check_meta_label(signal)
+        # 周期冲突 → 强制否决
+        if out["factors"].get("tf_conflict"):
+            gate = {"execute": False, "confidence": gate.get("confidence", 0), "reason": "周期冲突·否决"}
+        # 共振<4 → 否决
+        elif out["factors"].get("confluence_count", 0) < 4:
+            gate = {"execute": False, "confidence": gate.get("confidence", 0),
+                    "reason": f"共振{out['factors'].get('confluence_count',0)}/6<4·否决"}
+        out["gate"] = gate
+        verdict = "✓放行" if gate.get("execute") else "✗否决"
+        lines.append(f"- **执行门控：{verdict}·{gate.get('reason','?')}·置信{gate.get('confidence',0):.0%}**")
+    except Exception as e:
+        lines.append(f"- 执行门控：跳过({str(e)[:40]})")
+
+    out["section"] = "\n".join(lines)
+    return out
 
 
 def auto_card(symbol: str, push: bool = False) -> str:
@@ -2067,21 +2320,56 @@ def auto_card(symbol: str, push: bool = False) -> str:
     elif asset == "metal":
         try:
             import requests as _req
-            # gold-api.com 现货
-            r = _req.get("https://api.gold-api.com/price/XAU", timeout=8)
-            if r.status_code == 200:
-                data = r.json()
-                price = float(data.get("price", 4310))
-                engine_data["prices"] = {"primary": price, "source": "gold-api现货"}
+            from pathlib import Path as _P
+            import sys as _s
+            _scripts_dir = str(_P("D:/Hermes agent/scripts"))
+            if _scripts_dir not in _s.path:
+                _s.path.insert(0, _scripts_dir)
+            from trading_system import price_consensus, gold_api_price
+            import trading_system as _ts
+            
+            # ── 三源共识价格（OANDA + gold-api + 金十）──
+            consensus = price_consensus(symbol)
+            price = consensus.get("price")
+            quality = consensus.get("quality", "B")
+            confidence = consensus.get("confidence", 70)
+            source_label = consensus.get("source", "多源")
+            
+            if price and price > 0:
+                engine_data["prices"] = {"primary": price, "source": source_label}
                 engine_data["binance_spot"] = {
                     "price": price, "24h_high": price * 1.005,
                     "24h_low": price * 0.995, "percent_change_24h": 0
                 }
-                engine_data["quality"] = "B"
-                engine_data["grades"] = {"overall": "B"}
-                print(f"  ✅ XAU: ${price:,.0f} (gold-api)")
+                engine_data["quality"] = quality
+                engine_data["grades"] = {"overall": quality, "confidence": confidence}
+                print(f"  ✅ XAU: ${price:,.0f} [{quality}] ({source_label})")
+                
+                # ── 金十 Quote 原始数据（用于获取24h高/低/今开）──
+                jin10_raw = None
+                for src in consensus.get("sources", []):
+                    if src.get("source") == "金十Quote" and src.get("raw"):
+                        jin10_raw = src["raw"]
+                        break
+                if jin10_raw:
+                    try:
+                        j_high = float(jin10_raw.get("high", 0))
+                        j_low = float(jin10_raw.get("low", 0))
+                        j_open = float(jin10_raw.get("open", 0))
+                        if j_high > 0: engine_data["binance_spot"]["24h_high"] = j_high
+                        if j_low > 0: engine_data["binance_spot"]["24h_low"] = j_low
+                        if j_open > 0:
+                            pct = round((price - j_open) / j_open * 100, 2)
+                            engine_data["binance_spot"]["percent_change_24h"] = pct
+                        print(f"  📊 金十24h: 高{j_high:.0f} 低{j_low:.0f} 开{j_open:.2f}")
+                    except Exception:
+                        pass
+            else:
+                engine_data["prices"] = {"primary": 4310, "source": "fallback"}
+                engine_data["quality"] = "C"
+                engine_data["grades"] = {"overall": "C"}
             
-            # DXY from Yahoo
+            # ── DXY from Yahoo ──
             try:
                 dxy_r = _req.get(
                     "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",
@@ -2095,7 +2383,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
             except Exception:
                 engine_data["dxy"] = 100.85
             
-            # FMP macro: SPX/VIX/US10Y + EURUSD (黄金宏观三件套)
+            # ── FMP macro: SPX/VIX/US10Y + EURUSD ──
             try:
                 from multi_source_collector import macro_overview, fmp_forex
                 macro = macro_overview()
@@ -2111,47 +2399,23 @@ def auto_card(symbol: str, push: bool = False) -> str:
             except Exception:
                 pass
             
-            # K-lines from Yahoo GC=F (futures, adjusted for spot)
-            try:
-                import urllib.request, json as _j
-                tf_map = {"5m": "5m", "15m": "15m", "1h": "1h", "4h": "1h"}  # Yahoo 1h as 4h proxy
-                tf_range = {"5m": "1d", "15m": "5d", "1h": "7d", "4h": "1mo"}
-                for tf, limit in [("5m", 12), ("15m", 20), ("1h", 20), ("4h", 20)]:
-                    try:
-                        ytf = tf_map[tf]
-                        ry = tf_range[tf]
-                        url = f"https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval={ytf}&range={ry}"
-                        req = _req.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-                        if req.status_code == 200:
-                            result = _j.loads(req.text)["chart"]["result"][0]
-                            quotes = result["indicators"]["quote"][0]
-                            # futures→spot: GC contract premium typically $125+
-                            spot_adj = -125
-                            closes = [float(c) + spot_adj for c in quotes["close"] if c]
-                            highs = [float(h) + spot_adj for h in quotes["high"] if h]
-                            lows = [float(l) + spot_adj for l in quotes["low"] if l]
-                            if closes:
-                                closes = closes[-limit:]; highs = highs[-limit:]; lows = lows[-limit:]
-                                chg = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] else 0
-                                direction = "偏多" if chg > 0.2 else "偏空" if chg < -0.2 else "震荡"
-                                klines_dict = engine_data.setdefault("klines", {})
-                                klines_dict[tf] = {
-                                    "close": closes[-1], "high": max(highs), "low": min(lows),
-                                    "open": closes[0], "change_pct": round(chg, 4),
-                                    "poc": round(sum(closes)/len(closes), 2),
-                                    "vah": round(max(highs), 2), "val": round(min(lows), 2),
-                                    "direction": direction,
-                                    "description": _kl_desc(tf, closes, highs, lows, [0]*len(closes)),
-                                }
-                    except Exception:
-                        pass
-                if engine_data.get("klines"):
-                    print(f"  ✅ XAU K线(Yahoo GC=F): {list(engine_data['klines'].keys())}")
-            except Exception:
-                pass
+            # ── K线简化：基于共识价格构建（不拉Yahoo GC=F期货，避免期现价差污染）──
+            if price and price > 0:
+                klines_dict = engine_data.setdefault("klines", {})
+                for tf in ["5m", "15m", "1h", "4h"]:
+                    klines_dict[tf] = {
+                        "close": price, "high": price, "low": price,
+                        "open": price, "change_pct": 0,
+                        "poc": price, "vah": price, "val": price,
+                        "direction": "待获取",
+                        "description": f"XAU {tf} K线待TV MCP采集",
+                    }
+                print(f"  ⚠️ XAU K线: 简化占位（无Yahoo期货污染）→ 等TV MCP刷新多周期数据")
+            engine_data["_xau_klines_pending"] = True
+            
         except Exception as e:
             print(f"  ⚠️ XAU: {e}")
-            engine_data["prices"] = {"primary": 4310}
+            engine_data["prices"] = {"primary": 4310, "source": "error-fallback"}
     
     # v2.1: 实时事件禁做（Jin10日历 + 宏观过滤）
     print("② 引擎运算...")
@@ -2351,6 +2615,23 @@ def auto_card(symbol: str, push: bool = False) -> str:
     print("⑦ 渲染锁定卡片...")
     meta = build_setup_metadata(symbol, merged, results, engine_data)
 
+    # v4.4: 高级订单流确认（吸收/FVG/OB/相关性/共振门控）— 接通5个原闲置模块
+    print("⑦.① 高级订单流确认...")
+    adv = {"section": "", "gate": {}, "factors": {}}
+    try:
+        adv = _advanced_orderflow(symbol, engine_data, merged, meta)
+        engine_data["_advanced"] = adv
+        _g = adv.get("gate", {})
+        _cc = adv.get("factors", {}).get("confluence_count", "?")
+        print(f"  ✅ 共振{_cc}/6 | 门控{'放行' if _g.get('execute') else '否决'}·{_g.get('reason','?')}")
+        # 门控否决 → 压制等级（不强制改方向，只提示）
+        if not _g.get("execute") and _g.get("reason"):
+            meta["gate_verdict"] = f"否决·{_g.get('reason')}"
+        else:
+            meta["gate_verdict"] = "放行"
+    except Exception as _ae:
+        print(f"  ⚠ 高级订单流跳过: {_ae}")
+
     # v6.9.14: TV DMI 决策表数据注入（从 TradingView MCP 读取）
     # v6.9.15b P0 fix: 优先读 engine_data._tv_pine（调用方注入）→
     #   回退读 data/tv_dmi_cache.json（cron agent 每5分钟更新）
@@ -2363,25 +2644,33 @@ def auto_card(symbol: str, push: bool = False) -> str:
             cache_path = ROOT / "data" / "tv_dmi_cache.json"
             if cache_path.exists():
                 cache = _j.loads(cache_path.read_text(encoding="utf-8"))
-                # 兼容两种缓存格式:
-                # 格式A(cron agent): {"tv_data": {"grade":..., "action":...}}
-                # 格式B(tv_signal_monitor): {"grade":..., "treatment":...}
-                if "tv_data" in cache:
-                    c = cache["tv_data"]
-                    grade = c.get("grade", "C等待")
-                    treatment = c.get("action") or c.get("treatment", "?")
-                    background = c.get("background") or c.get("bias", "?")
-                    position = c.get("position", "?")
-                    cvd_state = c.get("cvd") or c.get("cvd_state", "?")
-                    execution = c.get("execution")
-                    if isinstance(execution, dict):
-                        execution = f"多:{execution.get('long','?')}|空:{execution.get('short','?')}"
-                    else:
-                        execution = execution or "?"
-                    risk = c.get("risk", "?")
-                elif "grade" in cache:
-                    # 格式C/D: cron agent 平键格式（4代变体）
-                    grade = cache.get("grade", "C等待")
+                cache_status = _tv_cache_status(cache, symbol)
+                engine_data["_tv_cache_status"] = cache_status
+                if not cache_status.get("usable"):
+                    print(f"  ⚠ TV DMI缓存未采用: {cache_status.get('reason')}")
+                    cache = None
+                if cache is not None:
+                    # 兼容两种缓存格式:
+                    # 格式A(cron agent): {"tv_data": {"grade":..., "action":...}}
+                    # 格式B(tv_signal_monitor): {"grade":..., "treatment":...}
+                    grade = "C等待"
+                    treatment = background = position = cvd_state = execution = risk = "?"
+                    if "tv_data" in cache:
+                        c = cache["tv_data"]
+                        grade = c.get("grade", "C等待")
+                        treatment = c.get("action") or c.get("treatment", "?")
+                        background = c.get("background") or c.get("bias", "?")
+                        position = c.get("position", "?")
+                        cvd_state = c.get("cvd") or c.get("cvd_state", "?")
+                        execution = c.get("execution")
+                        if isinstance(execution, dict):
+                            execution = f"多:{execution.get('long','?')}|空:{execution.get('short','?')}"
+                        else:
+                            execution = execution or "?"
+                        risk = c.get("risk", "?")
+                    elif "grade" in cache:
+                        # 格式C/D: cron agent 平键格式（4代变体）
+                        grade = cache.get("grade", "C等待")
                     # 优先用 table_raw（最可靠：直接就是TV Pine表行）
                     if "table_raw" in cache and isinstance(cache["table_raw"], list):
                         # v4.3: 行动格 v2 行标是 结论/方向/进场/止损/目标 而非 等级/处理。
@@ -2414,38 +2703,29 @@ def auto_card(symbol: str, push: bool = False) -> str:
                         else:
                             execution = execution or "?"
                         risk = cache.get("risk", "?")
-                else:
-                    # 格式B: tv_signal_monitor 旧格式
-                    grade = cache.get("grade", "C等待")
-                    treatment = cache.get("treatment", "?")
-                    background = cache.get("background", "?")
-                    position = cache.get("position", "?")
-                    cvd_state = cache.get("cvd_state", "?")
-                    execution = cache.get("execution", "?")
-                    risk = cache.get("risk", "?")
-                # 将缓存变量转换为 _tv_pine 格式（格式B/C未内联构建时走此处）
-                if not tv_dmi_data:
-                    dmi_rows_data = [
-                        f"等级 | {grade}",
-                        f"处理 | {treatment}",
-                        f"背景 | {background}",
-                        f"位置 | {position}",
-                        f"量能 | 量能普通",
-                        f"CVD | {cvd_state}",
-                        f"执行 | {execution}",
-                        f"风控 | {risk}",
-                    ]
-                    tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": dmi_rows_data}]}]
-                    # v9: 副指标缓存注入
-                    if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
-                        tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
-                    tv_dmi_data = {
-                        "studies": [],
-                        "tables": tables,
-                    }
-                engine_data["_tv_pine"] = tv_dmi_data
-                tv_grade = cache.get("grade") if "grade" in cache else (cache.get("tv_data", {}).get("grade") if "tv_data" in cache else "?")
-                print(f"  ✅ TV DMI(缓存): grade={tv_grade}")
+                    # 将缓存变量转换为 _tv_pine 格式（格式B/C未内联构建时走此处）
+                    if not tv_dmi_data:
+                        dmi_rows_data = [
+                            f"等级 | {grade}",
+                            f"处理 | {treatment}",
+                            f"背景 | {background}",
+                            f"位置 | {position}",
+                            f"量能 | 量能普通",
+                            f"CVD | {cvd_state}",
+                            f"执行 | {execution}",
+                            f"风控 | {risk}",
+                        ]
+                        tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": dmi_rows_data}]}]
+                        # v9: 副指标缓存注入
+                        if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
+                            tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
+                        tv_dmi_data = {
+                            "studies": [],
+                            "tables": tables,
+                        }
+                    engine_data["_tv_pine"] = tv_dmi_data
+                    tv_grade = cache.get("grade") if "grade" in cache else (cache.get("tv_data", {}).get("grade") if "tv_data" in cache else "?")
+                    print(f"  ✅ TV DMI(缓存): grade={tv_grade}")
         else:
             studies = tv_raw.get("studies", [])
             tables = tv_raw.get("tables", [])
@@ -2489,6 +2769,13 @@ def auto_card(symbol: str, push: bool = False) -> str:
         regime_name=regime_name, force_full=True,
     )
     full_card = sanitize_card_format(full_card)
+    # v4.4: 追加高级订单流确认段（吸收/FVG/OB/共振门控）到完整卡尾部
+    try:
+        _adv_section = (engine_data.get("_advanced", {}) or {}).get("section", "")
+        if _adv_section:
+            full_card = full_card.rstrip() + "\n" + _adv_section + "\n"
+    except Exception:
+        pass
     rule_errors = validate_card_rules(full_card, meta)
     if rule_errors:
         print("  ⚠ 模板审计发现问题: " + "；".join(rule_errors))
@@ -2824,8 +3111,17 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     if not nearest_level:
         return ""
     nl_fmt = _fmt_price(nearest_level).strip("`")
-    hi = _fmt_price(k15m.get("high") or k4h.get("high")).strip("`")
-    lo = _fmt_price(k15m.get("low") or k4h.get("low")).strip("`")
+    # 高/低优先从K线取，如K线占位(XAU无期货数据)则回退到binance_spot 24h范围
+    _raw_hi = k15m.get("high") or k4h.get("high")
+    _raw_lo = k15m.get("low") or k4h.get("low")
+    # 如果K线高=低=现价（占位数据），回退到 binance_spot 的24h范围
+    if _raw_hi == _raw_lo and _raw_hi and abs(float(_raw_hi) - p) < max(p * 0.001, 5):
+        spot = engine_data.get("binance_spot", {})
+        if spot:
+            _raw_hi = spot.get("24h_high", _raw_hi)
+            _raw_lo = spot.get("24h_low", _raw_lo)
+    hi = _fmt_price(_raw_hi).strip("`")
+    lo = _fmt_price(_raw_lo).strip("`")
     taker_label = f"Taker {taker_dir}" if taker_dir not in ("N/A", None, "") else "Taker 无"
     taker_r = f" {taker_ratio}" if taker_ratio and str(taker_ratio) not in ("N/A", "") else ""
     cvd_str = f"CVD {cvd_dir}" if cvd_dir not in ("N/A", "?", None, "") else "CVD ?"

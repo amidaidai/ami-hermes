@@ -211,11 +211,15 @@ def main() -> int:
     elapsed = (end_ts - start_ts).total_seconds()
 
     # ── 构建报告 ──
-    lines = [f"══════════ 任务运行报告 ══════════"]
-    lines.append(f"任务：每日系统审计")
-    lines.append(f"时间：{date_str}")
-    lines.append(f"耗时：{elapsed:.0f}s")
-    lines.append(f"")
+    lines = ["## 任务运行报告", ""]
+    lines.append("| 项目 | 内容 |")
+    lines.append("|---|---|")
+    lines.append("| 任务 | 每日系统审计 |")
+    lines.append(f"| 时间 | {date_str} |")
+    lines.append(f"| 耗时 | {elapsed:.0f}s |")
+    lines.append("")
+    lines.append("## 检查结果")
+    lines.append("")
 
     # 技能完整性
     if skill_result["status"] == "clean":
@@ -289,7 +293,6 @@ def main() -> int:
     else:
         lines.append(f"\n⚠ {total_issues} 项异常，请及时处理")
 
-    lines.append("══════════")
     report = "\n".join(lines)
 
     # 保存报告到日志文件

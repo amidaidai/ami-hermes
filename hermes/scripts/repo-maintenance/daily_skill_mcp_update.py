@@ -158,10 +158,14 @@ def main() -> int:
 
     # ── 构建报告 ──
     changes = []
-    lines = [f"══════════ 任务运行报告 ══════════"]
-    lines.append(f"任务：每日技能/SkillMCP更新")
-    lines.append(f"时间：{date_str}")
-    lines.append(f"耗时：{elapsed:.0f}s")
+    lines = ["## 任务运行报告", ""]
+    lines.append("| 项目 | 内容 |")
+    lines.append("|---|---|")
+    lines.append("| 任务 | 每日技能/SkillMCP更新 |")
+    lines.append(f"| 时间 | {date_str} |")
+    lines.append(f"| 耗时 | {elapsed:.0f}s |")
+    lines.append("")
+    lines.append("## 检查结果")
     lines.append("")
 
     # 技能更新
@@ -210,7 +214,6 @@ def main() -> int:
     else:
         lines.append(f"\n✅ 全部检查通过，无需变更")
 
-    lines.append("══════════")
     report = "\n".join(lines)
 
     # 保存日志
