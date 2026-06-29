@@ -1,0 +1,1059 @@
+#!/usr/bin/env python3
+"""
+Freerouter for Hermes — OpenRouter Free Model Updater
+=====================================================
+V3 — Weighted Scoring + Health-Check + Fallback-Chain
+
+Requirements:
+  - Python 3.10+
+  - Hermes Agent (https://github.com/NousResearch/hermes-agent)
+  - OpenRouter API Key (https://openrouter.ai/keys)
+  - Telegram Bot Token (optional, for notifications)
+
+Usage:
+  DRY_RUN=true  python3 freerouter.py   # Test run
+  DRY_RUN=false python3 freerouter.py   # Live run (updates config)
+"""
+
+import os
+import sys
+import json
+import subprocess
+import re
+import math
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# ========================
+# CONFIG
+# ========================
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/AppData/Local/hermes")))
+CONFIG_FILE = HERMES_HOME / "config.yaml"
+CONFIG_BACKUP = HERMES_HOME / "config.yaml.bak"
+SELECTION_FILE = HERMES_HOME / ".model_selection.json"
+HISTORY_FILE = HERMES_HOME / ".model_history.json"
+FAILURES_FILE = HERMES_HOME / ".model_failures.json"
+LOG_FILE = HERMES_HOME / "logs" / "freerouter.log"
+
+DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
+
+# ========================
+# LOGGING
+# ========================
+def log(msg: str):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {msg}"
+    print(line)
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+
+def log_error(msg: str):
+    log(f"ERROR: {msg}")
+
+def log_warn(msg: str):
+    log(f"WARN: {msg}")
+
+# ========================
+# FAILURE TRACKING
+# ========================
+def load_failures() -> dict:
+    if FAILURES_FILE.exists():
+        with open(FAILURES_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_failures(failures: dict):
+    with open(FAILURES_FILE, "w") as f:
+        json.dump(failures, f, indent=2)
+
+def record_failure(model_id: str):
+    failures = load_failures()
+    if model_id not in failures:
+        failures[model_id] = {"count": 0, "last_failure": None, "banned_until": None}
+    failures[model_id]["count"] += 1
+    failures[model_id]["last_failure"] = datetime.now().isoformat()
+    ban_until = datetime.now() + timedelta(hours=24)
+    failures[model_id]["banned_until"] = ban_until.isoformat()
+    save_failures(failures)
+    log_warn(f"Model failed {failures[model_id]['count']}x: {model_id} (banned until {failures[model_id]['banned_until']})")
+
+def is_model_banned(model_id: str, max_failures: int = 3) -> bool:
+    failures = load_failures()
+    model_data = failures.get(model_id, {})
+    if model_data.get("count", 0) < max_failures:
+        return False
+    banned_until_str = model_data.get("banned_until")
+    if not banned_until_str:
+        return False
+    try:
+        banned_until = datetime.fromisoformat(banned_until_str)
+        if datetime.now() > banned_until:
+            failures[model_id] = {"count": 0, "last_failure": None, "banned_until": None}
+            save_failures(failures)
+            log(f"Model ban expired: {model_id}")
+            return False
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def clear_failures(model_id: str):
+    failures = load_failures()
+    if model_id in failures:
+        failures[model_id] = {"count": 0, "last_failure": None, "banned_until": None}
+        save_failures(failures)
+
+# ========================
+# ENV LOADER
+# ========================
+def load_env():
+    env_file = HERMES_HOME / ".env"
+    if not env_file.exists():
+        return
+    with open(env_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip()
+                if key not in os.environ:
+                    os.environ[key] = val
+
+# ========================
+# API CALL
+# ========================
+def fetch_free_models():
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key or "..." in api_key:
+        log_error("OPENROUTER_API_KEY not found in environment")
+        sys.exit(1)
+
+    log("Fetching OpenRouter API...")
+
+    import urllib.request
+    url = "https://openrouter.ai/api/v1/models?free=true"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    })
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        log_error(f"API call failed: {e}")
+        sys.exit(1)
+
+    models = data.get("data", [])
+    log(f"  Got {len(models)} free models")
+    return models
+
+# ========================
+# QUALITY GATES
+# ========================
+def passes_quality_gates(model: dict) -> bool:
+    ctx = model.get("context_length", 0)
+    pricing = model.get("pricing", {})
+
+    if ctx < 128_000:
+        return False
+
+    prompt_price = float(pricing.get("prompt", 1))
+    if prompt_price != 0:
+        return False
+
+    model_id = model.get("id", "")
+    if is_model_banned(model_id):
+        log(f"  Skip (banned): {model_id}")
+        return False
+
+    return True
+
+def is_reasoning_only(model: dict) -> bool:
+    supported = model.get("supported_parameters", [])
+    has_tools = "tools" in supported or "function_calling" in supported or "tool_choice" in supported
+    return not has_tools
+
+# ========================
+# SCORING V3 — WEIGHTED
+# ========================
+WEIGHTS = {
+    'context': 0.20,
+    'trending': 0.25,
+    'feature': 0.30,
+    'speed': 0.10,
+    'quality': 0.15,
+}
+
+def normalize(value: float, min_val: float, max_val: float) -> float:
+    if max_val == min_val:
+        return 50.0
+    return 100 * (value - min_val) / (max_val - min_val)
+
+def calculate_context_score(ctx: int) -> float:
+    return normalize(ctx, 32_000, 1_000_000)
+
+def calculate_trending_score(position: int, total: int) -> float:
+    if total <= 0:
+        return 50.0
+    return max(20, 100 - (position * 80 / max(total, 50)))
+
+def calculate_feature_scores(model: dict) -> float:
+    name = model.get("name", "").lower()
+    model_id = model.get("id", "").lower()
+    desc = model.get("description", "").lower()
+    arch = model.get("architecture", {})
+    modality = arch.get("modality", "")
+    supported = model.get("supported_parameters", [])
+    ctx = model.get("context_length", 0)
+
+    score = 0
+
+    if ctx >= 1_000_000:
+        score += 30
+    elif ctx >= 200_000:
+        score += 20
+    elif ctx >= 128_000:
+        score += 10
+
+    if "image" in modality or "text+image" in modality:
+        score += 20
+
+    if "tools" in supported or "function_calling" in supported:
+        score += 15
+
+    if "vl" in model_id or "vision" in name:
+        score += 10
+
+    if any(w in desc for w in ["code", "coding", "programming", "software", "developer"]):
+        score += 10
+
+    if any(w in desc for w in ["fast", "efficient", "high-performance"]):
+        score += 5
+
+    if "include_reasoning" in supported or "reasoning" in supported:
+        score += 10
+
+    return min(100, score)
+
+def weighted_score(scores: dict) -> float:
+    return sum(scores[k] * WEIGHTS[k] for k in WEIGHTS)
+
+def calculate_all_scores(model: dict, trending_position: int = 0, total_models: int = 0) -> dict:
+    ctx = model.get("context_length", 0)
+    rating = model.get("rating", 0)
+
+    context_score = calculate_context_score(ctx)
+    trending_score = calculate_trending_score(trending_position, total_models)
+    feature_score = calculate_feature_scores(model)
+
+    pricing = model.get("pricing", {})
+    prompt_price = float(pricing.get("prompt", 0))
+    speed_score = 100 if prompt_price == 0 else max(0, 100 - (prompt_price * 1_000_000))
+
+    quality_score = min(100, context_score * 0.7 + (20 if "image" in model.get("architecture", {}).get("modality", "") else 0) + (10 if "tools" in model.get("supported_parameters", []) else 0))
+
+    rating_bonus = calculate_rating_score(rating) * 0.1
+
+    return {
+        "context": context_score,
+        "trending": trending_score,
+        "feature": feature_score,
+        "speed": speed_score,
+        "quality": quality_score,
+        "rating": rating_bonus
+    }
+
+def aggregate_score(scores: dict) -> float:
+    return weighted_score(scores)
+
+def calculate_rating_score(rating: float) -> float:
+    return (rating / 5) * 100
+
+# ========================
+# HEALTH CHECK
+# ========================
+def get_api_key() -> str:
+    key = os.environ.get("OPENROUTER_API_KEY", "")
+    if key and key != "***" and "..." not in key:
+        return key
+    return ""
+
+def health_check(model_id: str, api_key: str) -> bool:
+    log(f"  Health-Check: {model_id}")
+
+    if not api_key or api_key == "***":
+        log(f"  → Skipping (no API key)")
+        return None
+
+    if is_model_banned(model_id):
+        log(f"  → Skipping (banned): {model_id}")
+        return False
+
+    import urllib.request
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 5
+    }
+    data = json.dumps(payload).encode()
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    req = urllib.request.Request(url, data=data, headers=headers)
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status == 200:
+                clear_failures(model_id)
+                log(f"  ✓ Healthy: {model_id}")
+                return True
+            else:
+                log_warn(f"  ✗ HTTP {resp.status}: {model_id}")
+                record_failure(model_id)
+                return False
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode() if e.fp else ""
+        err_msg = err_body[:150] if err_body else str(e)
+        if e.code == 401:
+            log_warn(f"  ⚠ Auth Error for {model_id} — check API key")
+            return False
+        log_warn(f"  ✗ HTTP {e.code}: {model_id} — {err_msg}")
+        record_failure(model_id)
+        return False
+    except Exception as e:
+        log_warn(f"  ✗ Error: {model_id} — {e}")
+        record_failure(model_id)
+        return False
+
+# ========================
+# SELECTION
+# ========================
+def select_top_models(models: list, api_key: str) -> dict:
+    categorized = {"main": [], "vision": [], "coding": [], "reasoning": []}
+
+    sorted_models = sorted(models, key=lambda x: x.get("context_length", 0), reverse=True)
+
+    position_map = {}
+    for i, m in enumerate(sorted_models):
+        position_map[m["id"]] = i + 1
+
+    total = len(models)
+
+    for model in models:
+        if not passes_quality_gates(model):
+            continue
+
+        if is_reasoning_only(model):
+            continue
+
+        pos = position_map.get(model["id"], 50)
+        scores = calculate_all_scores(model, trending_position=pos, total_models=total)
+        agg = aggregate_score(scores)
+
+        for cat in ["main", "vision", "coding", "reasoning"]:
+            categorized[cat].append({
+                "id": model["id"],
+                "name": model.get("name", ""),
+                "context_length": model.get("context_length", 0),
+                "aggregate": agg,
+                "dim_scores": scores
+            })
+
+    result = {}
+    for cat in categorized:
+        sorted_cat = sorted(categorized[cat], key=lambda x: x["aggregate"], reverse=True)
+        result[cat] = sorted_cat[:5]
+
+    return result
+
+def select_with_health_check(selected: dict, api_key: str) -> dict:
+    final = {}
+
+    if not api_key or api_key == "***":
+        log("\n  → No API key — skipping health checks")
+        return selected
+
+    for cat in ["main", "vision", "coding", "reasoning"]:
+        if not selected.get(cat):
+            final[cat] = None
+            continue
+
+        log(f"\n  === Health-Check for {cat.upper()} ===")
+
+        for m in selected[cat][:3]:
+            model_id = m["id"]
+            result = health_check(model_id, api_key)
+
+            if result is True:
+                m["healthy"] = True
+                final[cat] = [m] + selected[cat][:5]
+                log(f"  → Selected (healthy): {model_id}")
+                break
+            elif result is None:
+                final[cat] = [m] + selected[cat][:5]
+                log(f"  → Selected (unknown): {model_id}")
+                break
+            else:
+                continue
+        else:
+            log_warn(f"  → No healthy model in top-3, using #1 anyway")
+            final[cat] = selected[cat]
+
+    return final
+
+# ========================
+# SAFETY UTILITIES
+# ========================
+def get_current_models() -> dict:
+    current = {"main": None, "vision": None, "delegation": None}
+    if not CONFIG_FILE.exists():
+        return current
+
+    with open(CONFIG_FILE, "r") as f:
+        content = f.read()
+
+    m = re.search(r'^(\s*default:\s*).+$', content, re.MULTILINE)
+    if m:
+        current["main"] = m.group(1).strip()
+
+    m = re.search(r'vision:.*?model:\s*([^\n]+)', content, re.DOTALL)
+    if m:
+        current["vision"] = m.group(1).strip()
+
+    m = re.search(r'delegation:.*?model:\s*([^\n]+)', content, re.DOTALL)
+    if m:
+        current["delegation"] = m.group(1).strip()
+
+    return current
+
+def restore_config(current: dict):
+    if not CONFIG_FILE.exists():
+        return
+
+    with open(CONFIG_FILE, "r") as f:
+        content = f.read()
+
+    if current.get("main"):
+        if "default:" in content:
+            content = re.sub(r'^(\s*default:\s*).+$', lambda m: m.group(1) + current["main"], content, flags=re.MULTILINE)
+    if current.get("vision"):
+        if "vision:" in content:
+            content = re.sub(r'vision:.*?model:\s*([^\n]+)', f'model: {current["vision"]}', content, flags=re.DOTALL)
+    if current.get("delegation"):
+        if "delegation:" in content:
+            content = re.sub(r'delegation:.*?model:\s*([^\n]+)', f'model: {current["delegation"]}', content, flags=re.DOTALL)
+
+    with open(CONFIG_FILE, "w") as f:
+        f.write(content)
+
+    log("Config restored to previous values")
+
+# ========================
+# CONFIG UPDATE
+# ========================
+def backup_config():
+    if CONFIG_FILE.exists():
+        import shutil
+        shutil.copy(CONFIG_FILE, CONFIG_BACKUP)
+        log(f"Backup created: {CONFIG_BACKUP}")
+
+def patch_config(main_model: str, vision_model: str, delegation_model: str):
+    """Patch config: only touch auxiliary.vision and delegation sections.
+    Main model (deepseek-v4-flash via deepseek provider) is NEVER changed.
+    Freerouter manages OpenRouter free models for auxiliary/delegation only."""
+    if not CONFIG_FILE.exists():
+        log_error(f"Config not found: {CONFIG_FILE}")
+        return
+
+    with open(CONFIG_FILE, "r") as f:
+        content = f.read()
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key or api_key in ("***", "") or "..." in api_key:
+        log_warn("No valid OPENROUTER_API_KEY in .env!")
+        api_key = ""
+
+    # === ONLY: Patch auxiliary.vision + delegation (both via openrouter) ===
+    # Main model (deepseek-v4-flash) stays untouched.
+
+    # --- auxiliary.vision section ---
+    lines = content.split('\n')
+    in_vision_section = False
+    section_indent = None
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if stripped == "vision:":
+            in_vision_section = True
+            section_indent = len(line) - len(line.lstrip())
+            continue
+
+        if in_vision_section:
+            current_indent = len(line) - len(line.lstrip())
+            if stripped and current_indent <= section_indent:
+                in_vision_section = False
+                continue
+
+            if stripped.startswith("model:"):
+                indent = len(line) - len(line.lstrip())
+                lines[i] = ' ' * indent + f'model: {vision_model}'
+            elif stripped.startswith("api_key:"):
+                indent = len(line) - len(line.lstrip())
+                if api_key:
+                    lines[i] = ' ' * indent + f'api_key: {api_key}'
+                    log("  → auxiliary.vision.api_key set")
+                else:
+                    log_warn("  → No API key for auxiliary.vision.api_key!")
+            elif stripped.startswith("base_url:"):
+                indent = len(line) - len(line.lstrip())
+                lines[i] = ' ' * indent + "base_url: ''"
+                log("  → auxiliary.vision.base_url set to ''")
+
+            # Also ensure provider stays openrouter
+            elif stripped.startswith("provider:"):
+                indent = len(line) - len(line.lstrip())
+                lines[i] = ' ' * indent + "provider: openrouter"
+                log("  → auxiliary.vision.provider set to openrouter")
+
+    content = '\n'.join(lines)
+
+    # --- delegation section ---
+    lines = content.split('\n')
+    in_delegation_section = False
+    section_indent = None
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if stripped == "delegation:":
+            in_delegation_section = True
+            section_indent = len(line) - len(line.lstrip())
+            continue
+
+        if in_delegation_section:
+            current_indent = len(line) - len(line.lstrip())
+            if stripped and current_indent <= section_indent:
+                in_delegation_section = False
+                continue
+
+            if stripped.startswith("model:"):
+                indent = len(line) - len(line.lstrip())
+                lines[i] = ' ' * indent + f'model: {delegation_model}'
+                log("  → delegation.model set to free model")
+            elif stripped.startswith("provider:"):
+                indent = len(line) - len(line.lstrip())
+                lines[i] = ' ' * indent + "provider: openrouter"
+                log("  → delegation.provider set to openrouter")
+            elif stripped.startswith("api_key:") and api_key:
+                indent = len(line) - len(line.lstrip())
+                lines[i] = ' ' * indent + f'api_key: {api_key}'
+
+    content = '\n'.join(lines)
+
+    with open(CONFIG_FILE, "w") as f:
+        f.write(content)
+
+    log(f"Config patched: vision={vision_model}, delegation={delegation_model} (main model untouched)")
+
+def restart_gateway():
+    """Restart Hermes gateway — adapted for Windows compatibility."""
+    log("Attempting gateway restart...")
+
+    # Try pkill first
+    result = subprocess.run(
+        ["pkill", "-HUP", "hermes-gateway"],
+        capture_output=True, timeout=5
+    )
+    if result.returncode == 0:
+        log("Gateway restarted via pkill")
+        return
+
+    # Fallback: report and continue
+    log_warn("Gateway restart skipped (not available in this environment)")
+    log("Config changes will take effect on next hermes start")
+
+# ========================
+# TELEGRAM
+# ========================
+def send_telegram(message: str):
+    load_env()
+
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "") or os.environ.get("TELEGRAM_HOME_CHANNEL", "")
+
+    if not bot_token or not chat_id:
+        log("Telegram not configured — logging message instead")
+        return
+
+    import urllib.request
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    data = json.dumps({
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }).encode()
+
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log("Telegram sent")
+    except Exception as e:
+        log_error(f"Telegram failed: {e}")
+
+def format_telegram(selected: dict, change_count: int) -> str:
+    now = datetime.now()
+    date_str = now.strftime("%d.%m.%Y")
+    time_str = now.strftime("%H:%M")
+
+    header = "🏷️ DRY-RUN MODE\n" if DRY_RUN else ""
+    footer = "\n⚠️ CONFIG NOT CHANGED\n   (DRY-RUN active)" if DRY_RUN else ""
+
+    def ctx_str(ctx):
+        if ctx >= 1_000_000:
+            return f"{ctx//1_000_000}M"
+        elif ctx >= 1000:
+            return f"{ctx//1000}K"
+        return str(ctx)
+
+    main = selected.get("main", [{}])[0] if selected.get("main") else {}
+    vision = selected.get("vision", [{}])[0] if selected.get("vision") else {}
+    reasoning = selected.get("reasoning", [{}])[0] if selected.get("reasoning") else {}
+
+    main_score = main.get("aggregate", 0)
+    vision_score = vision.get("aggregate", 0) if vision else 0
+    reasoning_score = reasoning.get("aggregate", 0) if reasoning else 0
+
+    main_fallback = [m["id"] for m in selected.get("main", [])[1:4]]
+    vision_fallback = [m["id"] for m in selected.get("vision", [])[1:4]]
+
+    fallback_text = ""
+    if main_fallback:
+        joined = "`, `".join(main_fallback)
+        fallback_text += f"\n   ↳ Fallback: `{joined}`"
+
+    return f"""{header}━━━━━━━━━━━━━━━━━━━━━━━━
+🌅 OpenRouter Model Update
+📅 {date_str} — {time_str}
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+🖥️ MAIN MODEL
+   `{main.get('id', 'N/A')}`
+   Context: {ctx_str(main.get('context_length', 0))} | Score: {main_score:.0f}{fallback_text}
+
+🖼️ VISION
+   `{vision.get('id', 'N/A')}`
+   Context: {ctx_str(vision.get('context_length', 0))} | Score: {vision_score:.0f}
+
+🧠 REASONING
+   `{reasoning.get('id', 'N/A')}`
+   Context: {ctx_str(reasoning.get('context_length', 0))} | Score: {reasoning_score:.0f}
+
+📊 Changes: {change_count}
+━━━━━━━━━━━━━━━━━━━━━━━━{footer}"""
+
+# ========================
+# HISTORY TRACKING
+# ========================
+def load_history() -> dict:
+    if HISTORY_FILE.exists():
+        with open(HISTORY_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_history(history: dict):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+def check_changes(selected: dict) -> int:
+    history = load_history()
+    changes = 0
+
+    for cat in ["main", "vision", "reasoning"]:
+        if not selected.get(cat):
+            continue
+        current_model = selected[cat][0]["id"]
+        prev = history.get(cat, {}).get("current")
+        if prev and prev != current_model:
+            changes += 1
+            log(f"  Model changed: {cat} = {prev} → {current_model}")
+
+    return changes
+
+def update_history(selected: dict):
+    history = load_history()
+    now = datetime.now().strftime("%Y-%m-%d")
+
+    for cat in ["main", "vision", "reasoning"]:
+        if not selected.get(cat):
+            continue
+        current_model = selected[cat][0]["id"]
+        prev = history.get(cat, {}).get("current", "")
+
+        history[cat] = {
+            "current": current_model,
+            "previous": prev,
+            "history": history.get(cat, {}).get("history", []) + [{
+                "date": now,
+                "model": current_model,
+                "change": prev != current_model and prev != ""
+            }]
+        }
+
+    save_history(history)
+
+# ========================
+# WEB UI SYNC
+# ========================
+
+def sync_custom_free_models():
+    """Auto-discover truly free OpenRouter models and sync them as custom models.
+
+    Writes directly to ~/.hermes-web-ui/config.json customModels section.
+    The Web UI reads this on next page load (no gateway restart needed for frontend).
+
+    Flow:
+    1. Fetch ALL models from OpenRouter API
+    2. Find truly free (pricing=0/0) + tool-supporting → custom model candidates
+    3. Compare with Hermes provider model list (built-in)
+    4. Free models NOT in provider list → add to customModels
+    5. customModels no longer free → remove
+    """
+    log("\n=== Custom Model Sync ===")
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    import urllib.request
+    url = "https://openrouter.ai/api/v1/models"
+    headers = {"Accept": "application/json"}
+    if api_key and "..." not in api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read())
+    except Exception as e:
+        log_error(f"Failed to fetch OpenRouter models: {e}")
+        return
+
+    all_models = payload.get("data", [])
+    log(f"  OpenRouter total: {len(all_models)} models")
+
+    # Find truly free + tool-supporting
+    truly_free = []
+    for m in all_models:
+        if not isinstance(m, dict):
+            continue
+        pricing = m.get("pricing", {})
+        try:
+            prompt = float(pricing.get("prompt", 1))
+            completion = float(pricing.get("completion", 1))
+        except (TypeError, ValueError):
+            continue
+        if prompt != 0 or completion != 0:
+            continue
+        params = m.get("supported_parameters")
+        if isinstance(params, list) and "tools" not in params:
+            continue
+        truly_free.append(m["id"])
+
+    log(f"  Truly free + tools: {len(truly_free)}")
+
+    # Built-in provider model list: the core :free models that Hermes
+    # knows natively. Routes (openrouter/free, owl-alpha, auto) and
+    # other non-:free models need customModels to show up in Web UI.
+    # These are the 22 :free model IDs (without routes).
+    HERMES_CORE_FREE_MODELS = [
+        m for m in HERMES_KNOWN_FREE_MODELS
+        if m.endswith(":free")
+    ]
+    provider_set = set(HERMES_CORE_FREE_MODELS)
+
+    # Models that are free but NOT built-in → need customModel entry
+    new_candidates = [m for m in truly_free if m not in provider_set]
+
+    log(f"  Free models needing custom: {len(new_candidates)}")
+    for m in sorted(new_candidates):
+        log(f"    - {m}")
+
+    # Read current customModels from Web UI config
+    webui_path = WEBUI_CONFIG if WEBUI_CONFIG.exists() else WEBUI_CONFIG_ALT
+    if not webui_path.exists():
+        log_warn(f"Web UI config not found: {webui_path}")
+        return
+
+    try:
+        with open(webui_path, "r") as f:
+            config = json.load(f)
+    except Exception as e:
+        log_error(f"Failed to read Web UI config: {e}")
+        return
+
+    current_custom = config.setdefault("customModels", {}).get("openrouter", [])
+    log(f"  Current custom: {current_custom}")
+
+    truly_free_set = set(truly_free)
+    changed = False
+
+    # Add new free models not yet in customModels
+    for model_id in sorted(new_candidates):
+        if model_id in current_custom:
+            continue
+        if DRY_RUN:
+            log(f"  [DRY-RUN] Would add custom: {model_id}")
+            changed = True
+        else:
+            current_custom.append(model_id)
+            log(f"  → Added custom: {model_id}")
+            changed = True
+
+    # Remove custom models that are no longer free
+    for model_id in list(current_custom):
+        if model_id not in truly_free_set:
+            if DRY_RUN:
+                log(f"  [DRY-RUN] Would remove custom: {model_id}")
+                changed = True
+            else:
+                current_custom.remove(model_id)
+                log(f"  → Removed custom (no longer free): {model_id}")
+                changed = True
+
+    if changed and not DRY_RUN:
+        config["customModels"]["openrouter"] = current_custom
+        with open(webui_path, "w") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        log(f"  customModels updated: {len(current_custom)} entries")
+    elif changed:
+        log(f"  [DRY-RUN] customModels would be updated: {len(current_custom)} entries")
+    else:
+        log("  No changes needed")
+
+    # Also refresh HERMES_KNOWN_FREE_MODELS to remove models no longer free
+    refresh_known_free_models(truly_free_set)
+
+    return changed
+
+
+# ========================
+# REFRESH KNOWN FREE MODELS LIST
+# ========================
+def refresh_known_free_models(truly_free_set: set):
+    """Remove models from HERMES_KNOWN_FREE_MODELS that are no longer truly free."""
+    global HERMES_KNOWN_FREE_MODELS
+    old_len = len(HERMES_KNOWN_FREE_MODELS)
+    HERMES_KNOWN_FREE_MODELS = [
+        m for m in HERMES_KNOWN_FREE_MODELS
+        if m in truly_free_set or not m.endswith(":free")
+    ]
+    new_len = len(HERMES_KNOWN_FREE_MODELS)
+    removed = old_len - new_len
+    if removed > 0:
+        log(f"  Known free models cleaned: {removed} removed ({old_len} → {new_len})")
+    return removed
+WEBUI_CONFIG = Path.home() / "AppData" / "Local" / "hermes-web-ui" / "config.json"
+# Also check the legacy path
+WEBUI_CONFIG_ALT = Path.home() / ".hermes-web-ui" / "config.json"
+
+# Hermes built-in OpenRouter provider only caches these free models.
+# Web UI cannot display models outside this list.
+# All models verified truly free + tool-supporting via live OpenRouter API
+# (pricing.prompt/completion = 0, supported_parameters includes tools)
+HERMES_KNOWN_FREE_MODELS = [
+    # Free models
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",  # 32K
+    "cohere/north-mini-code:free",                                   # 256K
+    "google/gemma-4-26b-a4b-it:free",                                # 262K
+    "google/gemma-4-31b-it:free",                                    # 262K
+    "liquid/lfm-2.5-1.2b-instruct:free",                             # 32K
+    "liquid/lfm-2.5-1.2b-thinking:free",                             # 32K
+    "meta-llama/llama-3.2-3b-instruct:free",                         # 131K
+    "meta-llama/llama-3.3-70b-instruct:free",                        # 131K
+    "nousresearch/hermes-3-llama-3.1-405b:free",                     # 131K
+    "nvidia/nemotron-3-nano-30b-a3b:free",                           # 256K
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",            # 256K
+    "nvidia/nemotron-3-super-120b-a12b:free",                        # 1M
+    "nvidia/nemotron-3-ultra-550b-a55b:free",                        # 1M
+    "nvidia/nemotron-3.5-content-safety:free",                       # 128K
+    "nvidia/nemotron-nano-12b-v2-vl:free",                           # 128K
+    "nvidia/nemotron-nano-9b-v2:free",                               # 128K
+    "openai/gpt-oss-120b:free",                                      # 131K
+    "openai/gpt-oss-20b:free",                                       # 131K
+    "poolside/laguna-m.1:free",                                      # 262K
+    "poolside/laguna-xs.2:free",                                     # 262K
+    "qwen/qwen3-coder:free",                                         # 1M
+    "qwen/qwen3-next-80b-a3b-instruct:free",                         # 262K
+    # Routes (aggregators)
+    "openrouter/free",              # Free — routes to cheapest free endpoint (200K)
+    "openrouter/auto",              # Variable — intelligent routing (2M)
+    "openrouter/owl-alpha",         # Free — 1M context route
+]
+
+def sync_webui_free_models(all_models: list):
+    """Update Web UI modelVisibility with Hermes-known OpenRouter free models.
+    Only models from HERMES_KNOWN_FREE_MODELS are synced — the Web UI cannot
+    display models outside its built-in provider cache."""
+    webui_path = WEBUI_CONFIG if WEBUI_CONFIG.exists() else WEBUI_CONFIG_ALT
+    if not webui_path.exists():
+        log_warn(f"Web UI config not found: {webui_path}")
+        return
+
+    log("Syncing known free models to Web UI visibility...")
+
+    try:
+        with open(webui_path, "r") as f:
+            config = json.load(f)
+    except Exception as e:
+        log_error(f"Failed to read Web UI config: {e}")
+        return
+
+    visibility = config.setdefault("modelVisibility", {})
+    visibility["openrouter"] = {
+        "mode": "include",
+        "models": HERMES_KNOWN_FREE_MODELS
+    }
+
+    try:
+        with open(webui_path, "w") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        log(f"Web UI free model list updated: {len(HERMES_KNOWN_FREE_MODELS)} Hermes-known models")
+    except Exception as e:
+        log_error(f"Failed to write Web UI config: {e}")
+
+
+# ========================
+# FALLBACK CHAIN
+# ========================
+def save_fallback_chains(selected: dict):
+    chains = {}
+    for cat in ["main", "vision", "reasoning", "coding"]:
+        if selected.get(cat):
+            chains[cat] = [m["id"] for m in selected[cat][:5]]
+
+    fallback_file = HERMES_HOME / ".model_fallback.json"
+    with open(fallback_file, "w") as f:
+        json.dump({
+            "updated": datetime.now().isoformat(),
+            "chains": chains
+        }, f, indent=2)
+
+    log(f"Fallback chains saved: {fallback_file}")
+
+# ========================
+# MAIN
+# ========================
+def main():
+    global DRY_RUN
+
+    # Load .env FIRST
+    load_env()
+
+    DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
+    log("=" * 50)
+    log("OpenRouter Model Updater — START (V3)")
+    log(f"DRY_RUN: {DRY_RUN}")
+    log("=" * 50)
+
+    api_key = get_api_key()
+    if not api_key:
+        log_warn("No OpenRouter API key found — skipping health checks")
+    else:
+        log(f"API key found (length: {len(api_key)})")
+
+    # Phase 1: Fetch
+    models = fetch_free_models()
+
+    # Phase 1b: Sync custom free models (auto-discover + manage custom_models)
+    sync_custom_free_models()
+
+    # Sync all free models to Web UI visibility (always, even dry-run)
+    sync_webui_free_models(models)
+
+    # Phase 2: Score & Select
+    log("Calculating scores (weighted)...")
+    selected = select_top_models(models, api_key)
+
+    # Log Top-3 per category
+    for cat in ["main", "vision", "coding", "reasoning"]:
+        top3 = selected.get(cat, [])[:3]
+        log(f"\n  === TOP {cat.upper()} ===")
+        for i, m in enumerate(top3):
+            ctx = m.get("context_length", 0)
+            agg = m.get("aggregate", 0)
+            scores = m.get("dim_scores", {})
+            log(f"    {i+1}. [{agg:.1f}] {m['id']}")
+            log(f"       Context:{scores.get('context',0):.0f} Trending:{scores.get('trending',0):.0f} Feature:{scores.get('feature',0):.0f}")
+
+    # Phase 3: Health-Check
+    log("\nRunning health checks...")
+    selected_with_health = select_with_health_check(selected, api_key)
+
+    # Phase 4: Changes check
+    change_count = check_changes(selected_with_health)
+
+    # Phase 5: Config update (only if not dry-run)
+    if not DRY_RUN:
+        log("\nPatching config.yaml...")
+
+        previous_models = get_current_models()
+        log(f"Previous models saved: {previous_models}")
+
+        backup_config()
+
+        try:
+            main_model = selected_with_health["main"][0]["id"] if selected_with_health.get("main") else None
+            vision_model = selected_with_health["vision"][0]["id"] if selected_with_health.get("vision") else None
+            delegation_model = main_model
+
+            if main_model and vision_model:
+                patch_config(main_model, vision_model, delegation_model)
+                update_history(selected_with_health)
+                save_fallback_chains(selected_with_health)
+                log("Config successfully updated")
+            else:
+                log_error("No models selected — nothing changed")
+        except Exception as e:
+            log_error(f"ERROR during update: {e}")
+            log("Restoring previous config...")
+            restore_config(previous_models)
+            raise
+    elif change_count == 0:
+        log("\nNo changes — config unchanged, no restart needed")
+        save_fallback_chains(selected_with_health)
+    else:
+        log("\nDRY-RUN: Config not changed")
+        save_fallback_chains(selected_with_health)
+
+    # Phase 6: Telegram
+    log("\nSending Telegram...")
+    message = format_telegram(selected_with_health, change_count)
+    send_telegram(message)
+
+    # Phase 7: Gateway Restart
+    if not DRY_RUN and change_count > 0:
+        restart_gateway()
+
+    # Save selection
+    with open(SELECTION_FILE, "w") as f:
+        json.dump({
+            "updated": datetime.now().isoformat(),
+            "dry_run": DRY_RUN,
+            "selected": selected_with_health
+        }, f, indent=2)
+
+    log("\n" + "=" * 50)
+    log("OpenRouter Model Updater — DONE")
+    log("=" * 50)
+
+if __name__ == "__main__":
+    main()

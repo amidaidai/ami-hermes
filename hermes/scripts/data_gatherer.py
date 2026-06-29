@@ -25,6 +25,8 @@ _secrets = _load_json_secrets("D:/Hermes agent/hermes/secrets/binance.json")
 API_KEY = _os.environ.get("BINANCE_API_KEY") or _secrets.get("api_key", "")
 SECRET_KEY = _os.environ.get("BINANCE_SECRET_KEY") or _secrets.get("secret_key", "")
 
+CG_KEY = _os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+
 def fetch(url, headers=None, timeout=10):
     req = urllib.request.Request(url, headers=headers or {"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -72,7 +74,8 @@ snap["binance_spot"] = {
     "24h_change_pct": float(bt.get("priceChangePercent", 0)) if isinstance(bt, dict) else None,
 }
 
-cg = safe_fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true")
+cg = safe_fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true",
+    headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None)
 snap["coingecko"] = {
     "price": cg.get("bitcoin", {}).get("usd") if isinstance(cg, dict) else None,
 }

@@ -1,60 +1,49 @@
 #!/usr/bin/env python3
-"""Wrapper for TV data bridge — runs fetch_tv_data.cjs + TV CLI tables capture."""
+"""Wrapper for TV data bridge — runs fetch_tv_data.cjs and verifies output.
+
+v4.3: The production SVP indicator's action panel (行动格 v2) uses row labels
+结论/方向/进场/止损/目标/磁吸↑/磁吸↓ — there is NO 等级/处理 row, and the panel
+is drawn via table.new() whose cells live in the CDP `dwgtablecells` collection.
+fetch_tv_data.cjs now reads that collection directly and writes tv_grade /
+tv_treatment / tv_conclusion / tv_entry / tv_stop / tv_target into the JSON, so
+the old separate `tv data tables --study SVP` re-read (which looked for the
+non-existent 等级/处理 rows in the wrong collection) has been removed.
+"""
 import subprocess, sys, os, json
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent
 TV_DIR = DIR.parent / "tools" / "tradingview-mcp"
 BRIDGE_SCRIPT = TV_DIR / "fetch_tv_data.cjs"
-TV_CLI = TV_DIR / "src" / "cli" / "index.js"
 
 DATA_DIR = Path(os.path.expanduser("~/AppData/Local/hermes/data"))
 OUTPUT_FILE = DATA_DIR / "BTCUSDT.P_tv_data.json"
 
-# Step 1: Run main bridge
+# Run main bridge — it now writes the full action-panel decode into OUTPUT_FILE.
 if BRIDGE_SCRIPT.exists():
     result = subprocess.run(
         ["node", str(BRIDGE_SCRIPT), "BINANCE:BTCUSDT.P"],
-        cwd=str(TV_DIR), capture_output=True, text=True, timeout=50
+        cwd=str(TV_DIR), capture_output=True, text=True, timeout=60
     )
+    if result.returncode != 0:
+        sys.stdout.write("ERROR: bridge failed\n")
+        sys.stdout.write((result.stderr or result.stdout or "")[-800:])
+        sys.exit(1)
 
-# Step 2: Get decision table from TV CLI
-try:
-    result2 = subprocess.run(
-        ["node", str(TV_CLI), "data", "tables", "--study", "SVP"],
-        cwd=str(TV_DIR), capture_output=True, text=True, timeout=15
-    )
-    if result2.returncode == 0 and result2.stdout:
-        table_data = json.loads(result2.stdout)
-        for study in table_data.get("studies", []):
-            if "SVP" in study.get("name", ""):
-                for table in study.get("tables", []):
-                    for row in table.get("rows", []):
-                        parts = row.split("|")
-                        if parts[0].strip() == "等级" and len(parts) > 1:
-                            # Merge into existing data file
-                            if OUTPUT_FILE.exists():
-                                try:
-                                    existing = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
-                                    existing["tv_grade"] = parts[1].strip()
-                                    # Also get treatment
-                                    for r2 in table.get("rows", []):
-                                        p2 = r2.split("|")
-                                        if p2[0].strip() == "处理" and len(p2) > 1:
-                                            existing["tv_treatment"] = p2[1].strip()
-                                    OUTPUT_FILE.write_text(
-                                        json.dumps(existing, indent=2, ensure_ascii=False),
-                                        encoding="utf-8"
-                                    )
-                                    break
-                                except: pass
-except Exception as e:
-    # Non-critical — data file already has VWAP/EMA/CVD from bridge
-    pass
-
-# Verify output exists
+# Verify output exists and carries the action-panel conclusion.
 if OUTPUT_FILE.exists():
+    try:
+        data = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
+        grade = data.get("tv_grade")
+        conc = data.get("tv_conclusion")
+        if not conc:
+            # Non-fatal: structure/price still present; panel just not captured this tick.
+            sys.stdout.write("WARN: tv_conclusion missing (action panel not captured)\n")
+        else:
+            sys.stdout.write(f"OK grade={grade} conclusion={conc}\n")
+    except Exception as e:
+        sys.stdout.write(f"WARN: could not re-read output json: {e}\n")
     sys.exit(0)
 
-sys.stdout.write("ERROR: no output file")
+sys.stdout.write("ERROR: no output file\n")
 sys.exit(1)

@@ -5,8 +5,9 @@
 import subprocess, sys
 from pathlib import Path
 
+PROJECT_ROOT = Path("D:/Hermes agent")
 SCRIPTS = Path(__file__).resolve().parent
-REPO_SCRIPTS = SCRIPTS.parent / "hermes" / "scripts" / "repo-maintenance"
+REPO_SCRIPTS = PROJECT_ROOT / "hermes" / "scripts" / "repo-maintenance"
 
 STEPS = [
     ("Hermes升级", REPO_SCRIPTS / "daily_hermes_official_update.py", 20),

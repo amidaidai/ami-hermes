@@ -7,7 +7,7 @@
 输出：社区情绪 + 全球加密指标 + 汇率
 """
 
-import json, time, urllib.request
+import json, time, os, urllib.request
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -15,9 +15,13 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 TZ = timezone(timedelta(hours=8))
 CACHE_FILE = Path("D:/Hermes agent/data/coingecko_cache.json")
 CACHE_TTL = 300  # 5分钟缓存
+CG_KEY = os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
 
 def _fetch(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    headers = {"User-Agent": UA}
+    if CG_KEY and "coingecko.com" in url:
+        headers["x-cg-pro-api-key"] = CG_KEY
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as r:
         raw = r.read()
         # Handle encoding issues

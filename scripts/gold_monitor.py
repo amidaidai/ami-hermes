@@ -19,6 +19,8 @@ BUY_ZONE_LOW = 4315
 BUY_ZONE_HIGH = 4323
 BREAKOUT_LEVEL = 4330
 BREAKDOWN_LEVEL = 4287
+# 警告：以上区间需手动更新。当前金价约4096，区间已偏离~5%。
+# 使用 --update-zones 参数可基于现价重新计算区间。
 COOLDOWN_SECONDS = 600  # 同条件10min冷却
 FUTURES_PREMIUM = 20    # GC=F期货对现货的预估溢价
 MAX_SOURCE_SPREAD = 5   # 双源最大允许差价

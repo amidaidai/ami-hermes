@@ -10,6 +10,9 @@
     from telegram_direct import send_telegram_direct
     ok, reason = send_telegram_direct("telegram:-1003733144325:416", "消息")
 
+v1.1：优先委托 `telegram_reliable.send_telegram_reliable()`，失败落盘到
+`D:/Hermes agent/data/pending_telegram.jsonl`，兼容历史调用。
+
 token 来源优先级:
     1. 显式传入 token 参数
     2. 环境变量 TELEGRAM_BOT_TOKEN
@@ -20,6 +23,11 @@ import os
 import json
 import urllib.request
 import urllib.error
+
+try:
+    from telegram_reliable import send_telegram_reliable as _reliable_send
+except Exception:  # noqa: BLE001 - standalone fallback keeps old behavior usable
+    _reliable_send = None
 
 
 API_BASE = "https://api.telegram.org"
@@ -98,6 +106,17 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
 
     返回 (成功, 原因)。任何网络/HTTP 异常都被吞掉返回 (False, reason)，绝不外抛。
     """
+    if _reliable_send is not None:
+        return _reliable_send(
+            target,
+            text,
+            token=token,
+            parse_mode=parse_mode,
+            timeout=timeout,
+            retries=3,
+            persist_on_fail=True,
+        )
+
     token = token or os.environ.get("TELEGRAM_BOT_TOKEN") or _token_from_env_file()
     if not token:
         return False, "missing TELEGRAM_BOT_TOKEN"

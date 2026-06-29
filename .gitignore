@@ -28,6 +28,17 @@ Thumbs.db
 *.pid
 
 # ===== 运行时 =====
+data/.btc_*.json
+data/btc_signal.json
+data/btc_latest_card.md
+
+# ===== 归档 =====
+scripts/_archive/
+references/_archived/
+
+# ===== Hermes配置脚本（由cron管理，不同步） =====
+scripts/freerouter.py
+scripts/list_free_models.py
 node_modules/
 __pycache__/
 *.pyc
@@ -48,3 +59,4 @@ restart_gw.vbs
 hermes/scripts/repo-maintenance/reset_remote.py
 nul
 btc_analysis_output.md
+Agent-Reach

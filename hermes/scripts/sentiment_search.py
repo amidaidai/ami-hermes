@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-棠溪 · 情绪搜索引擎 v2.1
-Brave Search API (2000次/月) → DDGS (备用) → 社区数据 (兜底)
+棠溪 · 情绪搜索引擎 v2.2
+搜索降级链: Brave → Exa → Tavily → DDGS → 社区数据(兜底)
 """
 
 import json, time, re, urllib.request, urllib.parse
@@ -38,6 +38,47 @@ def _brave_search(query, max_results=5):
         return [{"title": w["title"], "body": w.get("description", "")[:200], "url": w.get("url", "")} for w in web]
     except:
         return []
+
+def _exa_search(query, max_results=5):
+    """Exa Search API"""
+    try:
+        key = _read_secret("exa_api_key.txt")
+        if not key:
+            return []
+        url = "https://api.exa.ai/search"
+        body = json.dumps({"query": query, "numResults": max_results, "type": "auto"}).encode()
+        req = urllib.request.Request(url, data=body, headers={
+            "Content-Type": "application/json",
+            "x-api-key": key,
+            "User-Agent": UA,
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        results = data.get("results", [])
+        return [{"title": r.get("title", ""), "body": r.get("text", "")[:200], "url": r.get("url", "")} for r in results]
+    except:
+        return []
+
+
+def _tavily_search(query, max_results=5):
+    """Tavily Search API"""
+    try:
+        key = _read_secret("tavily_api_key.txt")
+        if not key:
+            return []
+        url = "https://api.tavily.com/search"
+        body = json.dumps({"query": query, "max_results": max_results, "search_depth": "basic"}).encode()
+        req = urllib.request.Request(url, data=body, headers={
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        results = data.get("results", [])
+        return [{"title": r.get("title", ""), "body": r.get("content", "")[:200], "url": r.get("url", "")} for r in results]
+    except:
+        return []
+
 
 def _ddgs_search(query, max_results=5):
     """DDGS备用"""
@@ -99,11 +140,14 @@ def search_sentiment(symbol):
     else:
         query = f"{symbol} market sentiment"
     
-    texts = _brave_search(query, 5)
-    source = "Brave"
-    if not texts:
-        texts = _ddgs_search(query, 5)
-        source = "DDGS"
+    # Search chain: Brave → Exa → Tavily → DDGS
+    texts = []
+    source = "无可用搜索源"
+    for backend, fn in [("Brave", _brave_search), ("Exa", _exa_search), ("Tavily", _tavily_search), ("DDGS", _ddgs_search)]:
+        texts = fn(query, 5)
+        if texts:
+            source = backend
+            break
     if not texts:
         sentiment = {"direction": "\u672a\u83b7\u53d6", "strength": "\u5f31", "bull_signals": 0, "bear_signals": 0, "hot_words": [], "source_count": 0, "source": "\u65e0\u53ef\u7528\u641c\u7d22\u6e90"}
         cache[key] = sentiment

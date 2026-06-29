@@ -285,13 +285,17 @@ def yahoo_chart_price(yahoo_symbol: str) -> float | None:
     return None
 
 
+CG_KEY = os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+
+
 def coingecko_price(asset: str) -> float | None:
     ids = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "binancecoin"}
     coin_id = ids.get(str(asset or "").upper())
     if not coin_id:
         return None
     try:
-        data = http_get("https://api.coingecko.com/api/v3/simple/price", {"ids": coin_id, "vs_currencies": "usd"}, timeout=8)
+        headers = {"x-cg-pro-api-key": CG_KEY} if CG_KEY else {}
+        data = http_get("https://api.coingecko.com/api/v3/simple/price", {"ids": coin_id, "vs_currencies": "usd"}, timeout=8, headers=headers)
         price = data.get(coin_id, {}).get("usd")
         return float(price) if price else None
     except Exception:
@@ -623,8 +627,8 @@ def position_size(entry: float, stop: float, risk_usd: float, leverage: float) -
     return {"ok": True, "qty": qty, "notional": notional, "margin": margin, "max_loss": risk_usd, "stop_distance": distance}
 
 
-def http_get(url: str, params: dict[str, Any] | None = None, timeout: int = 10) -> Any:
-    r = requests.get(url, params=params, timeout=timeout)
+def http_get(url: str, params: dict[str, Any] | None = None, timeout: int = 10, headers: dict[str, Any] | None = None) -> Any:
+    r = requests.get(url, params=params, timeout=timeout, headers=headers)
     r.raise_for_status()
     return r.json()
 
