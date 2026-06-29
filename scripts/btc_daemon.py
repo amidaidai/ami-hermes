@@ -14,6 +14,12 @@ import json, os, sys, time, asyncio, subprocess, urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import OrderedDict
+import sys
+import io as _io
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 ROOT = Path("D:/Hermes agent")
 DATA_DIR = ROOT / "data"

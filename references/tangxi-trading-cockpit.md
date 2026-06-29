@@ -6,13 +6,28 @@
 
 | 模块 | 职责 | 主文件/能力 |
 |---|---|---|
-| 数据驾驶舱 | 多源采集、数据定级、新鲜度判断 | TV MCP、Binance、FinanceKit、Jin10、Web/X、CoinGecko、Polymarket |
+| 数据驾驶舱 | 多源采集、数据定级、新鲜度判断 | TV MCP、Binance、FinanceKit、Jin10、Web/X、CoinGecko、Polymarket、ETF Flow、Dune 链上、COT 报告 |
 | 结构驾驶舱 | 定方向、价值区、关键位、扫线、VWAP/EMA/CVD | TV主指标 SVP+ICT+VWAP+EMA+CVD |
-| 订单流驾驶舱 | 验证现货/永续、OI、CVD、Taker、Funding | TV副指标、Binance OI/Taker/Funding |
+| 订单流驾驶舱 | 验证现货/永续、OI、CVD、Taker、Funding、期权 PCR/MaxPain | TV副指标、Binance OI/Taker/Funding、Deribit 期权 |
 | 执行驾驶舱 | A/B/C/X 状态机、确认入场、失效、目标 | auto_card、render_tv_card、render_v8 |
 | 风控驾驶舱 | R:R、仓位、日损、连亏、事件禁做、复盘样本 | risk_state、strategy_model_stats、strategy_governance |
 | 监控驾驶舱 | 关键位接近/突破、自动推送、心跳、watchdog | 行情守望、watchdog、monitor_levels |
 | 复盘驾驶舱 | 计划、触发、成交、平仓、复盘、模型升降权 | trade_plans/events/reviews、strategy_model_stats |
+| 体制驾驶舱 | 趋势/震荡/收敛/爆发分类、跨资产相关性、降级信号 | regime_classifier、correlation_matrix、ADX/VHV/CVD背离 |
+
+## 一·补、Cron 数据源 ⊂ 驾驶舱映射
+
+| Cron 任务 | 驾驶舱模块 | 验证用途 |
+|---|---|---|
+| BTC 关键位同步 (4h) | 监控 | 关键位刷新，Monitor levels 数据来源 |
+| Orion 全市场雷达 (30min) | 数据 | 广度扫描异动候选 + 跨交易所验证 |
+| XAUUSD 监控 (5min) | 监控 | 黄金关键位/阶段/信号推送 |
+| ETF Flow 刷新 (4h) | 数据 | 现货 ETF 流入流出 → BTC 方向性验证 |
+| Dune 链上刷新 (2h) | 订单流 | BTC 链上流入流出 → 中长期趋势验证 |
+| COT 报告刷新 (周六) | 数据 | 商业/投机持仓 → 中长期方向验证 |
+| Deribit 期权刷新 (15min) | 订单流 | PCR/MaxPain → 期权市场情绪验证 |
+| BTC 守护看门狗 (5min) | 监控 | 零 token 多因子评分 ≥8 推送 |
+| SkillMCP/审计/备份/OR同步 | 运维 | 不直接参与交易验证 |
 
 ## 二、正式手动分析流程
 
@@ -50,7 +65,13 @@
 主指标 = 主驾驶：结构、方向、关键位、进场、止损、目标、R:R、磁吸
 副指标 = 副驾驶：现货/永续、OI、CVD流向、量能、爆仓/踩踏
 Binance = 外部验证：价格、OI历史、Funding、Taker、多空比
+Deribit 期权 = 情绪验证：PCR(C/P比)、MaxPain、大额期权异动
+ETF Flow = 现货方向：净流入/流出 → BTC 中期方向参考
+Dune 链上 = 长期验证：BTC 交易所流入/流出趋势
+COT 报告 = 结构验证：商业空投/投机多投 → 周线方向
 Jin10/宏观 = 天气和路况：事件窗口、DXY/US10Y、风险偏好
+体制分类 = 趋势/震荡/收敛/爆发 → 策略风格切换依据
+跨资产相关性 = BTC-Gold-DXY 联动 → 风险偏好/避险模式
 ```
 
 裁决：
@@ -63,6 +84,11 @@ Jin10/宏观 = 天气和路况：事件窗口、DXY/US10Y、风险偏好
 | 主X + 副强 | 不直接做，写解除条件 |
 | TV与Binance冲突 | 标冲突，降级 |
 | 情绪与结构冲突 | 情绪只提醒，不覆盖结构 |
+| 期权PCR极度偏离 + 结构顺向 | 升级信号置信度(PCR是增强非主导) |
+| ETF持续流出 + BTC技术多 | 降B，ETF流向与结构冲突时降级 |
+| 体制=收敛 + 主A突破 | 降B，收敛区突破需二次确认 |
+| Dune链上大量流出交易所 + 任何方向 | 增强多头偏向(长线因素，非短线触发) |
+| COT商业净空增加 + 技术多 | 降级，商业持仓反向时提高警觉 |
 
 ## 五、A/B/C/X 状态机
 

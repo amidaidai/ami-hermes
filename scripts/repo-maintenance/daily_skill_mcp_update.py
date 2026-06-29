@@ -12,6 +12,11 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import io as _io
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 TZ = timezone(timedelta(hours=8))
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / "AppData" / "Local" / "hermes")

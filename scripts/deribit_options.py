@@ -13,6 +13,12 @@ import json, sys
 from pathlib import Path
 from datetime import datetime, timedelta
 import urllib.request
+import sys
+import io as _io
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))

@@ -19,6 +19,12 @@ Orion 全市场雷达 v2 — 多源交叉验证版
 import json, os, sys, time, hmac, hashlib, urllib.request, urllib.error
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+import io as _io
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # ─── 配置 ───
 BJT = timezone(timedelta(hours=8))

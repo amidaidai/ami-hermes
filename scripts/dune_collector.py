@@ -15,6 +15,12 @@
 import json, time, os, urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import sys
+import io as _io
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 DUNE_KEY = os.environ.get("DUNE_API_KEY", "") or "43Fsk9VjjoU0G9pZzeDCZCMehXeB4iWx"
 DUNE_BASE = "https://api.dune.com/api/v1"
