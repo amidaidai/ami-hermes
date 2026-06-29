@@ -2782,6 +2782,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
     rule_errors = validate_card_rules(full_card, meta)
     if rule_errors:
         print("  ⚠ 模板审计发现问题: " + "；".join(rule_errors))
+    # v9.6: GO/NO-GO下单闸门 — 追加到完整卡尾部
+    try:
+        import sys as _gate_sys
+        _gate_sys.path.insert(0, str(ROOT / "scripts"))
+        from go_nogo_gate import check_gate, gate_report_card
+        gate_result = check_gate(symbol, engine_data, meta)
+        engine_data["_gate_result"] = gate_result
+        gate_section = gate_report_card(gate_result, symbol)
+        full_card = full_card.rstrip() + "\n" + gate_section + "\n"
+        print(f"  🚦 GO/NO-GO: {gate_result['verdict']}")
+    except Exception as _ge:
+        print(f"  ⚠ GO/NO-GO跳过: {_ge}")
     append_trade_plan(meta, full_card)
     update_monitor_metadata(symbol, meta)
 
