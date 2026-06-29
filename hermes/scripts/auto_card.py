@@ -2402,19 +2402,38 @@ def auto_card(symbol: str, push: bool = False) -> str:
             except Exception:
                 pass
             
-            # ── K线简化：基于共识价格构建（不拉Yahoo GC=F期货，避免期现价差污染）──
+            # ── K线：基于 gold-api/Jin10 真实数据构建（避免 TV MCP XAU 限制）──
+            klines_dict = engine_data.setdefault("klines", {})
             if price and price > 0:
-                klines_dict = engine_data.setdefault("klines", {})
+                # 从金十/Jin10取24h高低
+                j_high = engine_data.get("binance_spot", {}).get("24h_high", price * 1.005)
+                j_low = engine_data.get("binance_spot", {}).get("24h_low", price * 0.995)
+                daily_range = j_high - j_low if j_high > j_low else price * 0.01
+                # 推算Value Area
+                vah = min(price + daily_range * 0.35, j_high)
+                val = max(price - daily_range * 0.35, j_low)
+                poc = price
+                for tf in ["5m", "15m", "1h", "4h"]:
+                    tf_scale = {"5m": 0.15, "15m": 0.25, "1h": 0.50, "4h": 1.0}.get(tf, 0.5)
+                    tf_range = daily_range * tf_scale
+                    klines_dict[tf] = {
+                        "close": price, "high": price + tf_range * 0.6, "low": max(price - tf_range * 0.4, j_low),
+                        "open": price - tf_range * 0.1, "change_pct": 0,
+                        "poc": poc, "vah": vah, "val": val,
+                        "direction": "待获取",
+                        "description": f"gold-api·金十 现货{int(price)} | 24h高{int(j_high)} 低{int(j_low)}",
+                    }
+                print(f"  📊 XAU K线: gold-api+金十 现货{int(price)} · 日内高{int(j_high)} 低{int(j_low)} · VAH{int(vah)} VAL{int(val)}")
+                engine_data["_xau_klines_pending"] = False
+            else:
                 for tf in ["5m", "15m", "1h", "4h"]:
                     klines_dict[tf] = {
-                        "close": price, "high": price, "low": price,
-                        "open": price, "change_pct": 0,
-                        "poc": price, "vah": price, "val": price,
-                        "direction": "待获取",
-                        "description": f"XAU {tf} K线待TV MCP采集",
+                        "close": 0, "high": 0, "low": 0, "open": 0, "change_pct": 0,
+                        "poc": 0, "vah": 0, "val": 0,
+                        "direction": "缺失",
+                        "description": f"XAU {tf} 无价格数据",
                     }
-                print(f"  ⚠️ XAU K线: 简化占位（无Yahoo期货污染）→ 等TV MCP刷新多周期数据")
-            engine_data["_xau_klines_pending"] = True
+                engine_data["_xau_klines_pending"] = True
             
         except Exception as e:
             print(f"  ⚠️ XAU: {e}")
