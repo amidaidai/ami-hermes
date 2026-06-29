@@ -158,15 +158,35 @@ def collect_and_cache(alert_mode=False):
     old_grade = old_cache.get("grade", "")
     
     # 构建缓存
+    # v9.6: 解析POC/VAH/VAL/行动格从已读取数据
+    poc = vah = val = None
+    action_grid = {}
+    for lvl in lines:
+        lbl = str(lvl.get("label", "")).upper()
+        p = lvl.get("price")
+        if "POC" in lbl and poc is None: poc = p
+        elif "VAH" in lbl and vah is None: vah = p
+        elif "VAL" in lbl and val is None: val = p
+    # 从decision_table提取行动格
+    for k, v in dmi.items():
+        kc = str(k).strip()
+        if kc in ("结论","方向","进场","止损","目标","核对","磁吸↑","磁吸↓"):
+            action_grid[kc] = str(v).strip()
+    
     cache = {
         "timestamp": datetime.now(TZ).isoformat(),
         "symbol": "BINANCE:BTCUSDT.P",
+        "fresh": True,
         "grade": grade,
         "last_price": quote,
         "decision_table": dmi,
         "indicators": indicators,
         "key_levels": lines,
         "source": "tv_data_bridge",
+        "poc": poc,
+        "vah": vah,
+        "val": val,
+        "action_grid": action_grid,
     }
     save_cache(cache)
     

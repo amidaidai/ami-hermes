@@ -2775,6 +2775,46 @@ def auto_card(symbol: str, push: bool = False) -> str:
     except Exception as e:
         print(f"  ⚠ TV DMI跳过: {e}")
     
+    # v9.6: TV实时数据注入 — 优先读tv_live.json(agent现场) → 回退tv_dmi_cache.json(cron)
+    try:
+        import json as _j2
+        # 优先：agent上下文现场dump的tv_live.json（含完整POC/VAH/VAL/行动格）
+        live_path = ROOT / "data" / "tv_live.json"
+        cache_path2 = ROOT / "data" / "tv_dmi_cache.json"
+        c2 = None
+        for p in [live_path, cache_path2]:
+            if p.exists():
+                try:
+                    c2 = _j2.loads(p.read_text(encoding="utf-8"))
+                    if c2.get("fresh") and c2.get("poc"):
+                        break
+                    c2 = None
+                except: pass
+        if c2 and c2.get("fresh") and c2.get("poc"):
+            klines = engine_data.setdefault("klines", {})
+            poc = c2.get("poc"); vah = c2.get("vah"); val = c2.get("val")
+            ag = c2.get("action_grid", {})
+            direction = ag.get("方向", "待判")
+            for tf in ["D", "4h", "1h", "15m", "5m"]:
+                if tf == "D":
+                    klines[tf] = {
+                        "close": poc, "high": vah or poc, "low": val or poc,
+                        "open": poc, "change_pct": 0,
+                        "poc": poc, "vah": vah, "val": val,
+                        "direction": direction,
+                        "description": f"TV现场 POC {poc:.0f} | VAH {vah:.0f} VAL {val:.0f} | {direction}",
+                    }
+                elif tf in klines and isinstance(klines[tf], dict):
+                    k = klines[tf]; k["poc"] = poc; k["vah"] = vah; k["val"] = val
+                    if "待" in str(k.get("description", "")):
+                        k["description"] = f"TV注入 POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f}"
+            if vah and val:
+                merged = engine_data.setdefault("merged", {})
+                merged["vah"] = vah; merged["val"] = val; merged["poc"] = poc
+            print(f"  📡 TV实时注入: POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f} → {len(klines)}周期")
+    except Exception as _tve:
+        print(f"  ⚠ TV注入跳过: {_tve}")
+    
     # v2.0: Protections 状态注入
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
