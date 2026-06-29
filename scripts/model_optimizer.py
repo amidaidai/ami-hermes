@@ -4,6 +4,12 @@
 借鉴 Freqtrade Hyperopt: 网格搜索最优入场/止损/置信参数
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, sys, itertools
 from pathlib import Path
 from datetime import datetime, timezone, timedelta

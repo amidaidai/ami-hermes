@@ -12,6 +12,12 @@
   route_send("BTCUSDT", "BTC分析卡内容...", screenshot_path=None)
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import subprocess, sys, os, json
 from pathlib import Path
 

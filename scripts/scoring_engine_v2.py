@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """多因子汇聚评分引擎 v2 — 3+信号量化汇聚，过滤噪音"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, os
 from datetime import datetime, timezone, timedelta
 

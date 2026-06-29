@@ -2,6 +2,11 @@
 # -*- coding: utf-8 -*-
 """宏观+Polymarket 缓存刷新 — no_agent cron wrapper · 静默成功"""
 import sys, json, os
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hermes" / "scripts"))
 

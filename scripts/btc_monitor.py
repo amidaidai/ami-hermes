@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # -*- coding: utf-8 -*-
 """
 棠溪 BTC 价格监控 v1 — no_agent 零token · 多区间检测 · 15m趋势 · 冷却防刷

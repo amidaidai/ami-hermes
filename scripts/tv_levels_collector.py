@@ -17,6 +17,12 @@ JSON 格式：
 }
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, os, sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path

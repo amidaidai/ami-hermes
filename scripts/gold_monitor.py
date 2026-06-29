@@ -8,11 +8,10 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 import sys
-import io as _io
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ===== 配置 =====
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gold_monitor_state.json')

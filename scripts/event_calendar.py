@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """事件日历 — Jin10 MCP + HTTP回退获取财经日历"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, os, urllib.request
 from datetime import datetime, timezone, timedelta
 

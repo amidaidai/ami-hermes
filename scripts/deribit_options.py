@@ -14,11 +14,10 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import urllib.request
 import sys
-import io as _io
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -152,6 +151,40 @@ def _save_cache(data: dict):
     CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
 
 
+def _print_table(data: dict):
+    """表格化输出期权数据"""
+    lines = []
+    for coin in ["BTC", "ETH"]:
+        d = data.get(coin, {})
+        if not d or "total_oi_usd" not in d:
+            continue
+        total_b = d['total_oi_usd'] / 1e9
+        call_m = d['call_oi_usd'] / 1e6
+        put_m = d['put_oi_usd'] / 1e6
+        cp = d['cp_ratio']
+        signal = "偏多" if cp > 1.5 else "偏空" if cp < 0.7 else "中性"
+        mp = d.get("max_pain", "?")
+        lines.append(f"Deribit期权 {coin}")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|------|------|")
+        lines.append(f"| 总OI | ${total_b:.2f}B |")
+        lines.append(f"| Call OI | ${call_m:.0f}M |")
+        lines.append(f"| Put OI | ${put_m:.0f}M |")
+        lines.append(f"| C/P比 | {cp} {signal} |")
+        lines.append(f"| MaxPain | ${mp} |")
+        lines.append(f"| 合约数 | {d['options_count']} |")
+        top = d.get("top_strikes", [])[:3]
+        if top:
+            lines.append("")
+            lines.append("| 行权价 | Call OI | Put OI | 到期 |")
+            lines.append("|--------|---------|--------|------|")
+            for t in top:
+                lines.append(f"| {t['strike']} | {t['call_oi']} | {t['put_oi']} | {t['expiry']} |")
+        lines.append("")
+    print("\n".join(lines))
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Deribit 期权数据采集")
@@ -165,8 +198,10 @@ if __name__ == "__main__":
         if cached:
             if args.full:
                 print(full_json(cached))
-            else:
+            elif args.line:
                 print(line_summary(cached))
+            else:
+                _print_table(cached)
             sys.exit(0)
 
     print("拉取 Deribit 期权数据...", file=sys.stderr)
@@ -178,13 +213,4 @@ if __name__ == "__main__":
     elif args.line:
         print(line_summary(data))
     else:
-        print(line_summary(data))
-        for coin in ["BTC", "ETH"]:
-            d = data.get(coin, {})
-            if d and "total_oi_usd" in d:
-                print(f"\n{coin}:")
-                print(f"  总OI: ${d['total_oi_usd']/1e9:.2f}B | Call: ${d['call_oi_usd']/1e6:.0f}M | Put: ${d['put_oi_usd']/1e6:.0f}M")
-                print(f"  C/P比: {d['cp_ratio']} | MaxPain: {d['max_pain']} | 合约数: {d['options_count']}")
-                print(f"  Top行权价:")
-                for ts_entry in d.get("top_strikes", [])[:3]:
-                    print(f"    {ts_entry['strike']}: Call {ts_entry['call_oi']} / Put {ts_entry['put_oi']} ({ts_entry['expiry']})")
+        _print_table(data)

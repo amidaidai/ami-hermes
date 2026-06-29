@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # -*- coding: utf-8 -*-
 """
 depth_wall.py — 大额挂单墙分析器 (v1.0 · 2026-06-19)
@@ -21,7 +28,6 @@ depth_wall.py — 大额挂单墙分析器 (v1.0 · 2026-06-19)
   - XAU 无 Binance 盘口，本模块仅适用加密。XAU 走宏观替代维度。
   - 仅依赖标准库 urllib，零三方依赖，可在 no_agent cron 中调用。
 """
-from __future__ import annotations
 import json
 import sys
 import urllib.request

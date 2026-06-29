@@ -10,6 +10,12 @@
     log.error("错误", exc_info=True)
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path

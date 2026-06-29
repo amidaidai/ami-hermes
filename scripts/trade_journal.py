@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """复盘助手 — 记录每次分析判断，留待后续验证"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 from datetime import datetime, timezone, timedelta
 

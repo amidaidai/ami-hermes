@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """Order Block识别 — 机构吸筹/派发K线检测"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 
 def detect_obs(klines, lookback=100):

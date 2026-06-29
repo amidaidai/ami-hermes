@@ -6,6 +6,12 @@
 趋势分 0-10 · 反转分 0-10 · A/B/C/X 四级
 v1.1: +CVD吸收/派发 +TV决策表直读 +KillZone +三层确认 +周月VWAP
 """
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import math
 from typing import Optional
 

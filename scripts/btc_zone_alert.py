@@ -2,11 +2,10 @@
 """BTC 关键区到价提醒 — no_agent 零token监控"""
 import json, urllib.request, sys, os, time
 import sys
-import io as _io
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 SYM = "BTCUSDT"
 ZONE_LOW = 60267   # S VWAP

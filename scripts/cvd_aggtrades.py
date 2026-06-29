@@ -20,6 +20,12 @@ K 线聚合粒度粗，taker 买量是整根 K 线的汇总，无法反映真实
 """
 
 from __future__ import annotations
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import requests
 
 

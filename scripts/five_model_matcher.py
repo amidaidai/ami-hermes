@@ -14,6 +14,12 @@
 每个模型独立包含: 触发条件 + 入场价 + 止损 + 止盈 + 失效条件
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from dataclasses import dataclass, field
 from typing import Optional
 import json

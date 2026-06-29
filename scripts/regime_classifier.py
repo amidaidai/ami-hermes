@@ -14,6 +14,12 @@
   - HIGH_VOL_NEUTRAL:高波震荡 → 宽跨式·买波动
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from dataclasses import dataclass
 from typing import Optional
 import json

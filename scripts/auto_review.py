@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """自动复盘闭环 — 信号→结果→胜率统计管线"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, os, csv
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict

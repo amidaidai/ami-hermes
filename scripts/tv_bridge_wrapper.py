@@ -9,6 +9,12 @@ tv_treatment / tv_conclusion / tv_entry / tv_stop / tv_target into the JSON, so
 the old separate `tv data tables --study SVP` re-read (which looked for the
 non-existent 等级/处理 rows in the wrong collection) has been removed.
 """
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import subprocess, sys, os, json
 from pathlib import Path
 

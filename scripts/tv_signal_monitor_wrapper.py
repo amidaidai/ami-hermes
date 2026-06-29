@@ -13,6 +13,12 @@ tv_signal_monitor.py 内部已负责：
 - Telegram 推送（仅在等级AB变化时）
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import subprocess, sys, os
 from pathlib import Path
 

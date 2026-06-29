@@ -20,11 +20,10 @@ import json, os, sys, time, hmac, hashlib, urllib.request, urllib.error
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
-import io as _io
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ─── 配置 ───
 BJT = timezone(timedelta(hours=8))
@@ -58,16 +57,32 @@ DEADLINE_SECONDS = 90  # Overall deadline guard (cron default is 120s)
 
 # ─── Orion API ───
 def fetch_orion(exchange=""):
-    """Fetch tickers from Orion Screener API."""
+    """Fetch tickers from Orion Screener API. Retries with/without proxy."""
     url = f"{API_BASE}/screener"
     if exchange: url += f"?exchange={exchange}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read()).get("tickers", [])
-    except Exception as e:
-        print(f"[Orion] {exchange or 'binance'}: {e}", file=sys.stderr)
-        return []
+    
+    strategies = [
+        # Strategy 1: Use system proxy (may fail in cron without proxy env)
+        (None, "proxy"),
+        # Strategy 2: Direct connection (may fail if network requires proxy)  
+        (urllib.request.ProxyHandler({}), "direct"),
+    ]
+    
+    for proxy_handler, strategy in strategies:
+        try:
+            if proxy_handler:
+                opener = urllib.request.build_opener(proxy_handler)
+            else:
+                opener = urllib.request.build_opener()
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with opener.open(req, timeout=15) as r:
+                tickers = json.loads(r.read()).get("tickers", [])
+                if tickers:
+                    return tickers
+        except Exception as e:
+            pass  # Try next strategy
+    
+    return []
 
 
 # ─── Binance REST (public) ───
@@ -476,12 +491,20 @@ def fmt_volume(v):
     elif v >= 1e3: return f"${v/1e3:.2f}K"
     return f"${v:.0f}"
 
+SIG_LABELS = {
+    "oi": {"🟢": "OI涨", "🔴": "OI跌"},
+    "move": {"🚀": "价涨", "💥": "价跌"},
+    "fund": {"🔥": "负费", "💰": "正费"},
+    "vol": {"📊": "量变"},
+    "vlt": {"🌪️": "波变"},
+}
+
 def signal_emoji(sig_type, val):
-    if sig_type == "oi": return "🟢" if val > 0 else "🔴"
-    if sig_type == "move": return "🚀" if val > 0 else "💥"
-    if sig_type == "fund": return "🔥" if val < 0 else "💰"
-    if sig_type == "vol": return "📊"
-    if sig_type == "vlt": return "🌪️"
+    if sig_type == "oi": return "🟢OI涨" if val > 0 else "🔴OI跌"
+    if sig_type == "move": return "🚀价涨" if val > 0 else "💥价跌"
+    if sig_type == "fund": return "🔥负费" if val < 0 else "💰正费"
+    if sig_type == "vol": return "📊量变"
+    if sig_type == "vlt": return "🌪️波变"
     return "⚡"
 
 
@@ -518,12 +541,12 @@ def build_report(candidates, ts):
 
         # Confidence bar
         conf = c.get("confidence", 0)
-        if conf >= 7: conf_str = f"🟢 {conf}"
-        elif conf >= 4: conf_str = f"🟡 {conf}"
-        else: conf_str = f"⚪ {conf}"
+        if conf >= 7: conf_str = f"🟢高 {conf}"
+        elif conf >= 4: conf_str = f"🟡中 {conf}"
+        else: conf_str = f"⚪低 {conf}"
 
         # HL status
-        hl_str = "✅" if c.get("hl_confirmed") else ("❌" if c.get("exchange") == "Binance" else "⏳")
+        hl_str = "✅HL通" if c.get("hl_confirmed") else ("❌无" if c.get("exchange") == "Binance" else "⏳待验")
 
         # Key metrics
         keys = []
@@ -551,9 +574,11 @@ def build_report(candidates, ts):
     # ── Top picks section ──
     high_conf_candidates = [c for c in top if c.get("confidence", 0) >= 6]
     if high_conf_candidates:
-        lines.append("**🎯 高置信度推荐**")
+        lines.append("## 高置信度推荐")
+        lines.append("")
+        lines.append("| 品种 | 置信度 | 信号 | 价格/OI | HL验证 | Binance API | 判断 |")
+        lines.append("|---|---:|---|---|---|---|---|")
         for c in high_conf_candidates:
-            base = c["base"]
             signals_detail = []
             for s, v in c["signals"]:
                 if s == "oi": signals_detail.append(f"OI {fmt_pct(v)}")
@@ -561,22 +586,19 @@ def build_report(candidates, ts):
                 elif s == "fund": signals_detail.append(f"费率 {fmt_funding(v)}")
                 elif s == "vol": signals_detail.append(f"量 {fmt_pct(v)}")
                 elif s == "vlt": signals_detail.append(f"波 {v:.2f}%")
+            signal_text = " · ".join(signals_detail[:4]) or "-"
+            price_oi_text = f"{fmt_price(c['price'])} · OI {fmt_volume(c['oi_usd'])}"
 
-            lines.append(f"")
-            lines.append(f"**{c['symbol']}** — 置信度 {c['confidence']}/10")
-            lines.append(f"信号: {' · '.join(signals_detail[:4])}")
-            lines.append(f"价格 {fmt_price(c['price'])} · OI {fmt_volume(c['oi_usd'])}")
-
-            # HL comparison
+            hl_text = "-"
             if c.get("hl_confirmed"):
                 hl_items = []
                 if c.get("hl_oi_chg") is not None:
                     hl_items.append(f"HL OI {fmt_pct(c['hl_oi_chg'])}")
                 if c.get("hl_chg") is not None:
                     hl_items.append(f"HL价 {fmt_pct(c['hl_chg'])}")
-                lines.append(f"HL验证: {' · '.join(hl_items)} (一致度 {c.get('hl_agree', 0)}/4)")
+                hl_text = f"{' · '.join(hl_items)} · 一致度 {c.get('hl_agree', 0)}/4"
 
-            # Binance deep data
+            bn_text = "-"
             bn = c.get("binance")
             if bn:
                 bn_items = []
@@ -585,29 +607,13 @@ def build_report(candidates, ts):
                 if "funding_avg" in bn:
                     bn_items.append(f"费率均值 {fmt_funding(bn['funding_avg'])}")
                 if "taker_ratio" in bn:
-                    bn_items.append(f"Taker比 {bn['taker_ratio']:.2f} ({bn.get('taker_dir','')})")
+                    bn_items.append(f"Taker比 {bn['taker_ratio']:.2f}({bn.get('taker_dir','')})")
                 if "ls_ratio" in bn:
-                    bn_items.append(f"多空比 {bn['ls_ratio']:.2f} ({bn.get('ls_dir','')})")
-                lines.append(f"币安API: {' · '.join(bn_items)}")
+                    bn_items.append(f"多空比 {bn['ls_ratio']:.2f}({bn.get('ls_dir','')})")
+                bn_text = " · ".join(bn_items) or "-"
 
-            # CoinGecko market data
-            cg = c.get("coingecko")
-            if cg:
-                cg_items = []
-                mcr = cg.get("market_cap_rank")
-                if mcr: cg_items.append(f"市值#{mcr}")
-                vol24 = cg.get("total_volume_24h")
-                if vol24: cg_items.append(f"24h量 {fmt_volume(vol24)}")
-                mc = cg.get("market_cap")
-                if mc: cg_items.append(f"市值 {fmt_volume(mc)}")
-                chg24 = cg.get("price_change_24h")
-                if chg24 is not None: cg_items.append(f"24h {fmt_pct(chg24)}")
-                lines.append(f"CoinGecko: {' · '.join(cg_items)}")
-
-            # Assessment
-            assess = assess_setup(c)
-            if assess:
-                lines.append(f"判断: {assess}")
+            assess = (assess_setup(c) or "-").replace("|", "·")
+            lines.append(f"| {c['symbol']} | {c['confidence']}/10 | {signal_text} | {price_oi_text} | {hl_text} | {bn_text} | {assess} |")
 
     lines.append("")
     lines.append("---")
@@ -676,13 +682,13 @@ def main():
     # ── Step 1+2: Fetch Orion Binance + Hyperliquid in parallel ──
     log("📡 第1+2层: 并行扫描 Orion Binance + Hyperliquid...")
     with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_bn = pool.submit(fetch_orion, "")
+        fut_bn = pool.submit(fetch_orion, "binance")
         fut_hl = pool.submit(fetch_orion, "hl")
         bn_tickers = fut_bn.result()
         hl_tickers = fut_hl.result()
 
     if not bn_tickers:
-        print("⚠️  Orion Binance 数据获取失败")
+        print("[ERROR] Orion Binance data fetch failed - API returned empty")
         return 1
     log(f"  → Binance {len(bn_tickers)} 个品种 / Hyperliquid {len(hl_tickers) or 0} 个品种")
 
@@ -725,6 +731,38 @@ def main():
 
     # ── Step 6: Build report ──
     report = build_report(bn_candidates, ts)
+    
+    # 落盘JSON供LLM分析读取
+    import os as _os
+    _data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "data")
+    _os.makedirs(_data_dir, exist_ok=True)
+    _output_path = _os.path.join(_data_dir, "orion_radar.json")
+    try:
+        candidates_for_json = []
+        for c in bn_candidates:
+            cj = {
+                "symbol": c.get("symbol", "?"),
+                "price": c.get("price", 0),
+                "chg_1h": c.get("chg_1h"),
+                "chg_24h": c.get("chg_24h"),
+                "oi_usd": c.get("oi_usd"),
+                "oi_chg": c.get("oi_chg"),
+                "funding": c.get("funding"),
+                "volume_24h": c.get("volume_24h"),
+                "exchange": c.get("exchange"),
+                "confidence": c.get("confidence", 0),
+                "score_breakdown": c.get("score_breakdown"),
+            }
+            if c.get("binance"):
+                cj["binance"] = c["binance"]
+            if c.get("coingecko"):
+                cj["coingecko"] = c["coingecko"]
+            candidates_for_json.append(cj)
+        with open(_output_path, "w", encoding="utf-8") as _f:
+            json.dump({"ts": ts, "count": len(candidates_for_json), "candidates": candidates_for_json}, _f, ensure_ascii=False)
+    except Exception:
+        pass
+    
     print(report)
     log(f"⏱ 总耗时 {elapsed():.1f}s")
     return 0

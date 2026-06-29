@@ -3,6 +3,12 @@
    · 有变化才输出，静默时零消息（减少Telegram刷屏）
    · cron控制8-23点运行
 """
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import subprocess, sys
 from pathlib import Path
 

@@ -7,6 +7,12 @@
   print(T("买入信号", "BTCUSDT"))  # → 中文标注
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ═══════════════ 中文本地化字典 ═══════════════
 
 # 方向/状态

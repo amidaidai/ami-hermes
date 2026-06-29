@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # -*- coding: utf-8 -*-
 """每日学习·社区进化 — cron wrapper"""
 import subprocess, sys

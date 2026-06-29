@@ -12,6 +12,12 @@ Polymarket Gamma API (免费·公开·无需认证):
   3. 全局情绪: 选举、通胀、战争风险
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 import urllib.request
 from pathlib import Path

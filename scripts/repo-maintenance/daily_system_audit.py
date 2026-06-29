@@ -19,9 +19,9 @@ from pathlib import Path
 # Windows Hermes no_agent cron 默认 stdout/stderr 可能走 cp936，中文/emoji 会乱码。
 # 在任何 print 之前强制 UTF-8，保证 Telegram 推送可读。
 if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "buffer"):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 TZ = timezone(timedelta(hours=8))
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / "AppData" / "Local" / "hermes")

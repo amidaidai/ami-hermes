@@ -2030,7 +2030,25 @@ def _freshness_line(engine_data: dict) -> str:
 
 def append_trade_plan(meta: dict, card: str) -> None:
     DATA.mkdir(parents=True, exist_ok=True)
-    row = dict(meta); row["card_excerpt"] = card[:500]
+    row = dict(meta)
+    # v9.6: 预测评级 A/B/C/D — 基于置信度+R:R+数据质量
+    conf = float(row.get("engine_confidence", 0) or 0)
+    rr_a = float(row.get("rr_a", 0) or 0)
+    data_g = str(row.get("data_grade", "C"))
+    gate = row.get("gate_verdict", "")
+    status = str(row.get("status", ""))
+    if "禁做" in str(status) or "禁" in str(gate):
+        predicted_grade = "D"
+    elif conf >= 0.6 and rr_a >= 2.0 and data_g in ("A", "A-"):
+        predicted_grade = "A"
+    elif conf >= 0.3 and rr_a >= 1.5:
+        predicted_grade = "B"
+    elif conf > 0:
+        predicted_grade = "C"
+    else:
+        predicted_grade = "C"
+    row["predicted_grade"] = predicted_grade
+    row["card_excerpt"] = card[:500]
     with (DATA / "trade_plans.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 

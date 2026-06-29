@@ -15,6 +15,12 @@
                               leverage=100, account_balance=67.52)
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, sys, os, subprocess
 from pathlib import Path
 from typing import Optional

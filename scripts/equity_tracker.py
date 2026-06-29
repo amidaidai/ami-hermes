@@ -4,6 +4,12 @@
 从 trade_reviews.jsonl 计算运行权益曲线+关键统计
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta

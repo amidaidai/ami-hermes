@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """BTC全流程管线集成 — 串联FVG·评分·事件·OB·截图→分析卡"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, os, sys, subprocess
 from datetime import datetime, timezone, timedelta
 
@@ -162,7 +168,20 @@ def run_full_pipeline(klines, current_price=None):
         except Exception as e:
             result["events"] = {"blocked": False, "error": str(e)}
     
-    # 8. 生成分析卡
+    # 8. 休眠引擎接线
+    dmi_m = _import_or_none("dmi_decision")
+    if dmi_m and klines:
+        try:
+            highs = [float(k[2]) for k in klines[-50:]]
+            lows = [float(k[3]) for k in klines[-50:]]
+            closes = [float(k[4]) for k in klines[-50:]]
+            dmi_data = dmi_m.compute_dmi(highs, lows, closes)
+            atr = dmi_m.compute_atr(highs, lows, closes)
+            result["dmi"] = {"adx": round(dmi_data.get("adx", 0), 1)}
+        except Exception as e:
+            result["dmi_error"] = str(e)
+
+    # 9. 生成分析卡
     card = generate_analysis_card(result, current_price, latest, tv)
     result["analysis_card"] = card
     
@@ -270,6 +289,27 @@ def generate_analysis_card(result, price, latest, tv):
     taker = _num(latest.get("taker_ratio"), latest.get("taker_buy_sell_ratio"), latest.get("taker_volume", {}).get("buy_sell_ratio"), default=1.0)
     lines.append(f"CVD `{cvd:+.0f}` · 斜率 `{cvd_slope:+.0f}` · 多空比 `{ls:.2f}` · Taker `{taker:.2f}`")
     
+    # 注入QLib因子信号
+    try:
+        import json as _j, os as _os
+        fp = _os.path.expanduser("~/AppData/Local/hermes/data/qlib_factors.json")
+        if _os.path.exists(fp):
+            with open(fp) as _f:
+                factors = _j.load(_f).get("factors", {})
+            score = factors.get("SIGNAL_SCORE", "?")
+            bias_f = factors.get("SIGNAL_BIAS", "?")
+            rsi_f = factors.get("RSI", "?")
+            macd_f = factors.get("MACD", "?")
+            arrow_f = "↑" if score and score > 0 else "↓" if score and score < 0 else "→"
+            lines.append(f"因子 {arrow_f} {bias_f}({score}/5) | RSI{rsi_f:.0f} MACD{macd_f:+.1f}")
+    except Exception:
+        pass
+    
+    # 注入DMI引擎数据
+    if result.get("dmi"):
+        adx = result["dmi"].get("adx", "?")
+        lines.append(f"DMI ADX{adx} | {'趋势' if adx and adx > 20 else '震荡'}")
+
     return "\n".join(lines)
 
 

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # -*- coding: utf-8 -*-
 """日间维护 v2.0 — 静默模式·仅异常时输出·cron超时120s内完成"""
 

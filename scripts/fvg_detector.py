@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """FVG检测模块 — 三烛不重叠Fair Value Gap识别"""
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 
 def detect_fvg(klines, lookback=50):

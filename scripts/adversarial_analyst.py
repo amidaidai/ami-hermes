@@ -21,6 +21,12 @@
   - 分歧度低 = 市场方向清晰 · 分歧度高 = 震荡/不确定
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from typing import Optional
 
 

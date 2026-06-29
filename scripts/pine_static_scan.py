@@ -7,6 +7,11 @@
 人工只需对照阈值判读, 不必逐行通读。"""
 import re
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 DEFPAT = re.compile(
     r'^\s*(?:var\s+)?(?:float|int|bool|string|color|line|box|label|table)\s+([A-Za-z_]\w*)\s*=')

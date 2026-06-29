@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """交易系统每日复盘 v9.5。"""
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 from collections import Counter, defaultdict
 from datetime import datetime

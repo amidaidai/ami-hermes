@@ -12,11 +12,10 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-import io as _io
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 TZ = timezone(timedelta(hours=8))
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / "AppData" / "Local" / "hermes")
@@ -92,8 +91,9 @@ def run_curator() -> dict:
 
 
 def test_mcp_servers() -> dict:
-    """测试所有 MCP 服务器"""
-    code, out = run(_hermes_cmd("mcp", "list"), timeout=30)
+    """测试所有 MCP 服务器（并行化，解决串行超时）"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    code, out = run(_hermes_cmd("mcp", "list"), timeout=20)
     if code != 0:
         return {"status": "error", "detail": compact(out, 200), "servers": []}
 
@@ -105,14 +105,16 @@ def test_mcp_servers() -> dict:
             if parts and parts[0] not in ("──", "Name", "MCP"):
                 servers.append(parts[0])
 
+    # 并行测试（提速 4-8x）
+    def _test_one(name):
+        code, out = run(_hermes_cmd("mcp", "test", name), timeout=15)
+        return {"name": name, "ok": code == 0, "detail": "" if code == 0 else compact(out, 80)}
+
     results = []
-    for name in servers:
-        code, out = run(_hermes_cmd("mcp", "test", name), timeout=30)
-        results.append({
-            "name": name,
-            "ok": code == 0,
-            "detail": "" if code == 0 else compact(out, 100),
-        })
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(_test_one, s): s for s in servers}
+        for f in as_completed(futures):
+            results.append(f.result())
 
     ok_count = sum(1 for r in results if r["ok"])
     fail_count = sum(1 for r in results if not r["ok"])
@@ -136,7 +138,7 @@ def check_official_update() -> dict:
     if not script.exists():
         return {"status": "skipped", "reason": "script not found"}
 
-    code, out = run([sys.executable, str(script)], timeout=300)
+    code, out = run([sys.executable, str(script)], timeout=60)
     return {
         "status": "ok" if code == 0 else "failed",
         "output": compact(out, 200),
@@ -147,14 +149,21 @@ def check_official_update() -> dict:
 # ── main ──────────────────────────────────────────────────
 
 def main() -> int:
+    from concurrent.futures import ThreadPoolExecutor
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     start_ts = datetime.now(TZ)
     date_str = start_ts.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 执行
-    skill_status = check_skills_update()
-    mcp_status = test_mcp_servers()
-    curator_status = run_curator()
+    # 并行执行：skills_check + curator + mcp_test
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_skill = ex.submit(check_skills_update)
+        f_mcp = ex.submit(test_mcp_servers)
+        f_curator = ex.submit(run_curator)
+        skill_status = f_skill.result()
+        mcp_status = f_mcp.result()
+        curator_status = f_curator.result()
+
+    # 升级检查（串行，因为可能很慢）
     update_status = check_official_update()
 
     # 如果有 hub 技能更新，执行更新

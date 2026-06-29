@@ -5,6 +5,12 @@
 适配: BTC 24/7 + XAU London/NY 时段
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 
