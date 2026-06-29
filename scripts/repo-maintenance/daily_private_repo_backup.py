@@ -90,7 +90,9 @@ def main() -> int:
     if push_code != 0:
         report.append(compact(push_out, 900))
 
-    print("\n".join(report))
+    # 维护类任务：只在真正发生提交/推送或失败时输出，避免每天“无改动”刷屏。
+    if status_lines or push_code != 0 or copied:
+        print("\n".join(report))
     return 0 if push_code == 0 else 1
 
 

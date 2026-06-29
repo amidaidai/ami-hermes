@@ -80,9 +80,13 @@ def main():
             lines.append(f"| {c['symbol']} | {rank} | {c['score']} |")
     
     output = "\n".join(lines)
+    # 降噪：去重时不要把时间戳纳入 hash；同一情绪结构最多 2 小时强制推一次。
+    # 否则每 30 分钟只因 ts 变化就会重复推送，造成告警疲劳。
+    dedup_key = json.dumps({"fear_greed": fg_val, "mood": mood, "fomo_score": fomo, "trending": top}, ensure_ascii=False, sort_keys=True)
     try:
-        from alert_dedup import dedup_wrapper
-        dedup_wrapper("x_sentiment", output, force_seconds=1800)
+        from alert_dedup import should_send
+        if should_send("x_sentiment", dedup_key, force_every_seconds=7200):
+            print(output)
     except ImportError:
         print(output)
     

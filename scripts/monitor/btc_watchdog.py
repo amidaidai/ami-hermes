@@ -32,12 +32,11 @@ if hb and "ts" in hb:
         age = now - dt.timestamp()
         if age < 120:
             alive = True
-            log(f"Daemon alive @ {hb.get('zone','?')}, age={age:.0f}s")
     except Exception as e:
         log(f"hb parse: {e}")
 
 if alive:
-    # All good, silent exit
+    # All good: stdout 必须为空；状态详情留给本地 heartbeat/log，不推送。
     exit(0)
 
 # Daemon dead — restart

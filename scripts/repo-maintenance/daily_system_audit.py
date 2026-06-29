@@ -304,11 +304,8 @@ def main() -> int:
     log_path = LOG_DIR / f"daily-audit-{start_ts.strftime('%Y%m%d')}.log"
     log_path.write_text(report, encoding="utf-8")
 
-    # Hermes cron 自带 delivery 曾出现 Telegram timeout；这里直连可靠推送并失败落盘。
-    if total_issues > 0 and send_telegram_reliable is not None:
-        if flush_pending is not None:
-            flush_pending(limit=10)
-        send_telegram_reliable("telegram:-1003733144325:846", report, retries=5, timeout=15)
+    # 降噪：维护报告只写日志/cron local，不再直连 Telegram。
+    # 如需查看异常，读 outputs/maintenance-logs/ 或 cron output。
 
     # 静默模式：仅异常时输出
     if total_issues > 0:
