@@ -60,3 +60,5 @@ hermes/scripts/repo-maintenance/reset_remote.py
 nul
 btc_analysis_output.md
 Agent-Reach
+hermes/scripts/data_freshness_watchdog.py
+hermes/scripts/orion_screener_radar.py
