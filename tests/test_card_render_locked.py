@@ -50,18 +50,18 @@ def test_render_card_locked_has_speed_read_block():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v8.0: 五段叙事结构 + 交易方案
-    for marker in ["① 今日结构", "② 关键位", "③ 量价分析", "④ 交易方案", "⑤ 综合评分"]:
-        assert marker in card, f"v8.0卡缺少 {marker}"
+    # v9.6: 表格驾驶舱结构
+    for marker in ["### 多周期定位", "### 关键位矩阵", "### 多源交叉验证", "### 执行预案", "### 风控闸门"]:
+        assert marker in card, f"v9.6卡缺少 {marker}"
 
 
 def test_render_card_locked_has_five_sections():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v8.0: 操作要素集中在A/B方案和风控行
-    for marker in ["A方案", "B方案", "风控门", "止损", "止盈"]:
-        assert marker in card, f"v8.0卡缺少操作要素 {marker}"
+    # v9.6: 操作要素集中在执行预案表和风控闸门表
+    for marker in ["主线", "反向", "风控闸门", "止损", "目标"]:
+        assert marker in card, f"v9.6卡缺少操作要素 {marker}"
 
 
 def test_render_card_locked_hides_machine_fields():

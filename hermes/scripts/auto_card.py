@@ -721,16 +721,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         except Exception:
             pass
 
-    # 决策模式：B等待但价格锚定 → 极简卡
-    anchored = _find_nearest_key_level(klines, price)
-    if not force_full and status in ("B等待", "C等待", "X禁做") and anchored:
-        compact = _compact_card(symbol, price, status, direction, model_id, klines, k4h, k5m, k15m,
-                                merged, cvd_dir, cvd_quality, taker_dir, taker_ratio,
-                                funding_rate, engine_data, risk_amt, risk_pct_limit,
-                                prot_status, data_grade, fg, leverage_text, _qty_unit(symbol), search_sent)
-        if compact:
-            return compact
-    
+    # v9.6: 标准出卡统一使用表格驾驶舱；旧极简卡仅保留为告警专用，不再覆盖手动分析卡。
+    if not force_full:
+        return full
+
     return full
 
 
