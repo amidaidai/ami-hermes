@@ -19,6 +19,12 @@ token 来源优先级:
 """
 
 from __future__ import annotations
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import os
 import json
 import urllib.request
@@ -106,6 +112,10 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
 
     返回 (成功, 原因)。任何网络/HTTP 异常都被吞掉返回 (False, reason)，绝不外抛。
     """
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN") or _token_from_env_file()
+    if not token:
+        return False, "missing TELEGRAM_BOT_TOKEN"
+
     if _reliable_send is not None:
         return _reliable_send(
             target,
@@ -117,12 +127,9 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
             persist_on_fail=True,
         )
 
-    token = token or os.environ.get("TELEGRAM_BOT_TOKEN") or _token_from_env_file()
-    if not token:
-        return False, "missing TELEGRAM_BOT_TOKEN"
-
     chat_id, thread_id = parse_telegram_target(target)
     payload = build_payload(chat_id, thread_id, text, parse_mode=parse_mode)
+
     url = f"{API_BASE}/bot{token}/sendMessage"
     data = json.dumps(payload).encode("utf-8")
 

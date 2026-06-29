@@ -1,125 +1,132 @@
-# 棠溪分析卡 · 主模板 v8.0（叙事风格 · Telegram适配）
+# 棠溪分析卡 · 主模板 v9.6（表格驾驶舱 · SVP v10 · 多资产）
 
-定位：叙事驱动，结构清晰，信息完整。每行不受38字符限制但保持紧凑。
+定位：这是棠溪交易驾驶舱的权威输出模板。旧 v8.0 叙事卡仅作历史参考；正式手动分析、自动分析卡、告警复盘均以本文件为准。
 
 ## 权威铁律
 
-① 每次出卡前必须先读取本文件。
-② 价格反引号；状态仅 A做多/A做空/B等待/X禁做。
-③ R:R 底线 1:2；不达标标 ⚠。
-④ 单笔 ≤ 1%余额，10U 硬上限。
-⑤ 完整卡 ≤ 35 行 · 极简卡沿用旧格式。
-⑥ 禁止表格、禁止长分隔线、禁止 `｜`；Telegram按手机窄屏输出。
-⑦ 中文优先：除 BTC、VWAP、EMA、CVD、Taker、Funding、FVG、OB、KillZone、ATR、R:R 等必要术语外，其余描述用中文。
-⑧ 必须给出明确方向：偏多/偏空/等待哪一个为主，不把两个方案平铺给用户自己猜。
-⑨ 脚本运行纪律：中文内容只写UTF-8文件或发Telegram；cron/stdout必须ASCII-only，避免Windows GBK乱码。
+1. 每次正式分析前必须先读取本文件与 `references/tangxi-trading-cockpit.md`。
+2. 首行必须是新 TradingView 全屏截图（加密/XAU 必须 full，含价格轴 + CVD/OI/副指标窗格）。
+3. 时间一律北京时间中文格式：`2026年6月29日21：30`，不用 UTC，不用 BJT 后缀。
+4. 先给结论，不让用户自己猜；首段 3-5 行浓缩。
+5. 正文采用 Markdown 表格，不使用长装饰分隔线，不使用编号①②③。
+6. 状态只允许：`A可执行` / `B等确认` / `C轻仓试探` / `X禁做观察`。
+7. TV SVP v10 是主驾驶：行动格、关键位、VWAP/EMA/CVD/OI、labels/lines/Data Window 优先。
+8. Binance / Deribit / Dune / X / 宏观 / COT 是验证层，不覆盖 TV 主结构，只负责增强或降级。
+9. R:R < 1:2 不得输出为可执行方案；只能列为观察或重算。
+10. 单笔风险≤1%，硬上限 10U；风控状态过期则降级。
+11. DMI/行动格等级是参考，不单独决定方向；方向来自五因子投票：VWAP位置、CVD压力、EMA排列、结构偏向、关键位距离。
+12. 正文不给 `setup_id/model_id/entry_tag` 等机器字段；这些只落盘到 JSONL 供复盘。
+13. 中文优先。允许保留 BTC、USDT、VWAP、EMA、CVD、OI、Funding、Spot、FVG、OB、ATR、R:R、DXY。
+14. cron/no_agent stdout 保持 ASCII-only；中文写 UTF-8 文件或 Telegram 直发。
 
----
+## 完整分析卡模板
 
-## 完整卡（叙事风格）
+```markdown
+![TradingView截图](<ABSOLUTE_PATH_OR_MEDIA>)
 
-```
-`{SYMBOL}` 日内分析 · {STATUS} · {BIAS}
-现价 `{PRICE}` ({CHG}%) · 高 `{HIGH}` 低 `{LOW}`
+{SYMBOL} {ASSET_CN} · {STATUS} · {PRIMARY_BIAS} · {TIME_CN}
+现价 `{PRICE}` · 主周期 `{MAIN_TF}` · 数据质量 `{DATA_GRADE}` · 截图 `{SCREENSHOT_TIME}`
+结论：{ONE_LINE_DECISION}
+打法：{FAST_ACTION_SUMMARY}
+失效：{INVALIDATION_SUMMARY}
 
-① 今日结构
+### 多周期定位
 
-{PREV_STRUCTURE}
+| 周期 | SVP/结构 | VWAP/EMA/CVD/OI | 交易含义 |
+|---|---|---|---|
+| D | {D_STRUCTURE} | {D_INDICATORS} | {D_MEANING} |
+| 4h | {H4_STRUCTURE} | {H4_INDICATORS} | {H4_MEANING} |
+| 1h | {H1_STRUCTURE} | {H1_INDICATORS} | {H1_MEANING} |
+| 15m | {M15_STRUCTURE} | {M15_INDICATORS} | {M15_MEANING} |
+| 5m | {M5_STRUCTURE} | {M5_INDICATORS} | {M5_MEANING} |
 
-关键路径：
-{KEY_PATH}
+### 关键位矩阵
 
-{DISPLACEMENT_TEXT}
+| 类型 | 价位 | 来源 | 用法 |
+|---|---:|---|---|
+| 上方磁吸/阻力 | `{R_MAGNET}` | SVP/VAH/POC/线 | {R_MAGNET_USE} |
+| 做空防线 | `{SHORT_DEFENSE}` | VWAP/EMA/结构 | {SHORT_DEFENSE_USE} |
+| 中轴/POC | `{POC}` | SVP | {POC_USE} |
+| 做多防线 | `{LONG_DEFENSE}` | VAL/前低/EMA | {LONG_DEFENSE_USE} |
+| 下方磁吸/支撑 | `{S_MAGNET}` | SVP/流动性 | {S_MAGNET_USE} |
 
-② 关键位
+### 多源交叉验证
 
-— 阻力 —
-R1: {R1_RANGE} — {R1_DESC}
-R2: {R2_RANGE} — {R2_DESC}
+| 来源 | 当前读数 | 偏向 | 处理 |
+|---|---|---|---|
+| TV SVP v10 | {TV_SUMMARY} | {TV_BIAS} | 主驾驶 |
+| Binance OI/Funding/Taker | {BINANCE_SUMMARY} | {BINANCE_BIAS} | {BINANCE_ACTION} |
+| CVD/订单流 | {CVD_SUMMARY} | {CVD_BIAS} | {CVD_ACTION} |
+| Deribit/期权 | {OPTIONS_SUMMARY} | {OPTIONS_BIAS} | {OPTIONS_ACTION} |
+| Dune/稳定币/链上 | {ONCHAIN_SUMMARY} | {ONCHAIN_BIAS} | {ONCHAIN_ACTION} |
+| 宏观/事件 | {MACRO_SUMMARY} | {MACRO_BIAS} | {MACRO_ACTION} |
+| X/社区情绪 | {X_SENT_SUMMARY} | {X_SENT_BIAS} | {X_SENT_ACTION} |
 
-— 支撑 —
-S1: {S1_RANGE} — {S1_DESC}
-S2: {S2_RANGE} — {S2_DESC}
-S3: {S3_RANGE} — {S3_DESC}
+### 执行预案
 
-③ 量价分析
+| 方案 | 条件 | 入场 | 止损 | 目标 | R:R | 仓位 |
+|---|---|---:|---:|---:|---:|---|
+| 主线 {MAIN_DIR} | {MAIN_CONDITION} | `{MAIN_ENTRY}` | `{MAIN_STOP}` | `{MAIN_TARGET}` | `{MAIN_RR}` | {MAIN_SIZE} |
+| 反向 {ALT_DIR} | {ALT_CONDITION} | `{ALT_ENTRY}` | `{ALT_STOP}` | `{ALT_TARGET}` | `{ALT_RR}` | {ALT_SIZE} |
+| 禁做/等待 | {NO_TRADE_CONDITION} | - | - | - | - | {NO_TRADE_REASON} |
 
-— {CVD_ABSORPTION}
-— {TICKER_SUMMARY}
-— {VOLUME_PATTERN}
+### 风控闸门
 
-④ 交易方案
+| 闸门 | 状态 | 处理 |
+|---|---|---|
+| 数据新鲜度 | {FRESHNESS_STATUS} | {FRESHNESS_ACTION} |
+| 事件窗口 | {EVENT_STATUS} | {EVENT_ACTION} |
+| R:R | {RR_STATUS} | {RR_ACTION} |
+| 单笔风险 | {POSITION_STATUS} | {POSITION_ACTION} |
+| 连亏/冷却 | {COOLDOWN_STATUS} | {COOLDOWN_ACTION} |
+| 相关性/组合暴露 | {CORR_STATUS} | {CORR_ACTION} |
 
-主方向：{PRIMARY_BIAS} — {PRIMARY_REASON}
-{PLAN_STATUS} {DIRECTION_EMOJI}
-
-— A 方案（{PLAN_A_LABEL}）： {PLAN_A_DESC}
-  入场 `{ENTRY_A}` 止损 `{STOP_A}` 止盈 `{TARGET_A}` R:R 1:{RR_A}
-— B 方案（{PLAN_B_LABEL}）： {PLAN_B_DESC}
-  入场 `{ENTRY_B}` 止损 `{STOP_B}` 止盈 `{TARGET_B}` R:R 1:{RR_B}
-
-防守： {DEFENSE_LINE}
-仓位： {POSITION} 风险 {RISK}U {LEVERAGE}
-
-⑤ 综合评分
-
-流动性扫荡 · {SWEEP_STATUS}
-CVD确认 · {CVD_STATUS}
-动能位移 · {DISPLACEMENT_STATUS}
-Kill Zone · {KILL_ZONE_STATUS}
-多级共振 · {CONFLUENCE_STATUS}
-风控门 · {RISK_GATE_STATUS}
-数据质量 · {DATA_GRADE}
-
-总结： {ONE_LINE_SUMMARY}
-```
-
----
-
-## 极简卡（沿用 ≤8行）
-
-```
-◷ {TIME} · {SYMBOL} · {STATUS} · {BIAS}
-
-现价 `{PRICE}` 高 `{HI}` 低 `{LO}`
-{NEAREST_LEVEL} 距 {DIST}%
-
-—— A {DIR_A} ——
-入场 `{ENTRY_A}` 止损 `{STOP_A}`
-止盈 `{TARGET_A}` 1:{RR_A}
-
-—— B {DIR_B} ——
-入场 `{ENTRY_B}` 止损 `{STOP_B}`
-止盈 `{TARGET_B}` 1:{RR_B}
-
-风控 {RISK}U {LEVERAGE}
+总结：{FINAL_SUMMARY}
 ```
 
----
+## 快速更新模板
 
-## 警报（≤8行 · 触发时）
+```markdown
+![TradingView截图](<ABSOLUTE_PATH_OR_MEDIA>)
 
-```
-🚨 {SYMBOL} · {STATUS} · `{PRICE}`
+{SYMBOL} · {STATUS} · {PRIMARY_BIAS} · {TIME_CN}
+结论：{ONE_LINE_DECISION}
 
-{TRIGGER_LEVEL} 距 {DIST}%
-CVD {CVD} · Taker {TAKER} · 引擎 {MODEL}
-
-—— A {DIR_A} ——
-入场 `{ENTRY_A}` 止损 `{STOP_A}`
-止盈 `{TARGET_A}` 1:{RR_A}
-
-—— B {DIR_B} ——
-入场 `{ENTRY_B}` 止损 `{STOP_B}`
-止盈 `{TARGET_B}` 1:{RR_B}
-
-风控 {RISK}U {LEVERAGE} · {PROT}
+| 项 | 最新读数 | 变化 | 操作 |
+|---|---|---|---|
+| 价格/关键位 | `{PRICE}` / `{NEAREST_LEVEL}` | {PRICE_CHANGE} | {PRICE_ACTION} |
+| TV SVP v10 | {TV_SUMMARY} | {TV_CHANGE} | {TV_ACTION} |
+| CVD/OI/Funding | {FLOW_SUMMARY} | {FLOW_CHANGE} | {FLOW_ACTION} |
+| 预案 | {PLAN_SUMMARY} | {PLAN_CHANGE} | {PLAN_ACTION} |
 ```
 
----
+## 告警模板
 
-## 资产专属
+```markdown
+{DIRECTION_SYMBOL} {SYMBOL} {PRICE}，{PLAIN_LANGUAGE_ALERT}
 
-- BTC：BINANCE · 100x · 24/7
-- XAU：OANDA · 1000x · London+NY
-- 山寨：BINANCE · 20x · 跟随BTC
+| 项 | 读数 | 动作 |
+|---|---|---|
+| 触发 | {TRIGGER_LEVEL} | {TRIGGER_ACTION} |
+| TV确认 | {TV_CONFIRM} | {TV_ACTION} |
+| 订单流 | {FLOW_CONFIRM} | {FLOW_ACTION} |
+| 风控 | {RISK_STATUS} | {RISK_ACTION} |
+```
+
+方向符号：
+- `↑做多`：站回VWAP/VAL、CVD多背离、下扫回收
+- `↓做空`：破VAL、CVD空背离、上扫失败
+- `○等待`：接近关键位但确认不足
+- `×禁做`：数据过期、R:R不足、事件禁做、SVP X结构冲突
+
+## 资产差异
+
+| 资产 | 主执行周期 | 必读数据 | 不适用/降权 |
+|---|---|---|---|
+| BTC/ETH | 15m + 5m触发 | TV SVP、Binance OI/Funding/Taker、多空比、CVD、Depth、Deribit、Dune、X、宏观 | 无 |
+| 山寨 | 15m + 5m | TV、Binance、BTC方向、流动性、Depth | 低流动性不主动给A |
+| XAU | 5m执行 + 15m辅助 | TV、金十、DXY、US10Y、GC/MGC代理、伦敦/纽约窗口、COT | 不套加密Funding/Taker |
+| 外汇 | 15m执行 | TV、DXY/利差、央行窗口、COT、事件 | 加密OI/CVD降权 |
+| 股票 | 1h主线 + 15m触发 | TV、财报/基本面、期权链、指数/VIX、新闻情绪 | 不套加密Funding |
+| 期货 | 15m执行 | TV、合约流动性、宏观、COT、事件窗口 | 加密OI只作关联参考 |
+| 期权 | 跟底层 | IV、Delta/Gamma、OI、到期、MaxPain | 不直接套现货止损 |

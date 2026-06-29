@@ -4,6 +4,12 @@
 30秒检查 monitor_heartbeat.json，心跳停滞>90秒则自动重启行情守望.py
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import atexit
 import json, subprocess, sys, time, os
 from pathlib import Path
@@ -198,6 +204,16 @@ def start_monitor(emergency: bool = False) -> bool:
         notify_watchdog_block(reason, cooldown_remaining, len(guard_restarts))
         return False
 
+    hb = read_heartbeat()
+    if hb and hb.get("status") == "running":
+        try:
+            hb_pid = int(hb.get("pid") or 0)
+        except (TypeError, ValueError):
+            hb_pid = 0
+        if hb_pid and heartbeat_age(hb) <= STALE_SECONDS and pid_alive(hb_pid):
+            write_watchdog_state(status="running", last_restart_reason="already_running", monitor_pid=hb_pid)
+            return True
+
     guard_restarts.append(now_ts)
     guard[key] = guard_restarts
     write_watchdog_state(status="restarting", restart_count_1h=len(guard_restarts),
@@ -231,9 +247,9 @@ def start_monitor(emergency: bool = False) -> bool:
             env=env,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        time.sleep(3)
+        time.sleep(float(os.environ.get("WATCHDOG_START_GRACE_SECONDS", "3")))
         # v1.3: Popen 在某些 Windows 环境可能返回不完整对象，.poll() 不存在
-        # 使用 pid_alive 替代 poll 检查进程是否存活
+
         try:
             if proc.poll() is not None:
                 reason = f"启动失败: 行情守望提前退出 code={proc.returncode}"
@@ -241,14 +257,18 @@ def start_monitor(emergency: bool = False) -> bool:
                 write_watchdog_state(status="failed", last_restart_reason=reason)
                 return False
         except AttributeError:
-            # Popen 对象不完整 → 用 pid 检查
-            if not pid_alive(proc.pid):
+            # Popen 对象不完整 → 用 pid 检查；测试可用环境变量跳过真实进程检查
+            if os.environ.get("WATCHDOG_SKIP_PID_ALIVE_CHECK") == "1":
+                pass
+            elif not pid_alive(proc.pid):
                 reason = f"启动失败: 进程未存活 pid={proc.pid}"
                 log(reason)
                 write_watchdog_state(status="failed", last_restart_reason=reason)
                 return False
         hb = read_heartbeat() or {}
-        if str(hb.get("pid")) != str(proc.pid) and not pid_alive(proc.pid):
+        if (os.environ.get("WATCHDOG_SKIP_PID_ALIVE_CHECK") != "1"
+                and str(hb.get("pid")) != str(proc.pid)
+                and not pid_alive(proc.pid)):
             reason = f"启动失败: 子进程未存活 pid={proc.pid}"
             log(reason)
             write_watchdog_state(status="failed", last_restart_reason=reason)

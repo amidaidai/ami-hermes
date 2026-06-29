@@ -18,6 +18,8 @@ def _reset_guard(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "WATCHDOG_STATE_FILE", state)
     monkeypatch.setattr(wd, "SYSTEM_EVENT_FILE", tmp_path / "system_events.jsonl")
     monkeypatch.setattr(wd, "LOCK_FILE", tmp_path / "monitor.lock")
+    monkeypatch.setenv("WATCHDOG_SKIP_PID_ALIVE_CHECK", "1")
+    monkeypatch.setenv("WATCHDOG_START_GRACE_SECONDS", "0")
     # 拦截真正的 Popen，不真启动进程
     monkeypatch.setattr(wd.subprocess, "Popen", lambda *a, **k: type("P", (), {"pid": 999})())
     return guard

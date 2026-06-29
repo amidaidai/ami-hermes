@@ -9,6 +9,12 @@
 """
 
 from __future__ import annotations
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import json, sys
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -26,6 +32,10 @@ def _asset_class(symbol: str) -> str:
         return "forex"
     if su.endswith("USDT") or "BTC" in su or "ETH" in su or "SOL" in su:
         return "crypto"
+    # Futures
+    futures_codes = {"ES", "CL", "NQ", "GC", "ZC", "ZS", "ZW", "NG", "SI", "HG", "PL", "PA"}
+    if su in futures_codes:
+        return "futures"
     if su.isalpha() and len(su) <= 5:
         return "stock"
     return "other"
@@ -155,6 +165,16 @@ def enrich_engine_data(symbol: str, engine_data: dict) -> dict:
         engine_data["cot"] = macro.get("cot")
 
     return engine_data
+
+
+def snapshot(symbol: str) -> dict:
+    """Backward-compatible snapshot() for legacy monitor/review callers.
+
+    Older modules imported ``snapshot`` from this bridge. The bridge now exposes
+    richer asset-aware macro context; keep this alias so monitoring errors do
+    not break runtime while callers migrate to ``asset_macro_enrich``.
+    """
+    return asset_macro_enrich(symbol)
 
 
 # ===== CLI =====

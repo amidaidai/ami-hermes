@@ -134,7 +134,10 @@ def _adaptive_risk(engine_data: dict) -> float:
     try:
         from risk_constitution import adaptive_risk_usd
         balance = float(engine_data.get("account_balance") or 0)
-        
+        if balance <= 0:
+            tmpl = engine_data.get("template") if isinstance(engine_data.get("template"), dict) else {}
+            balance = float(engine_data.get("balance") or tmpl.get("account_balance") or 100.0)
+
         # —— 守卫①: 连亏追踪 ——
         consec, paused = _consecutive_losses()
         if paused:
@@ -747,6 +750,10 @@ def _asset_class(symbol: str) -> str:
         return "forex"
     if su.endswith("USDT") or "BTC" in su or "ETH" in su or su.endswith("USD"):
         return "crypto"
+    # Futures codes
+    futures_codes = {"ES", "CL", "NQ", "GC", "ZC", "ZS", "ZW", "NG", "SI", "HG", "PL", "PA"}
+    if su in futures_codes:
+        return "futures"
     if su in ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN"] or (su.isalpha() and len(su) <= 5):
         return "stock"
     return "other"
@@ -764,6 +771,8 @@ def _display_symbol(symbol: str) -> str:
         return f"{su} · OANDA"
     if ac == "stock":
         return f"{su} · NASDAQ"
+    if ac == "futures":
+        return f"{su} · CME"
     if ac == "option":
         return f"{su} · OPRA"
     return f"{su} · 待确认"
