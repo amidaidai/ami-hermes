@@ -61,7 +61,7 @@ def main() -> int:
     code, remote = run(["git", "remote", "-v"], timeout=60)
     report.append("远端：" + compact(remote, 300))
 
-    run(["git", "add", "hermes/scripts/repo-maintenance", "hermes/scripts/auto_card.py", "references/master-template-v68.md", "scripts/equity_tracker.py", "scripts/watchdog.py"], timeout=120)
+    run(["git", "add", "hermes/scripts/repo-maintenance", "scripts/auto_card.py", "references/master-template-v68.md", "scripts/equity_tracker.py", "scripts/watchdog.py"], timeout=120)
     code, status = run(["git", "status", "--short"], timeout=60)
     status_lines = [line for line in status.splitlines() if line.strip()]
     report.append(f"待提交：{len(status_lines)} 项")

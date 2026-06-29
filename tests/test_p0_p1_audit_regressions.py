@@ -19,7 +19,7 @@ def _load_module(name: str, path: Path):
     return module
 
 
-auto_card = _load_module("auto_card_p0p1", ROOT / "hermes" / "scripts" / "auto_card.py")
+auto_card = _load_module("auto_card_p0p1", ROOT / "scripts" / "auto_card.py")
 wd = _load_module("watchdog_p0p1", ROOT / "scripts" / "watchdog.py")
 watch_monitor = _load_module("watch_monitor_p0p1", ROOT / "scripts" / "行情守望.py")
 

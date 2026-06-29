@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTO_CARD = ROOT / "hermes" / "scripts" / "auto_card.py"
+AUTO_CARD = ROOT / "scripts" / "auto_card.py"
 
 
 @pytest.fixture(scope="module")

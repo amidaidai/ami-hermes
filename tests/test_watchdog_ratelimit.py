@@ -28,8 +28,8 @@ def _reset_guard(tmp_path, monkeypatch):
 def test_emergency_and_normal_buckets_are_separate(tmp_path, monkeypatch):
     guard = _reset_guard(tmp_path, monkeypatch)
     now = time.time()
-    # 普通桶已用满 3 次
-    guard.write_text(json.dumps({"restart_times": [now, now, now]}), encoding="utf-8")
+    # 普通桶已用满 20 次
+    guard.write_text(json.dumps({"restart_times": [now]*20}), encoding="utf-8")
 
     # 普通重启应被限速拒绝
     assert wd.start_monitor(emergency=False) is False

@@ -26,8 +26,8 @@ SYSTEM_EVENT_FILE = ROOT / "data" / "system_events.jsonl"
 MONITOR_SCRIPT = ROOT / "scripts" / "行情守望.py"
 CHECK_INTERVAL = 60
 STALE_SECONDS = 300
-MAX_RESTARTS_PER_HOUR = 3   # 放宽以避免风暴
-MAX_RESTARTS_EMERGENCY = 6  # 放宽真崩溃预算
+MAX_RESTARTS_PER_HOUR = 20  # v9.6: 放宽·不再限速真崩溃场景
+MAX_RESTARTS_EMERGENCY = 30  # 真崩溃预算充足
 TZ = timezone(timedelta(hours=8))
 
 

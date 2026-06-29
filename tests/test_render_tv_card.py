@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RENDER = ROOT / "scripts" / "render_tv_card.py"
-AUTO_CARD = ROOT / "hermes" / "scripts" / "auto_card.py"
+AUTO_CARD = ROOT / "scripts" / "auto_card.py"
 
 
 def _load(path: Path, name: str):
