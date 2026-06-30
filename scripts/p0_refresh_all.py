@@ -46,7 +46,7 @@ try:
     (DATA / "protections_state.json").write_text(
         json.dumps(p, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
     )
-    log(f"protections_state: {len(p)} keys")
+    log(f"protections_state: OK ({type(p).__name__})")
 except ImportError:
     try:
         # Fallback: create minimal
