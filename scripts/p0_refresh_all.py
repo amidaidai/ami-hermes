@@ -86,10 +86,9 @@ except Exception as e:
 print("\n=== 5. 刷新 btc_signal ===")
 try:
     from btc_daemon import write_signal
-    # Call with BTCUSDT and current context
     import trading_system as ts
-    snap = ts.source_snapshot("BTCUSDT")
-    price = snap.get("price") or snap.get("spot") or 0
+    pc = ts.price_consensus("BTCUSDT")
+    price = pc.get("price", 0) if isinstance(pc, dict) else 0
     zone = "oversold" if price and float(price) < 60000 else "neutral"
     write_signal(zone, price)
     log(f"btc_signal: zone={zone}, price={price}")
