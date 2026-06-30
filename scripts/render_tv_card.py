@@ -376,13 +376,69 @@ def _render_full(
 
 # ═══════════════════ 辅助：从TV MCP数据提取字段 ═══════════════════
 
+def _unwrap_tv_tables(raw: dict) -> list:
+    """从TV MCP返回数据提取所有Pine table行。
+
+    TV MCP 返回格式为:
+        {studies: [{name, tables: [{rows: [...]}]}]}
+    本函数将其展平为 [{name, rows} ...]。
+
+    也兼容旧格式:
+        {tables: [{name, rows: [...]}]}
+    """
+    tables_flat = []
+
+    # 优先从 studies[] 嵌套提取（TV MCP 标准格式）
+    studies = raw.get("studies", [])
+    if isinstance(studies, list):
+        for s in studies:
+            s_name = s.get("name", "")
+            inner_tables = s.get("tables", [])
+            if isinstance(inner_tables, list):
+                for t in inner_tables:
+                    rows = t.get("rows", [])
+                    if rows:
+                        tables_flat.append({"name": s_name, "rows": rows})
+
+    # 回退：顶层 tables（旧格式）
+    if not tables_flat:
+        top_tables = raw.get("tables", [])
+        if isinstance(top_tables, list):
+            for t in top_tables:
+                t_name = t.get("name", "")
+                rows = t.get("rows", [])
+                if rows:
+                    tables_flat.append({"name": t_name, "rows": rows})
+
+    return tables_flat
+
+
+def _parse_table_rows(rows: list) -> dict:
+    """解析 Pine table 行列表，支持 ' | ' 和 '：' 分隔。"""
+    result = {}
+    for row_text in rows:
+        row_str = str(row_text)
+        if " | " in row_str:
+            parts = row_str.split(" | ", 1)
+        elif "｜" in row_str:
+            parts = row_str.split("｜", 1)
+        elif "：" in row_str:
+            parts = row_str.split("：", 1)
+        else:
+            continue
+        if len(parts) == 2:
+            key, val = parts[0].strip(), parts[1].strip()
+            result[key] = val
+    return result
+
+
 def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
     """从TradingView MCP原始数据提取双指标字段。
 
     Args:
         tv_data: TV MCP返回的原始数据，应包含:
             - studies: [{name, values: {...}}, ...]
-            - tables: [{name, rows: [...]}, ...]
+              (嵌套表格: studies[].tables[].rows)
 
     Returns:
         (main_indicator_data, sub_indicator_data)
@@ -400,7 +456,9 @@ def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
         if "SVP" in name or "ICT" in name or "CVD" in name or "VWAP" in name:
             for k, v in vals.items():
                 try:
-                    fv = float(str(v).replace(",", "").replace("K", "000").replace("M", "000000"))
+                    val_str = str(v).replace("\u2212", "-").replace(",", "").replace("\u202fK", "").replace("\u202f", "").strip()
+                    val_str = val_str.replace("\u2212", "-")
+                    fv = float(val_str)
                     # 按量级过滤非价格字段
                     if "EMA" in k or "VWAP" in k or "VAH" in k or "VAL" in k or "POC" in k:
                         if fv > 1:  # 合理价格
@@ -410,39 +468,55 @@ def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
                 except (ValueError, TypeError):
                     main[k.lower().replace(" ", "_")] = str(v)
 
-        # 副指标字段: OI
-        if "Open Interest" in name or "OI" in name:
+        # 副指标 Data Window 编码字段（子指标新增 plot dw 输出）
+        if "Volume" in name and ("Aggregated" in name or "Spot" in name):
             for k, v in vals.items():
-                main["oi_value"] = str(v)
+                if k in ("OI Total", "CVD Value", "Volume Ratio", "Composite"):
+                    main[k.lower().replace(" ", "_")] = v
 
-    # ── 解析 tables (行动格) ──
-    tables = tv_data.get("tables", [])
-    for t in tables:
+    # 标准化 study_values 字段名：S VWAP → vwap, VAH Price → vah 等
+    for src_key, dst_key in [
+        ("s_vwap", "vwap"), ("vah_price", "vah"), ("val_price", "val"),
+        ("poc_price", "poc"), ("npoc_price", "npoc"), ("w_vwap_price", "w_vwap"),
+        ("s_vwap_+band1", "vwap_upper1"), ("s_vwap_-band1", "vwap_lower1"),
+    ]:
+        if src_key in main and dst_key not in main:
+            main[dst_key] = main[src_key]
+
+    # ── 解析 tables (行动格) — 支持嵌套格式 ──
+    flat_tables = _unwrap_tv_tables(tv_data)
+
+    for t in flat_tables:
         t_name = t.get("name", "")
         rows = t.get("rows", [])
+        parsed = _parse_table_rows(rows)
 
-        # 主指标行动格 (DMI)
-        if "DMI" in t_name or "行动格" in t_name or "Action" in t_name:
-            for row in rows:
-                parts = row.split("|", 1) if "|" in row else row.split("：", 1)
-                if len(parts) == 2:
-                    key, val = parts[0].strip(), parts[1].strip()
-                    main[key] = val
-            # 标准字段映射
-            main.setdefault("grade", main.get("等级", ""))
-            main.setdefault("treatment", main.get("处理", main.get("结论", "")))
-            main.setdefault("background", main.get("背景", ""))
-            main.setdefault("position", main.get("位置", ""))
+        # 主指标行动格：通过 "结论"+"方向" 或 "等级" 行识别
+        if ("结论" in parsed and ("方向" in parsed or "进场" in parsed)) or "等级" in parsed:
+            main.update(parsed)
+            # grade 从"等级"行取，无则从"结论"前缀提取（A多/A空/B多/B空/C反多/C反空）
+            grade_raw = main.get("等级", "")
+            if not grade_raw:
+                conc = main.get("结论", "")
+                for _gp in ("A多", "A空", "B多", "B空", "C反多", "C反空", "C等待", "X"):
+                    if str(conc).startswith(_gp):
+                        grade_raw = _gp
+                        break
+            main["grade"] = grade_raw or "C等待"
+            main.setdefault("treatment", main.get("结论", ""))
+            # 进出场 / 止损 / 目标 从行动格 v2 直接映射
+            main.setdefault("entry", main.get("进场", ""))
+            main.setdefault("stop", main.get("止损", ""))
+            main.setdefault("target", main.get("目标", ""))
+            main.setdefault("magnet_up", main.get("磁吸↑", ""))
+            main.setdefault("magnet_down", main.get("磁吸↓", ""))
+            main.setdefault("check", main.get("核对", ""))
             main.setdefault("cvd_state", main.get("CVD", ""))
             main.setdefault("volume_state", main.get("量能", ""))
 
-        # 副指标行动格 (Volume)
-        if "Volume" in t_name or "ACT" in t_name or "行动" in t_name:
-            for row in rows:
-                parts = row.split("|", 1) if "|" in row else row.split("：", 1)
-                if len(parts) == 2:
-                    key, val = parts[0].strip(), parts[1].strip()
-                    sub[key] = val
+        # 副指标行动格：通过 "信号" 和 "结论" 行识别（非主指标的结论）
+        elif "信号" in parsed and "操作" in parsed:
+            sub.update(parsed)
             # 标准字段映射
             sub.setdefault("signal", sub.get("信号", ""))
             sub.setdefault("conclusion", sub.get("结论", ""))
@@ -450,7 +524,8 @@ def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
             sub.setdefault("oi", sub.get("持仓", ""))
             sub.setdefault("cvd_flow", sub.get("流向", ""))
             sub.setdefault("volume", sub.get("量能", ""))
-            sub.setdefault("share", sub.get("占比", ""))
+            # 子指标没有独立"占比"行——占比嵌入在"量能"行"合N%"中
+            sub.setdefault("share", "")
             sub.setdefault("liquidation", sub.get("爆仓", ""))
             sub.setdefault("operation", sub.get("操作", ""))
 

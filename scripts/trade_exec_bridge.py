@@ -114,10 +114,9 @@ def main():
     
     result = bridge_signal_to_execution()
     
-    if result["status"] == "no_signal":
-        print(f"执行桥 {ts} | 等待信号")
-    elif result["status"] == "quiet":
-        print(f"执行桥 {ts} | {result['stage']} ${result.get('price',0):,.0f}")
+    if result["status"] in {"no_signal", "quiet"}:
+        # 静默：无信号/普通状态只落盘数据，不生成 cron 输出。
+        return 0
     else:
         print(f"执行桥 {ts} | {result['stage']} | 因子{result.get('factor_bias','?')} | 已记录trade_events.jsonl")
     

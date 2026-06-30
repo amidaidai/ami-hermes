@@ -332,7 +332,16 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
     """从TV DMI表+study values构建主指标完整数据字典，供render_tv_card使用。"""
     main = {}
     if dmi_rows:
-        main["grade"] = dmi_rows.get("等级", "C等待")
+        # v2 行动格：grade 从"等级"行取，无则从"结论"行前缀提取（A多/A空/B多/B空/C反多/C反空）
+        grade_raw = dmi_rows.get("等级", "")
+        if not grade_raw:
+            # 从"结论"行提取 grade 前缀
+            conc = dmi_rows.get("结论", "")
+            for prefix in ("A多", "A空", "B多", "B空", "C反多", "C反空", "C等待", "X"):
+                if conc.startswith(prefix):
+                    grade_raw = prefix
+                    break
+        main["grade"] = grade_raw or "C等待"
         main["treatment"] = dmi_rows.get("处理", dmi_rows.get("结论", ""))
         main["background"] = dmi_rows.get("背景", "")
         main["position"] = dmi_rows.get("位置", "")
@@ -365,7 +374,14 @@ def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
     """用 TV DMI 数据覆盖引擎的 bias/grade/status。返回变更标记。"""
     if not dmi_rows:
         return {"tv_active": False}
-    grade = dmi_rows.get("等级", "C等待")
+    grade = dmi_rows.get("等级", "")
+    if not grade:
+        conc = dmi_rows.get("结论", "")
+        for prefix in ("A多", "A空", "B多", "B空", "C反多", "C反空", "C等待", "X"):
+            if conc.startswith(prefix):
+                grade = prefix
+                break
+    grade = grade or "C等待"
     changes = {"tv_active": True, "tv_grade": grade, "tv_treatment": dmi_rows.get("处理", "?"),
                "tv_background": dmi_rows.get("背景", "?"), "tv_position": dmi_rows.get("位置", "?"),
                "tv_volume": dmi_rows.get("量能", "?"), "tv_cvd_state": dmi_rows.get("CVD", "?"),
@@ -2123,23 +2139,26 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
         lines.append(f"- 吸收：跳过({str(e)[:40]})")
 
     # ── ② FVG + Order Block（ICT 进场位）──
+    # 棠溪规则：FVG是4h/D中线结构；15m/5m只作执行回测参考，不能拿来判结构。
     try:
         from fvg_detector import detect_fvg, update_fvg_status, best_fvg
         from order_block import detect_obs, nearest_ob
-        k15_raw = raw.get("15m", [])
-        if k15_raw and price:
-            fvgs = update_fvg_status(detect_fvg(k15_raw, 50), price, k15_raw)
-            bf = best_fvg(fvgs)
-            obs = detect_obs(k15_raw, 100)
+        k_struct_raw = raw.get("4h") or raw.get("1d") or raw.get("1D") or []
+        k_exec_raw = raw.get("15m", [])
+        if k_struct_raw and price:
             side = "bullish" if direction == "long" else "bearish" if direction == "short" else None
+            fvg_direction = "long" if direction == "long" else "short" if direction == "short" else None
+            fvgs = update_fvg_status(detect_fvg(k_struct_raw, 120, timeframe="4h"), price, k_struct_raw)
+            bf = best_fvg(fvgs, direction=fvg_direction, structural_only=True)
+            obs = detect_obs(k_exec_raw or k_struct_raw, 100)
             nob = nearest_ob(obs, price, side)
             out["factors"]["fvg"] = bf
             out["factors"]["ob"] = nob
-            fvg_txt = f"{bf['type']} {bf['bottom']}–{bf['top']} ({bf.get('status','?')})" if bf else "无活跃FVG"
+            fvg_txt = f"4h {bf['type']} {bf['bottom']}–{bf['top']} CE{bf.get('ce', bf.get('midpoint'))} ({bf.get('status','?')})" if bf else "无活跃4h/D中线FVG"
             ob_txt = f"{nob['type']} @{nob['price']} 强度{nob['strength']}/5" if nob else "无OB"
-            lines.append(f"- ICT进场：FVG {fvg_txt} | OB {ob_txt}")
+            lines.append(f"- ICT进场：中线FVG {fvg_txt} | OB {ob_txt}")
         else:
-            lines.append("- ICT进场：原始K线不足")
+            lines.append("- ICT进场：4h/D原始K线不足，不能用15m FVG替代中线结构")
     except Exception as e:
         lines.append(f"- ICT进场：跳过({str(e)[:40]})")
 
@@ -2768,6 +2787,12 @@ def auto_card(symbol: str, push: bool = False) -> str:
         else:
             studies = tv_raw.get("studies", [])
             tables = tv_raw.get("tables", [])
+            # TV MCP 标准返回：tables 嵌套在 studies[].tables[] 内，顶层为空
+            if not tables and studies:
+                for _s in studies:
+                    _inner = _s.get("tables", [])
+                    if isinstance(_inner, list):
+                        tables.extend(_inner)
             engine_data["_tv_pine"] = {"studies": studies, "tables": tables}
             tv_dmi_data = {"studies": studies, "tables": tables}
             print(f"  ✅ TV DMI(直连): {len(studies)} studies · {len(tables)} tables")

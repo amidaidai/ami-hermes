@@ -696,9 +696,7 @@ def main():
     log(f"  → 异动候选项: {len(bn_candidates)}")
 
     if not bn_candidates:
-        print(f"**📡 Orion 全市场雷达** — {ts}")
-        print("")
-        print("✅ 无明显异动，市场平静。")
+        # 无异动=静默，只落空报告；避免“市场平静”状态报告刷屏。
         return 0
 
     # Cross-verify with Hyperliquid (already fetched)
@@ -729,8 +727,10 @@ def main():
     for c in bn_candidates:
         c = compute_confidence(c)
 
-    # ── Step 6: Build report ──
-    report = build_report(bn_candidates, ts)
+    # ── Step 6: Build Telegram report ──
+    # 只推中高置信候选；低置信单源异动仅落盘给后续分析，避免雷达刷屏。
+    alert_candidates = [c for c in bn_candidates if c.get("confidence", 0) >= 4]
+    report = build_report(alert_candidates, ts) if alert_candidates else ""
     
     # 落盘JSON供LLM分析读取
     import os as _os
@@ -763,7 +763,8 @@ def main():
     except Exception:
         pass
     
-    print(report)
+    if report:
+        print(report)
     log(f"⏱ 总耗时 {elapsed():.1f}s")
     return 0
 
