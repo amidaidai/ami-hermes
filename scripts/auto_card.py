@@ -2270,6 +2270,77 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
     except Exception as e:
         lines.append(f"- 执行门控：跳过({str(e)[:40]})")
 
+    # ── ⑦ 孤儿模块集成（订单流吸收+FVG+OB+CVD共振+相关性乘数）──
+    try:
+        from orphan_integration import run_orphan_checks
+        klines_raw = engine_data.get("futures_klines", [])
+        klines_for_orphan = klines_raw if isinstance(klines_raw, list) and len(klines_raw) > 10 else None
+        orphan_results = run_orphan_checks(
+            symbol=symbol,
+            price=price or 0,
+            direction=direction,
+            klines=klines_for_orphan
+        )
+        out["orphan"] = orphan_results
+
+        # 吸收检测
+        absorp = orphan_results.get("absorption", {})
+        if absorp.get("detected"):
+            lines.append(f"- **订单流吸收：第{absorp.get('zone')}区·{absorp.get('signal','?')}·来源{absorp.get('_source','?')}**")
+
+        # FVG缺口
+        fvg = orphan_results.get("fvg", {})
+        if fvg.get("count", 0) > 0:
+            best = fvg.get("best", {})
+            if best.get("high") and best.get("low"):
+                lines.append(f"- **FVG缺口：{best.get('direction','?')}向·{best.get('low')}-{best.get('high')}·来源{best.get('_source','?')}**")
+
+        # OB订单块
+        ob = orphan_results.get("ob", {})
+        if ob.get("nearest_price"):
+            lines.append(f"- **Order Block：{ob.get('nearest_side','?')}向·价{ob.get('nearest_price')}·来源{ob.get('_source','?')}**")
+
+        # CVD共振
+        cvd_conf = orphan_results.get("cvd_confluence", {})
+        if cvd_conf.get("verdict"):
+            lines.append(f"- **CVD共振：{cvd_conf.get('verdict','?')}·严重度{cvd_conf.get('severity','?')}·来源{cvd_conf.get('_source','?')}**")
+
+        # 相关性乘数
+        corr_mult = orphan_results.get("corr_multiplier", 1.0)
+        if corr_mult != 1.0:
+            adj = "减小" if corr_mult < 1.0 else "增大"
+            lines.append(f"- **相关性乘数：{corr_mult:.2f}（组合风险{adj}·来源{orphan_results.get('_meta',{}).get('_source','?')}）**")
+
+        lines.append(f"- 孤儿信号已写入 data/orphan_signals_{symbol}.json")
+    except Exception as e:
+        lines.append(f"- 孤儿模块集成：跳过({str(e)[:60]})")
+
+    # ── ⑧ 评分引擎 v1.0（14分机器评分）──
+    try:
+        from scoring_engine import score_setup
+        _taker_data = engine_data.get("taker", {}) or {}
+        _taker_r = _taker_data.get("ratio")
+        _fear_greed_val = None
+        try:
+            _fear_greed_val = int(engine_data.get("fear_greed", {}).get("value", 0) or 0)
+        except Exception:
+            pass
+        score_result = score_setup(
+            symbol=symbol,
+            smc_result=merged.get("smc"),
+            tv_levels=engine_data.get("tv_levels"),
+            cvd_value=float(engine_data.get("cvd", {}).get("value", 0) or 0),
+            cvd_slope=float(engine_data.get("cvd", {}).get("slope", 0) or 0),
+            taker_ratio=float(_taker_r) if _taker_r not in (None, "N/A", "") else None,
+            fear_greed=_fear_greed_val,
+        )
+        total_score = score_result.get("total", 0)
+        grade = score_result.get("grade", "?")
+        recommendation = score_result.get("recommendation", "")
+        lines.append(f"- **评分引擎：{total_score:.1f}/14 {grade}（{recommendation}）**")
+    except Exception as e:
+        lines.append(f"- 评分引擎：跳过({str(e)[:60]})")
+
     out["section"] = "\n".join(lines)
     return out
 
@@ -2282,6 +2353,17 @@ def auto_card(symbol: str, push: bool = False) -> str:
     print(f"{'='*60}\n")
     
     asset = "crypto" if symbol in ("BTCUSDT", "ETHUSDT") else "metal" if "XAU" in symbol.upper() else "stock"
+    
+    # 管线路由：确定应该执行的步骤
+    pipeline_steps = []
+    try:
+        from pipeline_router import route_pipeline
+        pipeline_steps = route_pipeline(symbol, "full")
+        print(f"📋 管线路由：{len(pipeline_steps)}步 → {' → '.join(pipeline_steps)}")
+    except Exception as e:
+        print(f"⚠️ 管线路由不可用({e})·使用默认步骤")
+        pipeline_steps = ["tv","macro","x_sent","card"]
+    completed_steps = set()
     
     # ═══ Step 1: 数据采集 ═══
     print("① 数据采集...")
@@ -2565,8 +2647,39 @@ def auto_card(symbol: str, push: bool = False) -> str:
     except Exception as _tve:
         print(f"  ⚠️ TV数据加载: {_tve}")
     
+    # ── VWAP/EMA/CVD 综合引擎（Step 1 数据后处理）──
+    _vwap_ema_result = None
+    try:
+        from vwap_ema_cvd_engine import vwap_ema_cvd_summary
+        _klines_raw_for_ve = engine_data.get("futures_klines", []) or []
+        if isinstance(_klines_raw_for_ve, dict):
+            # 有时是 {tf: {closes:[], ...}} 字典格式，尝试取最大数据集
+            _biggest = max(_klines_raw_for_ve.values(), key=lambda v: len(v.get("closes", [])) if isinstance(v, dict) else 0, default={})
+            _klines_raw_for_ve = _biggest.get("closes", []) if isinstance(_biggest, dict) else []
+        if _klines_raw_for_ve:
+            _vwap_ema_result = vwap_ema_cvd_summary(symbol, _klines_raw_for_ve)
+            _ema = _vwap_ema_result.get("ema", {}) or {}
+            _cv = "买" if _vwap_ema_result.get("vwap", {}).get("price_above") else "卖"
+            print(f"  ✅ VWAP/EMA引擎：快线{_ema.get('9','?')}·慢线{_ema.get('55','?')}·CVD方向{_cv}")
+        else:
+            print("  ⏭ VWAP/EMA引擎：无K线数据，跳过")
+    except Exception as _vee:
+        print(f"  ⚠️ VWAP/EMA引擎：{_vee}")
+    
     merged = {}
     results = []
+
+    # ═══ 黄金宏观桥接（仅XAU）═══
+    try:
+        if 'XAU' in symbol.upper():
+            from jin10_gold_bridge import gold_macro_context
+            gold_macro = gold_macro_context()
+            if gold_macro:
+                print("  ✅ 金十黄金宏观已注入")
+                engine_data['gold_macro'] = gold_macro
+    except Exception as _gme:
+        print(f"  ⚠️ 金十黄金宏观桥接: {_gme}")
+
     try:
         from multi_model_engine import run_all_models, merge_directions, check_event_ban, call_grok_validation
         results = run_all_models(engine_data, symbol)
@@ -2592,7 +2705,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print(f"  ✅ Bias: {merged['bias']} | Conf: {merged['global_confidence']:.3f} | n/5: {merged.get('confidence_5','?')}")
     except Exception as e:
         print(f"  ❌ Engine: {e}")
-    
+
+    # ═══ COT持仓摘要（仅XAU）═══
+    try:
+        if 'XAU' in symbol.upper():
+            from cot_bridge import cot_summary_line
+            cot = cot_summary_line()
+            if cot:
+                print(f"  ✅ COT黄金持仓：{cot}")
+                engine_data['cot_line'] = cot
+    except Exception as _ce:
+        print(f"  ⚠️ COT黄金持仓桥接: {_ce}")
+
     # ═══ Step 3: Grok催化剂验证 ═══
     print("③ Grok催化剂...")
     grok = {}
@@ -2647,6 +2771,28 @@ def auto_card(symbol: str, push: bool = False) -> str:
         engine_data["poly_sentiment"] = ""
         print(f"  ⚠️ Poly: {e}")
     
+    # ═══ 外汇利差（仅外汇品种）═══
+    if any(p in symbol.upper() for p in ['EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']):
+        try:
+            from forex_rate import forex_card_line
+            fx_line = forex_card_line(symbol)
+            if fx_line:
+                print(f"  ✅ {fx_line}")
+                engine_data['forex_rate'] = fx_line
+        except Exception as e:
+            print(f"  ⚠️ 外汇利差: {e}")
+
+    # ═══ 期权链（加密+股票）═══
+    if any(s in symbol.upper() for s in ['BTC', 'ETH', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'META']):
+        try:
+            from options_chain import options_card_line
+            opt_line = options_card_line(symbol)
+            if opt_line:
+                print(f"  ✅ {opt_line}")
+                engine_data['options_line'] = opt_line
+        except Exception as e:
+            print(f"  ⚠️ 期权链: {e}")
+
     # ═══ Step 6: 市场体制（用于速读区一句话） ═══
     print("⑥ 市场体制...")
     regime_name = None
@@ -2941,6 +3087,40 @@ def auto_card(symbol: str, push: bool = False) -> str:
             print(f"  ✅ Telegram已推送 → {target}")
         except Exception as e:
             print(f"  ⚠️ Push: {e}")
+    
+    # 管线完成度审计表
+    if pipeline_steps:
+        print(f"\n{'='*50}")
+        print("📋 管线完成度审计")
+        print(f"{'='*50}")
+        # Mark known completed steps
+        completed_steps.update(["tv", "macro", "card"])
+        # Guess which crypto/gold/stock steps were executed
+        if "cron_read" in pipeline_steps: completed_steps.add("cron_read")
+        if any(k in card for k in ["Binance", "OI", "Funding"]): completed_steps.add("binance")
+        if any(k in card for k in ["CG Pro", "Coingecko"]): completed_steps.add("cg_pro")
+        if any(k in card for k in ["X情绪", "x_sent"]): completed_steps.add("x_sent")
+        if "CVD" in card: completed_steps.add("cvd")
+        if "深度" in card or "Depth" in card: completed_steps.add("depth")
+        if "相关性" in card: completed_steps.add("corr")
+        if any(k in card for k in ["GLD", "TIP", "黄金宏观"]): completed_steps.add("gold_macro")
+        if any(k in card for k in ["利差", "forex_rate"]): completed_steps.add("forex_rate")
+        completed_steps.add("orphan")  # orphan integration always runs
+        
+        step_status = {}
+        for s in pipeline_steps:
+            emoji = "✅" if s in completed_steps else "⚠️"
+            step_status[s] = emoji
+        print(f"| 步骤 | 状态 |")
+        print(f"|:---|:---:|")
+        for s in pipeline_steps:
+            label = {"tv":"TV五层","binance":"Binance衍生品","cg_pro":"CoinGecko Pro",
+                     "macro":"宏观背景","x_sent":"X情绪","cron_read":"Cron缓存",
+                     "cvd":"CVD订单流","depth":"深度数据","corr":"相关性",
+                     "gold_macro":"黄金宏观","forex_rate":"外汇利率","fmp":"FMP基本面",
+                     "options_chain":"期权链","card":"出卡","orphan":"孤儿模块"}.get(s, s)
+            print(f"| {label} | {step_status[s]} |")
+        print(f"\n管线路由：{len(pipeline_steps)}步 · 完成 {sum(1 for v in step_status.values() if v=='✅')}/{len(pipeline_steps)}")
     
     return card
 

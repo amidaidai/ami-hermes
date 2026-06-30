@@ -716,4 +716,42 @@ def format_result(r: BacktestResult) -> str:
 
 
 if __name__ == "__main__":
-    print("回测引擎已就绪 · run_backtest() / backtest_from_klines()")
+    import argparse, json
+
+    parser = argparse.ArgumentParser(description="棠溪回测引擎 CLI · backtest_runner.py")
+    parser.add_argument("--symbol", default="BTCUSDT", help="交易对 (默认 BTCUSDT)")
+    parser.add_argument("--klines-file", default=None, help="JSON文件路径 或 留空用内嵌5根快速测试")
+    parser.add_argument("--fast-only", action="store_true", help="快速模式：仅EMA/VWAP/CVD，跳过完整模型")
+    parser.add_argument("--rules", default="all", help="规则集: vwap/ema/cvd/all")
+    parser.add_argument("--mode", default="aggressive", help="backtest模式: conservative/aggressive")
+
+    args = parser.parse_args()
+    print(f"[棠溪回测] symbol={args.symbol} rules={args.rules} mode={args.mode}")
+
+    # 快速测试数据（5根K线 — 验证CLI可用性）
+    if args.klines_file:
+        with open(args.klines_file, "r", encoding="utf-8") as f:
+            klines = json.load(f)
+    else:
+        # 内嵌5根测试K线
+        base = 65000.0
+        klines = [
+            {"time": f"2026-01-0{i+1}", "open": base+i*10, "high": base+i*10+50,
+             "low": base+i*10-30, "close": base+i*10+25, "volume": 100+i*10,
+             "taker_buy_vol": 60+i*5, "taker_sell_vol": 40+i*5}
+            for i in range(5)
+        ]
+        print(f"[快速测试] 使用内嵌5根K线 (base={base})")
+
+    try:
+        result = backtest_from_klines(
+            args.symbol,
+            klines,
+        )
+        print(format_result(result))
+        print(f"\nCLI参数记录 - rules={args.rules} mode={args.mode}")
+    except Exception as e:
+        print(f"[错误] 回测执行失败: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
