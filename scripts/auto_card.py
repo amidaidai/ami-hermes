@@ -2793,6 +2793,26 @@ def auto_card(symbol: str, push: bool = False) -> str:
         except Exception as e:
             print(f"  ⚠️ 期权链: {e}")
 
+    # ═══ X情绪上下文读取 ═══
+    try:
+        _x_path = ROOT / "data" / "x_sentiment_context.json"
+        if _x_path.exists():
+            import json as _xj
+            _x_data = _xj.loads(_x_path.read_text(encoding="utf-8"))
+            _fg = _x_data.get("fear_greed", {})
+            _gm = _x_data.get("global_market", {})
+            _queries = _x_data.get("suggested_x_queries", [])
+            _btc_dom = _gm.get("btc_dominance", "?")
+            _fg_v = _fg.get("value", "?")
+            _fg_c = _fg.get("classification", "?")
+            _q_str = " | ".join(_queries[:2]) if _queries else "无"
+            print(f"  ✅ X情绪: BTC恐贪{_fg_v}({_fg_c}) · 市占{str(_btc_dom)[:6]}% · {_q_str}")
+            engine_data["x_sentiment"] = _x_data
+        else:
+            print(f"  ⚠️ X情绪: 缓存文件不存在")
+    except Exception as _xe:
+        print(f"  ⚠️ X情绪: {_xe}")
+
     # ═══ Step 6: 市场体制（用于速读区一句话） ═══
     print("⑥ 市场体制...")
     regime_name = None
@@ -2815,7 +2835,27 @@ def auto_card(symbol: str, push: bool = False) -> str:
     _collect_binance_data(engine_data, symbol)
     if engine_data.get("cvd", {}).get("direction"):
         print(f"  ✅ CVD {engine_data['cvd']['direction']} {engine_data['cvd'].get('quality','?')} | Taker {engine_data.get('taker',{}).get('direction','?')} | Funding {engine_data.get('funding',{}).get('rate_pct','?')}")
-    
+
+    # ═══ 深度数据采集 ═══
+    try:
+        import urllib.request, json as _dj
+        _sym = symbol.upper().replace(".P", "").split("-")[0].split(" ")[0]
+        _url = f"https://api.binance.com/api/v3/depth?symbol={_sym}&limit=5"
+        _req = urllib.request.Request(_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(_req, timeout=10) as _resp:
+            _depth = _dj.loads(_resp.read().decode())
+        _bids = _depth.get("bids", [])
+        _asks = _depth.get("asks", [])
+        if _bids and _asks:
+            _bp = float(_bids[0][0]); _bq = float(_bids[0][1])
+            _ap = float(_asks[0][0]); _aq = float(_asks[0][1])
+            _spread = _ap - _bp
+            _spread_pct = _spread / _bp * 100
+            print(f"  ✅ 深度: 买{_bp:,.1f}({_bq:.2f}) / 卖{_ap:,.1f}({_aq:.2f}) · 点差{_spread:.2f}({_spread_pct:.3f}%)")
+            engine_data["depth"] = {"bid_price": _bp, "bid_qty": _bq, "ask_price": _ap, "ask_qty": _aq, "spread": _spread, "spread_pct": _spread_pct}
+    except Exception as _de:
+        print(f"  ⚠️ 深度: {_de}")
+
     print("⑦ 渲染锁定卡片...")
     meta = build_setup_metadata(symbol, merged, results, engine_data)
 
@@ -2833,6 +2873,15 @@ def auto_card(symbol: str, push: bool = False) -> str:
             meta["gate_verdict"] = f"否决·{_g.get('reason')}"
         else:
             meta["gate_verdict"] = "放行"
+        # 孤儿模块信号细化（吸收/相关性/元标记）
+        try:
+            _orp = adv.get("factors", {})
+            _abs = _orp.get("absorption", {})
+            _corr = _orp.get("corr_multiplier", 1.0)
+            _abs_summary = _abs.get("summary", "正常") if isinstance(_abs, dict) else "正常"
+            print(f"  ✅ 孤儿: corr={_corr} · {_abs_summary[:40]}")
+        except Exception:
+            pass
     except Exception as _ae:
         print(f"  ⚠ 高级订单流跳过: {_ae}")
 
@@ -3094,17 +3143,17 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print("📋 管线完成度审计")
         print(f"{'='*50}")
         # Mark known completed steps
+        # 基于 engine_data 判断各步骤完成（比卡文本匹配更可靠）
         completed_steps.update(["tv", "macro", "card"])
-        # Guess which crypto/gold/stock steps were executed
         if "cron_read" in pipeline_steps: completed_steps.add("cron_read")
-        if any(k in card for k in ["Binance", "OI", "Funding"]): completed_steps.add("binance")
-        if any(k in card for k in ["CG Pro", "Coingecko"]): completed_steps.add("cg_pro")
-        if any(k in card for k in ["X情绪", "x_sent"]): completed_steps.add("x_sent")
-        if "CVD" in card: completed_steps.add("cvd")
-        if "深度" in card or "Depth" in card: completed_steps.add("depth")
-        if "相关性" in card: completed_steps.add("corr")
-        if any(k in card for k in ["GLD", "TIP", "黄金宏观"]): completed_steps.add("gold_macro")
-        if any(k in card for k in ["利差", "forex_rate"]): completed_steps.add("forex_rate")
+        if engine_data.get("cmc") or "CMC" in card or "Binance" in card: completed_steps.add("binance")
+        if engine_data.get("cg_top") or "CoinGecko" in card: completed_steps.add("cg_pro")
+        if engine_data.get("x_sentiment") or "X情绪" in card: completed_steps.add("x_sent")
+        if engine_data.get("cvd") or "CVD" in card: completed_steps.add("cvd")
+        if engine_data.get("depth") or "深度" in card: completed_steps.add("depth")
+        if engine_data.get("_advanced",{}).get("orphan",{}).get("corr_multiplier") is not None: completed_steps.add("corr")
+        if engine_data.get("gold_macro") and any(k in card for k in ["GLD", "TIP", "黄金宏观"]): completed_steps.add("gold_macro")
+        if engine_data.get("forex_rate") or any(k in card for k in ["利差", "forex_rate"]): completed_steps.add("forex_rate")
         completed_steps.add("orphan")  # orphan integration always runs
         
         step_status = {}
