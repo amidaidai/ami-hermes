@@ -2836,23 +2836,27 @@ def auto_card(symbol: str, push: bool = False) -> str:
     if engine_data.get("cvd", {}).get("direction"):
         print(f"  ✅ CVD {engine_data['cvd']['direction']} {engine_data['cvd'].get('quality','?')} | Taker {engine_data.get('taker',{}).get('direction','?')} | Funding {engine_data.get('funding',{}).get('rate_pct','?')}")
 
-    # ═══ 深度数据采集 ═══
+    # ═══ 深度数据采集（仅加密品种）═══
     try:
         import urllib.request, json as _dj
         _sym = symbol.upper().replace(".P", "").split("-")[0].split(" ")[0]
-        _url = f"https://api.binance.com/api/v3/depth?symbol={_sym}&limit=5"
-        _req = urllib.request.Request(_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(_req, timeout=10) as _resp:
-            _depth = _dj.loads(_resp.read().decode())
-        _bids = _depth.get("bids", [])
-        _asks = _depth.get("asks", [])
-        if _bids and _asks:
-            _bp = float(_bids[0][0]); _bq = float(_bids[0][1])
-            _ap = float(_asks[0][0]); _aq = float(_asks[0][1])
-            _spread = _ap - _bp
-            _spread_pct = _spread / _bp * 100
-            print(f"  ✅ 深度: 买{_bp:,.1f}({_bq:.2f}) / 卖{_ap:,.1f}({_aq:.2f}) · 点差{_spread:.2f}({_spread_pct:.3f}%)")
-            engine_data["depth"] = {"bid_price": _bp, "bid_qty": _bq, "ask_price": _ap, "ask_qty": _aq, "spread": _spread, "spread_pct": _spread_pct}
+        if not _sym.endswith("USDT"):
+            print(f"  ℹ️ 深度: {_sym} 非加密品种·跳过")
+            engine_data["depth"] = {"note": f"{_sym}非加密"}
+        else:
+            _url = f"https://api.binance.com/api/v3/depth?symbol={_sym}&limit=5"
+            _req = urllib.request.Request(_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(_req, timeout=10) as _resp:
+                _depth = _dj.loads(_resp.read().decode())
+            _bids = _depth.get("bids", [])
+            _asks = _depth.get("asks", [])
+            if _bids and _asks:
+                _bp = float(_bids[0][0]); _bq = float(_bids[0][1])
+                _ap = float(_asks[0][0]); _aq = float(_asks[0][1])
+                _spread = _ap - _bp
+                _spread_pct = _spread / _bp * 100
+                print(f"  ✅ 深度: 买{_bp:,.1f}({_bq:.2f}) / 卖{_ap:,.1f}({_aq:.2f}) · 点差{_spread:.2f}({_spread_pct:.3f}%)")
+                engine_data["depth"] = {"bid_price": _bp, "bid_qty": _bq, "ask_price": _ap, "ask_qty": _aq, "spread": _spread, "spread_pct": _spread_pct}
     except Exception as _de:
         print(f"  ⚠️ 深度: {_de}")
 
@@ -3152,7 +3156,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
         if engine_data.get("cvd") or "CVD" in card: completed_steps.add("cvd")
         if engine_data.get("depth") or "深度" in card: completed_steps.add("depth")
         if engine_data.get("_advanced",{}).get("orphan",{}).get("corr_multiplier") is not None: completed_steps.add("corr")
-        if engine_data.get("gold_macro") and any(k in card for k in ["GLD", "TIP", "黄金宏观"]): completed_steps.add("gold_macro")
+        if engine_data.get("gold_macro") or any(k in card for k in ["GLD", "黄金"]): completed_steps.add("gold_macro")
         if engine_data.get("forex_rate") or any(k in card for k in ["利差", "forex_rate"]): completed_steps.add("forex_rate")
         completed_steps.add("orphan")  # orphan integration always runs
         
