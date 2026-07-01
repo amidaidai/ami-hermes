@@ -34,6 +34,11 @@ def _price(v):
     return f"`{_num(v)}`" if _num(v) != "—" else "`—`"
 
 
+def _cell(v) -> str:
+    text = "—" if v is None else str(v)
+    return text.replace("|", "／").replace(chr(13), " ").replace(chr(10), " ")
+
+
 def _asset_cn(symbol: str) -> str:
     su = symbol.upper()
     if "XAU" in su or "GOLD" in su:
@@ -91,7 +96,7 @@ def _tf_row(tf: str, k: dict, fallback: str = "") -> str:
             pass
     ind = " · ".join(pos) if pos else "待刷新"
     meaning = "主执行" if tf in {"15m", "5m"} else "背景继承" if tf in {"D", "4h"} else "结构确认"
-    return f"| {tf} | {desc} | {ind} | {meaning} |"
+    return f"| {_cell(tf)} | {_cell(desc)} | {_cell(ind)} | {_cell(meaning)} |"
 
 
 def _level_rows(levels: list[dict], price: float | None, klines: dict | None = None) -> list[str]:
@@ -125,7 +130,7 @@ def _level_rows(levels: list[dict], price: float | None, klines: dict | None = N
             use = f"{rel}{dist:.2f}% · 触及后等CVD/主动买卖确认"
         else:
             use = "等价格确认"
-        rows.append(f"| {item['side']} | {_price(lvl)} | {item['name']} | {use} |")
+        rows.append(f"| {_cell(item['side'])} | {_price(lvl)} | {_cell(item['name'])} | {_cell(use)} |")
     if not rows:
         rows.append("| 待刷新 | `—` | TV/数据桥 | 无关键位则禁追 |")
     return rows
@@ -183,6 +188,30 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
     st_a = st_a or {"stop": None, "target": None}
     st_b = st_b or {"stop": None, "target": None}
 
+    bull_evidence = []
+    bear_evidence = []
+    if direction == "long":
+        bull_evidence.append(f"主方向{bias}")
+    elif direction == "short":
+        bear_evidence.append(f"主方向{bias}")
+    if cvd_dir in ("买", "buy", "多", "long"):
+        bull_evidence.append(f"CVD{cvd_dir}{cvd_quality or ''}")
+    elif cvd_dir in ("卖", "sell", "空", "short"):
+        bear_evidence.append(f"CVD{cvd_dir}{cvd_quality or ''}")
+    if rr_a >= 2:
+        bull_evidence.append(f"主线R:R 1:{rr_a:.1f}")
+    else:
+        bear_evidence.append(f"主线R:R不足 1:{rr_a:.1f}")
+    if "通过" in str(prot_status):
+        bull_evidence.append("Protections通过")
+    else:
+        bear_evidence.append(f"风控{prot_status}")
+    if tv_bias and tv_bias not in ("观望", bias):
+        bear_evidence.append(f"TV偏向{tv_bias}")
+    verdict = "主线可等触发" if rr_a >= 2 and "通过" in str(prot_status) and not status.startswith("X") else "先观察，等关键位+CVD共振"
+    bull_text = " · ".join(bull_evidence) if bull_evidence else "无强多头证据"
+    bear_text = " · ".join(bear_evidence) if bear_evidence else "无强空头证据"
+
     lines = [
         f"{display} · {ac} · {status} · {bias} · {now}",
         f"现价 {_price(price)} · 主周期 `{main_tf}` · 数据质量 `{data_grade}`",
@@ -216,6 +245,14 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         f"| 宏观/事件 | {macro_summary} | 中性验证 | 事件窗口降级 |",
         f"| 社区/情绪 | F&G {fg_v} · 市场热度待核 | 反指辅助 | 不覆盖结构 |",
         f"| 风控/Protections | {prot_status} | {'通过' if '通过' in str(prot_status) else '降级'} | 不通过则禁做 |",
+        "",
+        "### 矛盾点",
+        "",
+        "| 项目 | 证据 | 裁决 |",
+        "|---|---|---|",
+        f"| 多头证据 | {bull_text} | {'保留' if bull_evidence else '不足'} |",
+        f"| 空头证据 | {bear_text} | {'压制' if bear_evidence else '不足'} |",
+        f"| 裁决 | {verdict} | {status} |",
         "",
         "### 执行预案",
         "",

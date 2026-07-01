@@ -41,11 +41,9 @@ except Exception as e:
 # ─── 2. protections_state.json ───
 print("\n=== 2. 刷新 protections_state ===")
 try:
-    from risk_constitution import load_protections
-    p = load_protections()  # creates default if missing
-    (DATA / "protections_state.json").write_text(
-        json.dumps(p, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
-    )
+    from risk_constitution import load_protections, save_protections
+    p = load_protections()  # creates default if missing and tolerates old bad files
+    save_protections(p)
     log(f"protections_state: OK ({type(p).__name__})")
 except ImportError:
     try:

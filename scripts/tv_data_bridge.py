@@ -48,66 +48,69 @@ def _tv(*args, timeout=15):
         return "", False
 
 
+def _tv_json(*args, timeout=15):
+    """调用 tv CLI 并解析JSON。"""
+    out, ok = _tv(*args, timeout=timeout)
+    if not ok or not out:
+        return None
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    return data if data.get("success", False) else None
+
+
+def _num(v):
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(",", "").replace("\u202f", "").replace(" ", ""))
+    except ValueError:
+        return None
+
+
 def tv_available():
     """检查TV是否可连接。"""
-    out, ok = _tv("status", timeout=5)
-    return ok and "connected" in out.lower()
+    data = _tv_json("status", timeout=5)
+    return bool(data and data.get("cdp_connected"))
 
 
 def read_indicators():
     """读取指标值：VWAP/EMA/CVD/POC/VAH/VAL等。"""
-    out, ok = _tv("values", timeout=15)
-    if not ok:
+    data = _tv_json("values", timeout=15)
+    if not data:
         return {}
     indicators = {}
-    for line in out.split("\n"):
-        line = line.strip()
-        if ":" in line or "=" in line or "  " in line:
-            parts = line.replace("=", ":").split(":", 1)
-            if len(parts) == 2:
-                key = parts[0].strip()
-                try:
-                    val = float(parts[1].strip().replace(",", ""))
-                    indicators[key.lower().replace(" ", "_")] = val
-                except ValueError:
-                    pass
+    for study in data.get("studies", []):
+        for key, val in (study.get("values") or {}).items():
+            indicators[key.lower().replace(" ", "_")] = val
     return indicators
 
 
 def read_dmi_table():
-    """读取DMI决策表。"""
-    out, ok = _tv("data", "tables", "--study-filter", "DMI", timeout=15)
-    if not ok:
+    """读取行动格/决策表。"""
+    data = _tv_json("data", "tables", "--study-filter", "SVP", timeout=15)
+    if not data:
         return {}
     table = {}
-    for line in out.split("\n"):
-        line = line.strip()
-        if "|" in line:
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 2:
-                key = parts[0]
-                val = parts[1]
-                table[key] = val
+    for study in data.get("studies", []):
+        for tbl in study.get("tables", []):
+            for row in tbl.get("rows", []):
+                if "|" in row:
+                    key, val = row.split("|", 1)
+                    table[key.strip()] = val.strip()
     return table
 
 
 def read_pine_lines():
     """读取Pine绘制线（关键位）。"""
-    out, ok = _tv("data", "lines", timeout=15)
-    if not ok:
+    data = _tv_json("data", "lines", "--study-filter", "SVP", timeout=15)
+    if not data:
         return []
     levels = []
-    for line in out.split("\n"):
-        line = line.strip()
-        if ":" in line:
-            parts = line.split(":")
-            if len(parts) >= 2:
-                try:
-                    price = float(parts[1].strip().replace(",", ""))
-                    label = parts[0].strip()
-                    levels.append({"label": label, "price": price})
-                except ValueError:
-                    pass
+    for study in data.get("studies", []):
+        for price in study.get("horizontal_levels", []):
+            levels.append({"label": "level", "price": price})
     return levels
 
 
@@ -159,7 +162,9 @@ def collect_and_cache(alert_mode=False):
     
     # 构建缓存
     # v9.6: 解析POC/VAH/VAL/行动格从已读取数据
-    poc = vah = val = None
+    poc = _num(indicators.get("poc_price"))
+    vah = _num(indicators.get("vah_price"))
+    val = _num(indicators.get("val_price"))
     action_grid = {}
     for lvl in lines:
         lbl = str(lvl.get("label", "")).upper()

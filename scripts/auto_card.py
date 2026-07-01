@@ -2594,9 +2594,12 @@ def auto_card(symbol: str, push: bool = False) -> str:
     try:
         _ticker = symbol.upper().replace("USDT", "").replace(".P", "")
         _tv_path = Path.home() / f"AppData/Local/hermes/data/{_ticker}_tv_data.json"
-        if not _tv_path.exists():
+        _crypto_symbol = symbol.upper().endswith("USDT") or symbol.upper().endswith(".P")
+        if not _tv_path.exists() and _crypto_symbol and _ticker == "BTC":
             _tv_path = Path.home() / "AppData/Local/hermes/data/btc_tv_data.json"
-        if _tv_path.exists():
+        elif not _tv_path.exists():
+            _tv_path = None
+        if _tv_path and _tv_path.exists():
             with open(_tv_path, "r", encoding="utf-8") as _tf:
                 _tv_raw = json.load(_tf)
             engine_data["tv"] = {
@@ -3005,14 +3008,23 @@ def auto_card(symbol: str, push: bool = False) -> str:
         live_path = ROOT / "data" / "tv_live.json"
         cache_path2 = ROOT / "data" / "tv_dmi_cache.json"
         c2 = None
+        skipped_tv_caches = []
         for p in [live_path, cache_path2]:
             if p.exists():
                 try:
-                    c2 = _j2.loads(p.read_text(encoding="utf-8"))
-                    if c2.get("fresh") and c2.get("poc"):
-                        break
-                    c2 = None
-                except: pass
+                    candidate = _j2.loads(p.read_text(encoding="utf-8"))
+                    if candidate.get("fresh") and candidate.get("poc"):
+                        cache_status2 = _tv_cache_status(candidate, symbol)
+                        if cache_status2.get("usable"):
+                            c2 = candidate
+                            engine_data["_tv_live_status"] = cache_status2
+                            break
+                        skipped_tv_caches.append(f"{p.name}: {cache_status2.get('reason')}")
+                except Exception as exc:
+                    skipped_tv_caches.append(f"{p.name}: {exc}")
+        if not c2 and skipped_tv_caches:
+            engine_data["_tv_live_status"] = {"usable": False, "reason": "; ".join(skipped_tv_caches)}
+            print(f"  ⚠ TV实时注入未采用: {'; '.join(skipped_tv_caches)}")
         if c2 and c2.get("fresh") and c2.get("poc"):
             klines = engine_data.setdefault("klines", {})
             poc = c2.get("poc"); vah = c2.get("vah"); val = c2.get("val")
