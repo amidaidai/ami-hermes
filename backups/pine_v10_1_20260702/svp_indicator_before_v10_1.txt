@@ -128,7 +128,7 @@ string FVG_HTF           = input.string("自动", "高周期确认周期", optio
 color ICT_LABEL_BG_COLOR = input.color(#FFFFFF, "标签背景颜色", group=ICT_STYLE_GROUP)
 int    ICT_LABEL_BG_TRANS = input.int(50, "标签背景透明度", minval=0, maxval=100, group=ICT_STYLE_GROUP)
 
-color COLOR_ASIA   = input.color(#FFC107, "亚洲盘颜色", group=ICT_STYLE_GROUP)
+color COLOR_ASIA   = input.color(#FF9800, "亚洲盘颜色", group=ICT_STYLE_GROUP)
 color COLOR_LONDON = input.color(#089981,  "伦敦盘颜色", group=ICT_STYLE_GROUP)
 color COLOR_NY     = input.color(#F23645,    "纽约盘颜色", group=ICT_STYLE_GROUP)
 color COLOR_LONDON_NY_OVERLAP = input.color(#9C27B0, "伦敦纽约重叠颜色", group=ICT_STYLE_GROUP)
@@ -174,7 +174,7 @@ int   EMA_1_WIDTH     = input.int(2, "EMA 9 线宽", minval=1, maxval=5, group=E
 
 bool  SHOW_EMA_2      = input.bool(false, "EMA 21", inline="ema2", group=EMA_GROUP)
 int   EMA_2_LEN       = input.int(21, "周期", minval=1, maxval=500, inline="ema2", group=EMA_GROUP)
-color EMA_2_COLOR     = input.color(#009688, "颜色", inline="ema2", group=EMA_GROUP)
+color EMA_2_COLOR     = input.color(#FF00FF, "颜色", inline="ema2", group=EMA_GROUP)
 int   EMA_2_WIDTH     = input.int(2, "EMA 21 线宽", minval=1, maxval=5, group=EMA_GROUP)
 
 bool  SHOW_EMA_3      = input.bool(false, "EMA 34", inline="ema3", group=EMA_GROUP)
@@ -190,7 +190,7 @@ int   EMA_4_WIDTH     = input.int(2, "EMA 55 线宽", minval=1, maxval=5, group=
 bool  SHOW_EMA_12_CLOUD = input.bool(true, "显示 EMA 9/21 快速趋势云", group=EMA_GROUP)
 bool  SHOW_EMA_34_CLOUD = input.bool(true, "显示 EMA 34/55 慢速趋势云", group=EMA_GROUP)
 color EMA_12_CLOUD_BULL = input.color(color.new(#00FF6A, 60), "EMA 9/21 多头填充", inline="ema12cloud", group=EMA_GROUP)
-color EMA_12_CLOUD_BEAR = input.color(color.new(#E91E63, 60), "空头填充", inline="ema12cloud", group=EMA_GROUP)
+color EMA_12_CLOUD_BEAR = input.color(color.new(#FF00FF, 60), "空头填充", inline="ema12cloud", group=EMA_GROUP)
 color EMA_34_CLOUD_BULL = input.color(color.new(#2962FF, 75), "EMA 34/55 多头填充", inline="ema34cloud", group=EMA_GROUP)
 color EMA_34_CLOUD_BEAR = input.color(color.new(#B71C1C, 75), "空头填充", inline="ema34cloud", group=EMA_GROUP)
 
@@ -214,7 +214,7 @@ string DISP_TZ     = DISPLAY_TZ == "跟随交易所" ? syminfo.timezone : DISPLA
 
 bool   SHOW_DAY_LIQUIDITY  = input.bool(true, "显示前日高低点", tooltip="按ICT同样的扫线样式显示：周一 高/低、周二 高/低。", group=SESSIONS_GROUP)
 bool   SHOW_WEEK_LIQUIDITY = input.bool(true, "显示上周高低点", tooltip="显示上周高低点，纳入扫点、关键位与CVD确认。", group=SESSIONS_GROUP)
-color  COLOR_DAY_LIQUIDITY = input.color(#455A64, "前日线颜色", group=SESSIONS_GROUP)
+color  COLOR_DAY_LIQUIDITY = input.color(#0F0F0F, "前日线颜色", group=SESSIONS_GROUP)
 int    DAY_LIQUIDITY_WIDTH = input.int(1, "前日线宽", minval=1, maxval=5, group=SESSIONS_GROUP)
 string DAY_LIQUIDITY_STYLE_IN = input.string("Dashed", "前日线型", options=["Solid", "Dashed", "Dotted"], group=SESSIONS_GROUP)
 color  COLOR_WEEK_LIQUIDITY = input.color(#7E57C2, "上周线颜色", group=SESSIONS_GROUP)
@@ -2525,13 +2525,6 @@ float bearFvgCe = na
 float fvgNearDist = FVG_NEAR_ATR * (na(currATR) ? 0.0 : currATR)
 float nearestBullFvgDist = na
 float nearestBearFvgDist = na
-// MCP专用：最近有效FVG的CE与质量码。正数=多FVG，负数=空FVG；1=本级，2=HTF确认，11/12=价格当前在FVG内。
-float mcpBullFvgCe = na
-float mcpBearFvgCe = na
-float mcpBullFvgDist = na
-float mcpBearFvgDist = na
-bool mcpBullFvgHtf = false
-bool mcpBearFvgHtf = false
 if SHOW_FVG and FVG_NEAREST_ONLY and array.size(fvgList) > 0
     int nf = array.size(fvgList) - 1
     while nf >= 0
@@ -2568,19 +2561,6 @@ if SHOW_FVG and array.size(fvgList) > 0
                         htfConf := true
                     gj += 1
             f.htfConf := htfConf
-            // MCP最近FVG：不要求价格已经进入FVG，用于外部自动分析读取最近多/空CE。
-            float distToFvgMcp = f.isBull ? math.max(0.0, close - f.top) : math.max(0.0, f.bot - close)
-            float ceToFvgMcp = math.avg(f.top, f.bot)
-            if f.isBull
-                if na(mcpBullFvgDist) or distToFvgMcp < mcpBullFvgDist
-                    mcpBullFvgDist := distToFvgMcp
-                    mcpBullFvgCe := ceToFvgMcp
-                    mcpBullFvgHtf := htfConf
-            else
-                if na(mcpBearFvgDist) or distToFvgMcp < mcpBearFvgDist
-                    mcpBearFvgDist := distToFvgMcp
-                    mcpBearFvgCe := ceToFvgMcp
-                    mcpBearFvgHtf := htfConf
             // 入场汇合
             if f.isBull and close <= f.top and close >= f.bot
                 inBullFvg := true
@@ -2694,16 +2674,11 @@ string invalidSpecificText = setupX ? "不进场" : activeLongPlan ? longInvalid
 string failoverText = setupX ? "先观望" : activeLongPlan ? "失效后等空确认" : activeShortPlan ? "失效后等多确认" : "破/守二选一"
 int replaySideCode = setupGradeText == "A多" ? 1 : setupGradeText == "A空" ? -1 : setupX ? 9 : 0
 int replayGradeCode = setupGradeText == "A多" or setupGradeText == "A空" ? 3 : setupGradeText == "B多" or setupGradeText == "B空" ? 2 : setupGradeText == "C反多" or setupGradeText == "C反空" ? 1 : setupX ? -1 : 0
-// B/C可挂价闸门：只有HTF、CVD、位置、结构触发、流动性和SMT都更确定时，才把B/C渲染成可直接挂单。
-bool bcLongDirectRaw = setupLongB and htfAllowLong and cvdLongOk and not cvdBearDivQualified and not cvdDistributeSellQualified and not smtBearDiv and nearAKeyLevel and (inBullFvgHtf or inBullFvg or sweptLowReclaimed or mssLongOk or acceptanceBullOk) and not adrLowRoomLong and not lowLiquidityAsset
-bool bcShortDirectRaw = setupShortB and htfAllowShort and cvdShortOk and not cvdBullDivQualified and not cvdAbsorbBuyQualified and not smtBullDiv and nearAKeyLevel and (inBearFvgHtf or inBearFvg or sweptHighRejected or mssShortOk or acceptanceBearOk) and not adrLowRoomShort and not lowLiquidityAsset
-bool cLongDirectRaw = setupLongC and htfAllowLong and nearAKeyLevel and (sweptLowReclaimed or valReclaimed) and (cvdAbsorbBuyQualified or cvdBullDivQualified) and not smtBearDiv and not adrLowRoomLong and not lowLiquidityAsset
-bool cShortDirectRaw = setupShortC and htfAllowShort and nearAKeyLevel and (sweptHighRejected or vahRejected) and (cvdDistributeSellQualified or cvdBearDivQualified) and not smtBullDiv and not adrLowRoomShort and not lowLiquidityAsset
-bool bcDirectRaw = bcLongDirectRaw or bcShortDirectRaw or cLongDirectRaw or cShortDirectRaw
-float bcLongPlanPrice = setupLongB ? longPlanPrice : setupLongC ? (valReclaimed and not na(curVal) ? curVal : sweptLowReclaimed and not na(ictEventPrice) ? ictEventPrice : pullbackLevelPrice) : na
-float bcShortPlanPrice = setupShortB ? shortPlanPrice : setupShortC ? (vahRejected and not na(curVah) ? curVah : sweptHighRejected and not na(ictEventPrice) ? ictEventPrice : reboundLevelPrice) : na
-float candidatePlanPrice = displayLongA ? longPlanPrice : displayShortA ? shortPlanPrice : (bcLongDirectRaw or cLongDirectRaw) ? bcLongPlanPrice : (bcShortDirectRaw or cShortDirectRaw) ? bcShortPlanPrice : na
-float candidateInvalidPrice = displayLongA ? longInvalidPrice : displayShortA ? shortInvalidPrice : (bcLongDirectRaw or cLongDirectRaw) ? longInvalidPrice : (bcShortDirectRaw or cShortDirectRaw) ? shortInvalidPrice : na
+float replayPlanPrice = displayLongA ? longPlanPrice : displayShortA ? shortPlanPrice : na
+float replayInvalidPrice = displayLongA ? longInvalidPrice : displayShortA ? shortInvalidPrice : na
+float replayStopDistance = not na(replayInvalidPrice) ? math.abs(close - replayInvalidPrice) : na
+float replayPlanDistance = not na(replayPlanPrice) ? math.abs(close - replayPlanPrice) : na
+float replayStopAtr = not na(replayStopDistance) and currATR > 0 ? replayStopDistance / currATR : na
 int locationScore = nearAKeyLevel ? 3 : nearCvdKeyLevel ? 2 : priceInVA ? 1 : 0
 int confirmScore = (cvdBullConfirmQualified or cvdBearConfirmQualified ? 2 : 0) + (sweepOrAcceptLong or sweepOrAcceptShort ? 2 : 0) + (acceptanceBullOk or acceptanceBearOk ? 1 : 0)
 int extensionRiskScore = vwapExtendedUp or vwapExtendedDn ? 3 : dmiHot ? 2 : structureConflict ? 2 : 0
@@ -2789,19 +2764,12 @@ string magnetTargetText = not na(magnetTargetPrice) ? magnetDir + magnetTargetNa
 string magnetAboveText = not na(magnetAbovePrice) ? "磁吸上方:" + magnetAboveName + " " + str.tostring(magnetAbovePrice, format.mintick) + " 分" + str.tostring(magnetAboveScore) : "磁吸上方:--"
 string magnetBelowText = not na(magnetBelowPrice) ? "磁吸下方:" + magnetBelowName + " " + str.tostring(magnetBelowPrice, format.mintick) + " 分" + str.tostring(magnetBelowScore) : "磁吸下方:--"
 float rrRatio = na
-if not na(candidatePlanPrice) and not na(candidateInvalidPrice) and not na(magnetTargetPrice) and currATR > 0
-    float riskDist = math.abs(candidatePlanPrice - candidateInvalidPrice)
-    float rewardDist = math.abs(magnetTargetPrice - candidatePlanPrice)
+if not na(replayPlanPrice) and not na(replayInvalidPrice) and not na(magnetTargetPrice) and currATR > 0
+    float riskDist = math.abs(replayPlanPrice - replayInvalidPrice)
+    float rewardDist = math.abs(magnetTargetPrice - replayPlanPrice)
     rrRatio := riskDist > 0 ? rewardDist / riskDist : na
 string rrText = not na(rrRatio) ? str.tostring(rrRatio, "#.1") + "R" : ""
 bool rrHardOk = not na(rrRatio) and rrRatio >= 2.0
-bool bcDirectOk = bcDirectRaw and not na(rrRatio) and rrRatio >= 1.5
-bool executablePlan = displayLongA or displayShortA or bcDirectOk
-float replayPlanPrice = executablePlan ? candidatePlanPrice : na
-float replayInvalidPrice = executablePlan ? candidateInvalidPrice : na
-float replayStopDistance = not na(replayInvalidPrice) ? math.abs(close - replayInvalidPrice) : na
-float replayPlanDistance = not na(replayPlanPrice) ? math.abs(close - replayPlanPrice) : na
-float replayStopAtr = not na(replayStopDistance) and currATR > 0 ? replayStopDistance / currATR : na
 bool rrHardBlock = (displayLongA or displayShortA) and not rrHardOk
 string stopPriceText = not na(replayInvalidPrice) ? str.tostring(replayInvalidPrice, format.mintick) : ""
 string entryPriceText = not na(replayPlanPrice) ? str.tostring(replayPlanPrice, format.mintick) : ""
@@ -2885,13 +2853,13 @@ else if displayLongA
 else if displayShortA
     actionStateText := "A空 反抽"
 else if setupLongB
-    actionStateText := bcDirectOk and bcLongDirectRaw ? "B多 可挂" : "B多 等确认"
+    actionStateText := "B多 轻仓"
 else if setupShortB
-    actionStateText := bcDirectOk and bcShortDirectRaw ? "B空 可挂" : "B空 等确认"
+    actionStateText := "B空 轻仓"
 else if setupLongC
-    actionStateText := bcDirectOk and cLongDirectRaw ? "C多 小仓" : "C多 等站回"
+    actionStateText := "C多 等站回"
 else if setupShortC
-    actionStateText := bcDirectOk and cShortDirectRaw ? "C空 小仓" : "C空 等跌回"
+    actionStateText := "C空 等跌回"
 else if trendLongScore >= trendShortScore + 2
     actionStateText := "等多 回踩"
 else if trendShortScore >= trendLongScore + 2
@@ -2923,13 +2891,13 @@ else if displayShortA
     string rrPart = rrText != "" ? "(" + rrText + ")" : ""
     lineAction := pricePart + (entryPriceText != "" ? stopPart + targetPart + rrPart : "") + " · " + shortInvalidText
 else if setupLongB
-    lineAction := bcDirectOk and bcLongDirectRaw ? "B多挂 " + entryPriceText + " · 止" + stopPriceText + " · 标" + magnetTargetText + (rrText != "" ? "(" + rrText + ")" : "") + " · " + longInvalidText : "等回踩" + pullbackLevelText + "确认"
+    lineAction := "等回踩" + pullbackLevelText + "确认"
 else if setupShortB
-    lineAction := bcDirectOk and bcShortDirectRaw ? "B空挂 " + entryPriceText + " · 止" + stopPriceText + " · 标" + magnetTargetText + (rrText != "" ? "(" + rrText + ")" : "") + " · " + shortInvalidText : "等反抽" + reboundLevelText + "确认"
+    lineAction := "等反抽" + reboundLevelText + "确认"
 else if setupLongC
-    lineAction := bcDirectOk and cLongDirectRaw ? "C多小仓 " + entryPriceText + " · 止" + stopPriceText + " · 标" + magnetTargetText + (rrText != "" ? "(" + rrText + ")" : "") + " · " + longInvalidText : "等站回" + longBreakName + "确认"
+    lineAction := "等站回" + longBreakName + "确认"
 else if setupShortC
-    lineAction := bcDirectOk and cShortDirectRaw ? "C空小仓 " + entryPriceText + " · 止" + stopPriceText + " · 标" + magnetTargetText + (rrText != "" ? "(" + rrText + ")" : "") + " · " + shortInvalidText : "等跌回" + shortBreakName + "确认"
+    lineAction := "等跌回" + shortBreakName + "确认"
 
 string volText = volHigh ? "量高" : volLow ? "量低" : "量中"
 string kzText = isKillZone ? " ⚡" + killZoneLabel : ""
@@ -3024,9 +2992,9 @@ color concTextCol = panelRisk ? PNL_WARN_COL : panelLongSide ? PNL_LONG_COL : pa
 // 进场：按 ICT 入场质量分级——优先 进FVG@CE → 扫流动性收回/受阻 → C级反转(站回VAL·吸收 / 跌破VAH·派发) → 退回结构 回踩/反抽/破位
 string panelEntryVal = "等触发"
 if panelLongSide
-    panelEntryVal := not executablePlan ? (setupLongB ? "等回踩" + pullbackLevelText + "确认" : setupLongC ? "等站回" + longBreakName + "确认" : "等触发") : inBullFvg and not na(bullFvgCe) ? "进FVG@CE " + f_fmt_price(bullFvgCe) : sweptLowReclaimed and not na(ictEventPrice) ? "扫低收回 " + f_fmt_price(ictEventPrice) : valReclaimed and not na(curVal) ? "站回VAL " + f_fmt_price(curVal) : cvdAbsorbBuyQualified ? "吸收反多 " + f_fmt_price(pullbackLevelPrice) : (bcDirectOk and (bcLongDirectRaw or cLongDirectRaw) ? "挂单 " + entryPriceText : longPlanAction + " " + f_fmt_price(longPlanPrice))
+    panelEntryVal := inBullFvg and not na(bullFvgCe) ? "进FVG@CE " + f_fmt_price(bullFvgCe) : sweptLowReclaimed and not na(ictEventPrice) ? "扫低收回 " + f_fmt_price(ictEventPrice) : valReclaimed and not na(curVal) ? "站回VAL " + f_fmt_price(curVal) : cvdAbsorbBuyQualified ? "吸收反多 " + f_fmt_price(pullbackLevelPrice) : longPlanAction + " " + f_fmt_price(longPlanPrice)
 else if panelShortSide
-    panelEntryVal := not executablePlan ? (setupShortB ? "等反抽" + reboundLevelText + "确认" : setupShortC ? "等跌回" + shortBreakName + "确认" : "等触发") : inBearFvg and not na(bearFvgCe) ? "进FVG@CE " + f_fmt_price(bearFvgCe) : sweptHighRejected and not na(ictEventPrice) ? "扫高受阻 " + f_fmt_price(ictEventPrice) : vahRejected and not na(curVah) ? "跌破VAH " + f_fmt_price(curVah) : cvdDistributeSellQualified ? "派发反空 " + f_fmt_price(reboundLevelPrice) : (bcDirectOk and (bcShortDirectRaw or cShortDirectRaw) ? "挂单 " + entryPriceText : shortPlanAction + " " + f_fmt_price(shortPlanPrice))
+    panelEntryVal := inBearFvg and not na(bearFvgCe) ? "进FVG@CE " + f_fmt_price(bearFvgCe) : sweptHighRejected and not na(ictEventPrice) ? "扫高受阻 " + f_fmt_price(ictEventPrice) : vahRejected and not na(curVah) ? "跌破VAH " + f_fmt_price(curVah) : cvdDistributeSellQualified ? "派发反空 " + f_fmt_price(reboundLevelPrice) : shortPlanAction + " " + f_fmt_price(shortPlanPrice)
 string panelStopVal  = stopPriceText != "" ? stopPriceText + (not na(replayStopAtr) ? " (" + str.tostring(replayStopAtr, "#.1") + "ATR)" : "") : "—"
 string panelTgtVal   = magnetTargetText != "" ? magnetTargetText + (rrText != "" ? "  " + rrText : "") : "—"
 // 扫位计数（社区共识：已知待扫位=知道等什么，已扫位=知道什么发生了）
@@ -3039,10 +3007,8 @@ string pdShort = pdPos >= PD_LONG_MAX ? "深溢价" : pdPos <= PD_SHORT_MIN ? "�
 string dmiCompact = dmiHot ? " · 过热" : dmiTrendWeak ? " · 走弱" : dmiBullConfirm or dmiBearConfirm ? "" : " · 待定"
 string panelScoreVal = activeLongPlan or activeShortPlan ? " " + setupTotalText : ""
 string panelDirVal   = actionBiasWord + panelScoreVal + dmiCompact + (pdShort != "" ? " · " + pdShort : "") + (kzShort != "" ? " " + kzShort : "") + (sweepCntText != "" ? " " + sweepCntText : "")
-string panelRiskOne = rrHardBlock ? "R:R不足" : str.contains(panelRiskText, "HTF逆") ? "HTF逆" : str.contains(panelRiskText, "CVD冲突") ? "CVD冲突" : str.contains(panelRiskText, "ADR耗尽") ? "ADR耗尽" : str.contains(panelRiskText, "ADR空间少") ? "ADR空间少" : str.contains(panelRiskText, "SMT逆") ? "SMT逆" : str.contains(panelRiskText, "薄量") ? "薄量" : str.contains(panelRiskText, "OI") ? "OI异常" : ""
-string panelConclusionVal = panelRiskOne != "" and not str.contains(actionStateText, panelRiskOne) ? actionStateText + " ⚠" + panelRiskOne : actionStateText
 bool panelDetailFull = ACTION_PANEL_DETAIL == "完整"
-bool panelDetailStd  = ACTION_PANEL_DETAIL == "标准" or panelDetailFull   // 标准/完整都显示 确认/磁吸；风险摘要并入结论，完整档保留独立风险行
+bool panelDetailStd  = ACTION_PANEL_DETAIL == "标准" or panelDetailFull   // 标准/完整都显示 确认/风险/磁吸
 
 // 行数据：label / value / 值颜色 / 行底色
 var string[] pnlLabels = array.new_string()
@@ -3058,7 +3024,7 @@ f_pnl_row(string lab, string val, color vcol) =>
     array.push(pnlValCols, vcol)
 
 // —— 精简区（始终显示）——
-f_pnl_row("结论", panelConclusionVal, concTextCol)
+f_pnl_row("结论", actionStateText, concTextCol)
 f_pnl_row("方向", panelDirVal, concTextCol)
 f_pnl_row("进场", panelEntryVal, panelShortSide ? PNL_SHORT_COL : PNL_LONG_COL)
 f_pnl_row("止损", panelStopVal, PNL_SHORT_COL)
@@ -3070,7 +3036,7 @@ if panelDetailStd
     bool panelConfirmWarn = str.contains(panelConfirmText, "✗") or str.contains(panelFvgGrade, "C级")
     bool panelConfirmGood = panelCheckText != "—" and not panelConfirmWarn
     f_pnl_row("确认", panelConfirmText, panelConfirmGood ? PNL_LONG_COL : panelConfirmWarn ? PNL_WARN_COL : PNL_VAL_COL)
-    if panelDetailFull and panelRiskText != ""
+    if panelRiskText != ""
         f_pnl_row("风险", panelRiskText, PNL_WARN_COL)
     // 磁吸拆两行：上方目标(向上准备入场去的位)用多色、下方目标用空色，一眼看清往哪个方向进场去哪
     string pnlMagUp = not na(magnetAbovePrice) ? magnetAboveName + " " + str.tostring(magnetAbovePrice, format.mintick) + " 分" + str.tostring(magnetAboveScore) + (magnetAboveHtf ? "★HTF" : "") + (not na(magnetAbovePrice) ? " 距" + str.tostring(math.abs(magnetAbovePrice - close) / math.max(currATR, syminfo.mintick), "#.0") + "ATR" : "") : "--"
@@ -3111,12 +3077,6 @@ plot(replayInvalidPrice, "MCP Stop Price", display=display.data_window)
 plot(magnetTargetPrice, "MCP Target Price", display=display.data_window)
 plot(cvdValue, "MCP CVD Value", display=display.data_window)
 plot(mcpQualityCode, "MCP Quality Code", display=display.data_window)
-bool mcpNearestFvgIsBull = not na(mcpBullFvgDist) and (na(mcpBearFvgDist) or mcpBullFvgDist <= mcpBearFvgDist)
-bool mcpNearestFvgIsBear = not na(mcpBearFvgDist) and (na(mcpBullFvgDist) or mcpBearFvgDist < mcpBullFvgDist)
-int mcpFvgQualityCode = inBullFvgHtf ? 12 : inBullFvg ? 11 : inBearFvgHtf ? -12 : inBearFvg ? -11 : mcpNearestFvgIsBull ? (mcpBullFvgHtf ? 2 : 1) : mcpNearestFvgIsBear ? (mcpBearFvgHtf ? -2 : -1) : 0
-plot(mcpBullFvgCe, "MCP Bull FVG CE", display=display.data_window)
-plot(mcpBearFvgCe, "MCP Bear FVG CE", display=display.data_window)
-plot(mcpFvgQualityCode, "MCP FVG Quality Code", display=display.data_window)
 
 //====================================================
 // Price Scale Labels (non-ICT levels)

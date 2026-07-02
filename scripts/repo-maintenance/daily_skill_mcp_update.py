@@ -152,7 +152,7 @@ def main() -> int:
     from concurrent.futures import ThreadPoolExecutor
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     start_ts = datetime.now(TZ)
-    date_str = start_ts.strftime("%Y-%m-%d %H:%M:%S")
+    date_str = start_ts.strftime("%Y年%m月%d日%H：%M")
 
     # 并行执行：skills_check + curator + mcp_test
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -233,7 +233,32 @@ def main() -> int:
     else:
         lines.append(f"\n✅ 全部检查通过，无需变更")
 
-    report = "\n".join(lines)
+    status_text = "✅无变更" if not changes else f"⚠变更{len(changes)}项"
+    report_lines = [f"{status_text} · 技能/SkillMCP更新 · {date_str}", ""]
+    report_lines.extend([
+        "表1 · 任务概况",
+        "| 项目 | 数据 | 状态 |",
+        "|:----|:----|:----|",
+        f"| 任务 | 技能/SkillMCP更新 | {status_text} |",
+        f"| 耗时 | `{elapsed:.0f}s` | no_agent |",
+        f"| 变更 | `{len(changes)}`项 | {'需查看' if changes else '静默'} |",
+        "",
+        "表2 · 检查结果",
+        "| 模块 | 数据 | 状态 |",
+        "|:----|:----|:----|",
+        f"| Hub技能 | {skill_status['status']} | {'⚠更新' if skill_status['status'] == 'updates_found' else '✅无更新'} |",
+        f"| Curator | {curator_status['status']} | {'⚠有变更' if curator_status['status'] == 'changes' else '✅无变更'} |",
+        f"| MCP | `{mcp_status.get('ok', 0)}/{mcp_status.get('total', 0)}`正常 | {'✅正常' if mcp_status.get('fail', 0) == 0 else '⚠异常'} |",
+        f"| Hermes升级 | {update_status.get('status')} | {'✅通过' if update_status.get('status') in {'ok', 'skipped'} else '⚠异常'} |",
+        "",
+        "表3 · 处理预案",
+        "| 方向 | 触发 | 动作 |",
+        "|:---:|:----|:----|",
+        f"| {'×处理' if changes else '○保持'} | {','.join(changes) if changes else '无变更'} | {'读日志并修复' if changes else '静默不推'} |",
+        f"| ⚠MCP | 异常`{mcp_status.get('fail', 0)}`个 | {'重测失败项' if mcp_status.get('fail', 0) else '继续监控'} |",
+        "| ↑维护 | 下次07：00 | 自动运行 |",
+    ])
+    report = "\n".join(report_lines)
 
     # 保存日志
     log_path = LOG_DIR / f"skill-mcp-update-{start_ts.strftime('%Y%m%d')}.log"

@@ -285,7 +285,7 @@ ACT_THEME= input.string('浅色', '配色主题', group = gp_act, options = ['�
 ACT_LB   = input.int(10,     '回看K数', group = gp_act, minval = 2, maxval = 50)
 ACT_TRANSP = input.int(50, '背景透明度', group = gp_act, minval = 0, maxval = 100, tooltip = '0=不透明完全挡K线，越大越透。默认50。')
 ACT_SIZE   = input.string('tiny', '字号', group = gp_act, options = ['tiny','small','normal','large'])
-ACT_COMPACT = input.bool(true, '精简模式(5行:信号/结论/流向/持仓/操作)', group = gp_act, tooltip = '开启后显示五行：信号、结论、流向、持仓、操作；保留订单流核心但不显著占屏。')
+ACT_COMPACT = input.bool(true, '精简模式(只留 信号/结论/操作)', group = gp_act, tooltip = '开启后只显示三行：信号灯共振、结论、操作，极简盯盘。')
 ACT_CVD_ANCHOR = input.string('日', '会话CVD锚定', group = gp_act, options = ['日','周','月'], tooltip = '与主指标CVD口径对齐：日内盯盘用"日"，波段用"周/月"。默认日。')
 
 string baseA = syminfo.basecurrency
@@ -327,24 +327,7 @@ sessCvdA := dayResetA ? Delta : nz(sessCvdA[1]) + Delta
 float  cvdSlopeA = sessCvdA - nz(sessCvdA[ACT_LB])
 bool   cvdUpA = cvdSlopeA > 0
 bool   cvdDnA = cvdSlopeA < 0
-// CVD背离三重过滤：价格新高/新低 + CVD不确认 + 摆动幅度>1.5ATR + CVD斜率方向确认。副指标CVD为影线比例估算，只作背景佐证。
-int    cvdDivLenA = ACT_LB * 3
-float  prevPriceHighA = ta.highest(high[1], cvdDivLenA)
-float  prevPriceLowA = ta.lowest(low[1], cvdDivLenA)
-float  prevCvdHighA = ta.highest(sessCvdA[1], cvdDivLenA)
-float  prevCvdLowA = ta.lowest(sessCvdA[1], cvdDivLenA)
-float  cvdSwingRangeA = ta.highest(high, cvdDivLenA) - ta.lowest(low, cvdDivLenA)
-float  cvdAtrA = ta.atr(14)
-bool   cvdPriceNewHighA = not na(prevPriceHighA) and high > prevPriceHighA
-bool   cvdPriceNewLowA = not na(prevPriceLowA) and low < prevPriceLowA
-bool   cvdSwingOkA = not na(cvdAtrA) and cvdSwingRangeA > cvdAtrA * 1.5
-bool   cvdBearDivA = cvdPriceNewHighA and not na(prevCvdHighA) and sessCvdA < prevCvdHighA and cvdSwingOkA and cvdSlopeA <= 0
-bool   cvdBullDivA = cvdPriceNewLowA and not na(prevCvdLowA) and sessCvdA > prevCvdLowA and cvdSwingOkA and cvdSlopeA >= 0
-bool   cvdDivAnyA = cvdBearDivA or cvdBullDivA
-int    cvdMethodCodeA = 1
-int    cvdQualityCodeA = not isCryptoA ? 0 : cvdDivAnyA ? 3 : math.abs(cvdSlopeA) > 0 ? 2 : 1
-string cvdBaseTxtA = (cvdUpA ? '▲' : cvdDnA ? '▼' : '·') + (cvdUpA ? '买盘占优' : cvdDnA ? '卖盘占优' : '均衡')
-string cvdTxtA = '估算CVD ' + (cvdBearDivA ? '⚠卖背离' : cvdBullDivA ? '⚠买背离' : cvdBaseTxtA)
+string cvdTxtA = (cvdUpA ? '▲' : cvdDnA ? '▼' : '·') + (cvdUpA ? '买盘占优' : cvdDnA ? '卖盘占优' : '均衡')
 // 占比已并入量能行(volTxtA含合{perp}%)，shareTxtA不再显示
 
 // —— 量能(放量/缩量)：聚合全网成交量 vs 均线，比值成色；占比并入本行 ——
@@ -372,8 +355,7 @@ string htfTxtA  = (htfBullA ? '▲' : htfBearA ? '▼' : '·') + (htfBullA ? '�
 // —— 信号灯 ——
 bool dirUpA = priceUpA
 bool dirDnA = priceDnA
-bool cvdAlignedA = ((dirUpA and cvdUpA and not cvdBearDivA) or (dirDnA and cvdDnA and not cvdBullDivA))
-int  confirmsA = (oiUpA ? 1 : 0) + (cvdAlignedA ? 1 : 0) + (volUpA ? 1 : 0) + (((dirUpA and htfBullA) or (dirDnA and htfBearA)) ? 1 : 0)
+int  confirmsA = (oiUpA ? 1 : 0) + (((dirUpA and cvdUpA) or (dirDnA and cvdDnA)) ? 1 : 0) + (volUpA ? 1 : 0) + (((dirUpA and htfBullA) or (dirDnA and htfBearA)) ? 1 : 0)
 bool strongA = (dirUpA or dirDnA) and confirmsA >= 3 and not volDnA
 bool midA    = (dirUpA or dirDnA) and not strongA and (confirmsA == 2 or confirmsA >= 3)
 string lightA = not (dirUpA or dirDnA) ? '⚪' : strongA ? '🟢' : midA ? '🟡' : '🔴'
@@ -390,9 +372,9 @@ bool volVetoA = volDnA
 bool topExhaustA = shortLiqA and priceUpA
 bool botExhaustA = longLiqA and priceDnA
 bool absorbA = (priceUpA and cvdDnA and not oiDnA) or (priceDnA and cvdUpA and not oiDnA)
-string flowShortA = cvdBearDivA ? '卖背离' : cvdBullDivA ? '买背离' : absorbA ? '吸收' : vExh ? '衰竭' : vDelev ? '去杠杆' : flowTagA
-int confirmScoreA = math.min(math.max(confirmsA + (usingAggregatedFeed and not lowCoverageWarn and not singleExchangeDomWarn ? 1 : 0) - (htfConflict ? 2 : 0) - (lowCoverageWarn ? 1 : 0) - (singleExchangeDomWarn ? 1 : 0) - (oiDivergeA ? 1 : 0) - (cvdDivAnyA ? 1 : 0), 0), 5)
-string riskWarnA = lowCoverageWarn ? "⚠低覆盖" : singleExchangeDomWarn ? "⚠单所主导" : htfConflict ? "⚠HTF冲突" : cvdDivAnyA ? "⚠CVD背离" : oiDivergeA ? "⚠OI背离" : ""
+string flowShortA = absorbA ? '吸收' : vExh ? '衰竭' : vDelev ? '去杠杆' : flowTagA
+int confirmScoreA = math.min(math.max(confirmsA + (usingAggregatedFeed and not lowCoverageWarn and not singleExchangeDomWarn ? 1 : 0) - (htfConflict ? 2 : 0) - (lowCoverageWarn ? 1 : 0) - (singleExchangeDomWarn ? 1 : 0) - (oiDivergeA ? 1 : 0), 0), 5)
+string riskWarnA = lowCoverageWarn ? "⚠低覆盖" : singleExchangeDomWarn ? "⚠单所主导" : htfConflict ? "⚠HTF冲突" : oiDivergeA ? "⚠OI背离" : ""
 string actText = '中性 · 观望'
 if vGood
     actText := htfConflict ? '逆高周 · 短多但高周偏空,降级' : topExhaustA ? '轧空冲顶 · 追多风险大,警惕反转' : volVetoA ? '涨但缩量 · 动能弱,轻仓/不追' : '实涨可信 · 新钱+买盘 ✅'
@@ -416,9 +398,8 @@ color cBad   = pnlLight ? #C0143C : #FF5D6C
 color cWarn  = pnlLight ? #B25E00 : #FFB300
 color cBg1   = pnlLight ? color.new(#F4F5F7, ACT_TRANSP) : color.new(#10131A, ACT_TRANSP)
 color cBg2   = pnlLight ? color.new(#E8EAED, ACT_TRANSP) : color.new(#181C24, ACT_TRANSP)
-color vCol   = htfConflict or cvdDivAnyA ? cWarn : vGood ? cGood : (vDiv or vExh or vDelev) ? cWarn : vBad ? cBad : color.gray
+color vCol   = htfConflict ? cWarn : vGood ? cGood : (vDiv or vExh or vDelev) ? cWarn : vBad ? cBad : color.gray
 color signalColA = not (dirUpA or dirDnA) ? color.gray : strongA ? cGood : midA ? cWarn : cBad
-color flowColA = cvdDivAnyA ? cWarn : cvdUpA ? cGood : cvdDnA ? cBad : cVal
 color sigBg  = color.new(signalColA, math.max(ACT_TRANSP - 25, 0))
 string actSizeSel = ACT_SIZE == 'small' ? size.small : ACT_SIZE == 'normal' ? size.normal : ACT_SIZE == 'large' ? size.large : size.tiny
 
@@ -443,25 +424,23 @@ if barstate.islast and SHOW_ACT
         table.cell(actT, 1, 0, signalA + ' · ' + flowShortA + ' ' + str.tostring(confirmScoreA) + '/5', text_color = color.new(#FFFFFF, 0), bgcolor = sigBg, text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 0, 1, '结论', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 1, 1, actText, text_color = vCol, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
-        if ACT_COMPACT
-            table.cell(actT, 0, 2, '流向', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 1, 2, cvdTxtA + (riskWarnA != '' ? ' · ' + riskWarnA : ''), text_color = flowColA, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 0, 3, '持仓', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 1, 3, oiTxtA, text_color = oiUpA ? cGood : oiDnA ? cWarn : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
+        if ACT_COMPACT and riskWarnA != ''
+            table.cell(actT, 0, 2, '风险', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 1, 2, riskWarnA, text_color = cWarn, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
         if not ACT_COMPACT
             table.cell(actT, 0, 2, '高周', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 2, htfTxtA, text_color = htfBullA ? cGood : htfBearA ? cBad : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 0, 3, '持仓', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 3, oiTxtA, text_color = oiUpA ? cGood : oiDnA ? cWarn : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 0, 4, '流向', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 1, 4, cvdTxtA, text_color = flowColA, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 1, 4, cvdTxtA, text_color = cvdUpA ? cGood : cvdDnA ? cBad : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 0, 5, '覆盖', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 5, coverageRowA, text_color = fallbackToChartFeed or lowCoverageWarn ? cWarn : usingAggregatedFeed ? cGood : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 0, 6, '量能', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 6, volTxtA, text_color = perpDomA ? cWarn : volUpA ? cGood : volDnA ? cWarn : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 0, 7, '爆仓', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 7, liqTxtA, text_color = shortLiqA ? cGood : longLiqA ? cBad : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
-        int opRow = ACT_COMPACT ? 4 : 8
+        int opRow = ACT_COMPACT ? (riskWarnA != '' ? 3 : 2) : 8
         table.cell(actT, 0, opRow, '操作', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 1, opRow, comboTxt, text_color = cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
 
@@ -473,13 +452,10 @@ alertcondition(alertOkA and lowCoverageWarn, '低覆盖降权', '聚合覆盖率
 alertcondition(alertOkA and singleExchangeDomWarn, '单所主导降权', '聚合量能由单一交易所主导，副指标信号需降权处理')
 alertcondition(alertOkA and oiDivergeA, 'OI背离', '价格与 OI 方向背离，警惕衰竭或挤仓')
 alertcondition(alertOkA and htfConflict, '高周期冲突', '副指标与高周期方向冲突，避免追单')
-alertcondition(alertOkA and cvdDivAnyA, '估算CVD背离', '估算CVD与价格出现三重过滤背离，副指标信号降权')
 
 // — TV MCP Data Window 编码导出（供 study_values 读取 + 渲染器消费）
 plot(oiOkA ? oiCloseA : na, "OI Total", display=display.data_window)
-plot(na(sessCvdA) ? na : sessCvdA, "Estimated CVD Value", display=display.data_window)
-plot(cvdMethodCodeA, "CVD Method Code", display=display.data_window)
-plot(cvdQualityCodeA, "CVD Quality Code", display=display.data_window)
+plot(na(sessCvdA) ? na : sessCvdA, "CVD Value", display=display.data_window)
 plot(volMaA > 0 ? Volume / volMaA : na, "Volume Ratio", display=display.data_window)
 plot(validExchangeCount, "Coverage Exchanges", display=display.data_window)
 plot(spotValidCount, "Coverage Spot", display=display.data_window)

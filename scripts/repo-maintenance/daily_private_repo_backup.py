@@ -52,7 +52,7 @@ def backup_ignored_tools() -> list[str]:
 def main() -> int:
     now = datetime.now(TZ)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    report = [f"每日私人仓库备份 · {now.strftime('%Y-%m-%d %H:%M:%S')}"]
+    report = [f"每日私人仓库备份 · {now.strftime('%Y年%m月%d日%H：%M')}"]
 
     if not (ROOT / ".git").exists():
         report.append(f"状态：失败 · 非git仓库 {ROOT}")
@@ -71,6 +71,7 @@ def main() -> int:
     status_lines = [line for line in status.splitlines() if line.strip()]
     report.append(f"待提交：{len(status_lines)} 项")
 
+    commit_code = None
     if not status_lines:
         report.append("提交：跳过 · 无改动")
     else:
@@ -92,7 +93,33 @@ def main() -> int:
 
     # 维护类任务：只在真正发生提交/推送或失败时输出，避免每天“无改动”刷屏。
     if status_lines or push_code != 0 or copied:
-        print("\n".join(report))
+        commit_state = "跳过" if not status_lines else ("成功" if "commit_code" in locals() and commit_code == 0 else "失败")
+        status_text = "✅成功" if push_code == 0 else "⚠失败"
+        mobile_report = [
+            f"{status_text} · 每日系统备份 · {now.strftime('%Y年%m月%d日%H：%M')}",
+            "",
+            "表1 · 任务概况",
+            "| 项目 | 数据 | 状态 |",
+            "|:----|:----|:----|",
+            f"| 任务 | 私仓备份 | {status_text} |",
+            f"| 待提交 | `{len(status_lines)}`项 | {'有变更' if status_lines else '无变更'} |",
+            f"| 忽略备份 | `{len(copied)}`项 | {'已复制' if copied else '无'} |",
+            "",
+            "表2 · Git结果",
+            "| 模块 | 数据 | 状态 |",
+            "|:----|:----|:----|",
+            f"| 远端 | origin/main | 已检查 |",
+            f"| 提交 | {commit_state} | {'已写入' if status_lines and commit_state == '成功' else '跳过/失败'} |",
+            f"| 推送 | exit`{push_code}` | {'✅成功' if push_code == 0 else '⚠失败'} |",
+            "",
+            "表3 · 处理预案",
+            "| 方向 | 触发 | 动作 |",
+            "|:---:|:----|:----|",
+            f"| {'○完成' if push_code == 0 else '×修复'} | push exit`{push_code}` | {'无需操作' if push_code == 0 else '查看日志'} |",
+            f"| ⚠日志 | `{log_file.as_posix()}` | 已落盘 |",
+            "| ↑下次 | 明日07：45 | 自动备份 |",
+        ]
+        print("\n".join(mobile_report))
     return 0 if push_code == 0 else 1
 
 

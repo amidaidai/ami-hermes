@@ -202,7 +202,7 @@ def collect_recent_logs() -> list[str]:
 def main() -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     start_ts = datetime.now(TZ)
-    date_str = start_ts.strftime("%Y-%m-%d %H:%M:%S")
+    date_str = start_ts.strftime("%Y年%m月%d日%H：%M")
 
     # 执行所有审计
     skill_result = check_skill_integrity()
@@ -293,10 +293,39 @@ def main() -> int:
         (1 if log_warnings else 0)
     )
 
-    if total_issues == 0:
-        lines.append(f"\n✅ 全部 {len(mcp_results) + 6} 项检查通过")
-    else:
-        lines.append(f"\n⚠ {total_issues} 项异常，请及时处理")
+    status_text = "✅全通过" if total_issues == 0 else f"⚠异常{total_issues}项"
+    skill_status_text = "✅干净" if skill_result["status"] == "clean" else ("⚠有问题" if skill_result["status"] == "issues" else "⚠跳过/失败")
+    doctor_status_text = "✅正常" if doctor_result["status"] == "ok" and doctor_result.get("warnings", 0) == 0 else "⚠需关注"
+    disk_status_text = "✅正常" if not disk_warnings else "⚠空间不足"
+    git_status_text = "✅干净" if git_result.get("status") == "clean" else f"⚠{git_result.get('modified', 0)}项未提交"
+    log_status_text = "✅无异常" if not log_warnings else f"⚠{len(log_warnings)}条"
+
+    lines = [f"{status_text} · 每日系统审计 · {date_str}", ""]
+    lines.extend([
+        "表1 · 任务概况",
+        "| 项目 | 数据 | 状态 |",
+        "|:----|:----|:----|",
+        f"| 任务 | 每日系统审计 | {status_text} |",
+        f"| 耗时 | `{elapsed:.0f}s` | no_agent |",
+        f"| 报告 | `{LOG_DIR.as_posix()}` | 已落盘 |",
+        "",
+        "表2 · 核心健康",
+        "| 模块 | 数据 | 状态 |",
+        "|:----|:----|:----|",
+        f"| 技能 | `{skill_result.get('scanned_skill_md', 0)}`个SKILL | {skill_status_text} |",
+        f"| MCP | `{mcp_ok}/{len(mcp_results)}`正常 | {'✅正常' if mcp_fail == 0 else '⚠异常'} |",
+        f"| Hermes | doctor警告`{doctor_result.get('warnings', 0)}` | {doctor_status_text} |",
+        f"| 磁盘 | C/D盘检查 | {disk_status_text} |",
+        f"| Git | 未提交`{git_result.get('modified', 0)}`项 | {git_status_text} |",
+        f"| 日志 | 最近5个log | {log_status_text} |",
+        "",
+        "表3 · 处理预案",
+        "| 方向 | 触发 | 动作 |",
+        "|:---:|:----|:----|",
+        f"| {'×修复' if total_issues else '○保持'} | 异常`{total_issues}`项 | {'按模块处理' if total_issues else '静默不推'} |",
+        f"| ⚠仓库 | Git未提交`{git_result.get('modified', 0)}`项 | {'备份提交' if git_result.get('modified', 0) else '无需操作'} |",
+        f"| ↑系统 | MCP异常`{mcp_fail}`个 | {'重测失败项' if mcp_fail else '继续监控'} |",
+    ])
 
     report = "\n".join(lines)
 

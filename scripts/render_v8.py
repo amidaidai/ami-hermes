@@ -81,22 +81,23 @@ def _main_tf(symbol: str) -> str:
 
 def _tf_row(tf: str, k: dict, fallback: str = "") -> str:
     if not isinstance(k, dict) or not k:
-        return f"| {tf} | 待刷新 | 待刷新 | 缺现场数据，降级参考 |"
-    desc = k.get("description") or fallback or k.get("direction") or "待判"
-    pos = []
-    for key, label in (("vwap", "VWAP"), ("poc", "POC"), ("vah", "VAH"), ("val", "VAL")):
-        if k.get(key) not in (None, "", 0):
-            pos.append(f"{label} {_price(k.get(key))}")
-    if k.get("ema21"):
-        pos.append(f"EMA21 {_price(k.get('ema21'))}")
-    if k.get("change_pct") is not None:
+        return f"| {tf} | 待刷新 | 待刷新 | — | 待刷新 |"
+    desc = k.get("description") or fallback or k.get("direction") or k.get("svp") or "待判"
+    sub = k.get("sub_indicator") or k.get("sub") or k.get("volume_agg") or k.get("oi") or k.get("orderflow") or "待刷新"
+    composite = k.get("composite") or k.get("Composite") or k.get("sub_composite") or k.get("confirm_score") or "—"
+    vwap = k.get("vwap") or k.get("S VWAP")
+    px = k.get("close") or k.get("price") or k.get("last_price")
+    if vwap not in (None, "", 0) and px not in (None, "", 0):
         try:
-            pos.append(f"变动 {float(k.get('change_pct')):+.2f}%")
+            diff = (float(px) - float(vwap)) / float(vwap) * 100
+            vwap_txt = f"{'上方' if diff > 0 else '下方' if diff < 0 else '贴合'} {diff:+.2f}%"
         except Exception:
-            pass
-    ind = " · ".join(pos) if pos else "待刷新"
-    meaning = "主执行" if tf in {"15m", "5m"} else "背景继承" if tf in {"D", "4h"} else "结构确认"
-    return f"| {_cell(tf)} | {_cell(desc)} | {_cell(ind)} | {_cell(meaning)} |"
+            vwap_txt = f"VWAP {_price(vwap)}"
+    elif vwap not in (None, "", 0):
+        vwap_txt = f"VWAP {_price(vwap)}"
+    else:
+        vwap_txt = "待刷新"
+    return f"| {_cell(tf)} | {_cell(desc)} | {_cell(sub)} | {_cell(composite)} | {_cell(vwap_txt)} |"
 
 
 def _level_rows(levels: list[dict], price: float | None, klines: dict | None = None) -> list[str]:
@@ -125,16 +126,17 @@ def _level_rows(levels: list[dict], price: float | None, klines: dict | None = N
     for item in clean:
         lvl = item["level"]
         if price:
-            rel = "上方" if lvl > price else "下方" if lvl < price else "当前"
+            direction = "上方阻力/目标" if lvl > price else "下方支撑/失效" if lvl < price else "当前价"
             dist = abs(lvl - price) / price * 100
-            use = f"{rel}{dist:.2f}% · 触及后等CVD/主动买卖确认"
+            dist_txt = f"{dist:.2f}%"
         else:
-            use = "等价格确认"
-        rows.append(f"| {_cell(item['side'])} | {_price(lvl)} | {_cell(item['name'])} | {_cell(use)} |")
+            direction = item.get("side") or "关键位"
+            dist_txt = "待现价"
+        nature = f"{item.get('side','level')} · {item.get('name','')}"
+        rows.append(f"| {_cell(direction)} | {_price(lvl)} | {_cell(nature)} | {_cell(dist_txt)} |")
     if not rows:
         rows.append("| 待刷新 | `—` | TV/数据桥 | 无关键位则禁追 |")
     return rows
-
 
 def _bias_label(direction: str, status: str) -> str:
     if status.startswith("X"):
@@ -219,8 +221,8 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         "",
         "### 多周期定位",
         "",
-        "| 周期 | SVP/结构 | VWAP/EMA/CVD/OI | 交易含义 |",
-        "|---|---|---|---|",
+        "| 周期 | SVP | 副指标 | Composite | 价 vs VWAP |",
+        "|---|---|---|---:|---|",
         _tf_row("D", klines.get("D", {}), "日线背景"),
         _tf_row("4h", klines.get("4h", {})),
         _tf_row("1h", klines.get("1h", {})),
@@ -229,31 +231,31 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         "",
         "### 关键位矩阵",
         "",
-        "| 类型 | 价位 | 来源 | 用法 |",
-        "|---|---:|---|---|",
+        "| 方向 | 价位 | 性质 | 距现价 |",
+        "|---|---:|---|---:|",
     ]
     lines.extend(_level_rows(levels, price, klines))
     lines.extend([
         "",
         "### 多源交叉验证",
         "",
-        "| 来源 | 当前读数 | 偏向 | 处理 |",
-        "|---|---|---|---|",
-        f"| TV SVP v10 | {tv_summary} | {tv_bias} | {tv_action} |",
-        f"| 订单流/CVD | {flow_summary} | {cvd_dir or '待判'} | {orderflow_action} |",
-        f"| 量价健康度 | 吸收{'待判' if not vwap_ema else '正常'} · 扫荡{sweep_state or '待判'} · 位移{displacement or '待判'} | 中性 | CVD不配不追 |",
-        f"| 宏观/事件 | {macro_summary} | 中性验证 | 事件窗口降级 |",
-        f"| 社区/情绪 | F&G {fg_v} · 市场热度待核 | 反指辅助 | 不覆盖结构 |",
-        f"| 风控/Protections | {prot_status} | {'通过' if '通过' in str(prot_status) else '降级'} | 不通过则禁做 |",
-        "",
+        "| 维度 | 数值 | 方向 |",
+        "|---|---|---|",
+        f"| TV SVP v10 | {tv_summary} | {tv_bias} · {tv_action} |",
+        f"| 订单流/CVD | {flow_summary} | {cvd_dir or '待判'} · {orderflow_action} |",
+        f"| 量价健康度 | 吸收{'待判' if not vwap_ema else '正常'} · 扫荡{sweep_state or '待判'} · 位移{displacement or '待判'} | CVD不配不追 |",
+        f"| 宏观/事件 | {macro_summary} | 事件窗口降级 |",
+
+        f"| 风控/Protections | {prot_status} | {'通过' if '通过' in str(prot_status) else '降级/禁做'} |",
+
         "### 矛盾点",
         "",
-        "| 项目 | 证据 | 裁决 |",
-        "|---|---|---|",
-        f"| 多头证据 | {bull_text} | {'保留' if bull_evidence else '不足'} |",
-        f"| 空头证据 | {bear_text} | {'压制' if bear_evidence else '不足'} |",
-        f"| 裁决 | {verdict} | {status} |",
-        "",
+        "| 矛盾 | 多头 | 空头 | 裁决 |",
+        "|---|---|---|---|",
+        f"| 多空证据 | {bull_text} | {bear_text} | {verdict} |",
+        f"| 风控状态 | {'Protections通过' if '通过' in str(prot_status) else '—'} | {'风控' + str(prot_status) if '通过' not in str(prot_status) else '—'} | {status} |",
+        f"| R:R | {'主线1:' + format(rr_a, '.1f') if rr_a >= 2 else '—'} | {'主线R:R不足1:' + format(rr_a, '.1f') if rr_a < 2 else '—'} | {'可等触发' if rr_a >= 2 else '不追'} |",
+
         "### 执行预案",
         "",
         "| 方案 | 条件 | 入场 | 止损 | 目标 | R:R | 仓位 |",

@@ -509,117 +509,92 @@ def signal_emoji(sig_type, val):
 
 
 def build_report(candidates, ts):
-    """Build formatted report with multi-source verification. 纯Markdown表格格式."""
+    """Build Telegram-mobile report: 首行结论 + 3张≤3列Markdown管道表."""
     lines = []
 
-    if not candidates:
-        lines.append(f"🛡️ Orion 全市场雷达 · {ts}")
-        lines.append("")
-        lines.append("✅ 无明显异动，市场平静。")
-        return "\n".join(lines)
-
-    # Sort by confidence
-    candidates.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+    # Sort by confidence, then |OI%|, matching the Telegram LLM prompt rule.
+    candidates.sort(key=lambda x: (x.get("confidence", 0), abs(x.get("oi_chg") or 0)), reverse=True)
     top = candidates[:MAX_OUTPUT]
-
-    lines.append(f"🛡️ Orion 全市场雷达 · {ts}")
-    lines.append("")
-
-    # ── Table 1: 验证链 ──
-    hl_ok = any(c.get('hl_confirmed') for c in candidates)
-    lines.append("**表1 · 验证链**")
-    lines.append("| 层 | 源 | 状态 |")
-    lines.append("|:--|:--|:--:|")
-    lines.append(f"| ① | Orion Binance | ✅ {len(candidates)} 候选 |")
-    lines.append(f"| ② | Hyperliquid | {'✅ 跨所确认' if hl_ok else '❌ 无对应品种'} |")
+    hl_ok = any(c.get("hl_confirmed") for c in candidates)
     bn_count = sum(1 for c in candidates if c.get("binance"))
-    lines.append(f"| ③ | Binance REST | {'✅ ' + str(bn_count) + '深度验证' if HAS_KEYS else '⏳ 无 API Key'} |")
     cg_count = sum(1 for c in candidates if c.get("coingecko"))
-    lines.append(f"| ④ | CoinGecko | {'✅ ' + str(cg_count) + '确认' if cg_count else ('❌ 0确认' if HAS_CG else '❌ 未配置')} |")
-    lines.append("")
-
-    # Summary
     high_conf = sum(1 for c in candidates if c.get("confidence", 0) >= 6)
     med_conf = sum(1 for c in candidates if 4 <= c.get("confidence", 0) < 6)
-    low_conf = sum(1 for c in candidates if c.get("confidence", 0) < 4)
-    lines.append(f"{len(candidates)} 检测 · 🟢高 {high_conf} · 🟡中 {med_conf} · ⚪低 {low_conf}")
+
+    if not candidates:
+        lines.append(f"○ Orion雷达 · 无高置信候选 · {ts}")
+        lines.append("")
+        lines.append("表1 · 验证链")
+        lines.append("| 来源 | 状态 | 备注 |")
+        lines.append("|:----|:----|:----|")
+        lines.append("| Orion | ✅已扫描 | 无通过候选 |")
+        lines.append("| Binance/CG | ○待触发 | 无需深验 |")
+        lines.append("")
+        lines.append("表2 · 候选数据")
+        lines.append("| 品种 | 数据 | 信号 |")
+        lines.append("|:----|:----|:----|")
+        lines.append("| — | confidence≥4无通过 | ○等待 |")
+        lines.append("")
+        lines.append("表3 · 判断")
+        lines.append("| 方向 | 条件 | 动作 |")
+        lines.append("|:---:|:----|:----|")
+        lines.append("| ○等待 | 无中高置信异动 | 不追单 |")
+        return "\n".join(lines)
+
+    lines.append(f"⚡ Orion雷达 · 候选{len(candidates)}个 · {ts}")
     lines.append("")
 
-    # ── Table 2: 候选详细数据 ──
-    lines.append("**表2 · 候选数据**")
-    lines.append("| # | 品种 | 现价 | 1h% | OI($) | OI% | 资金费率 | 多空比 | Taker | 置信度 |")
-    lines.append("|:-:|:----|:---:|:---:|:-----:|:---:|:-------:|:-----:|:-----:|:-----:|")
-
-    for i, c in enumerate(top[:8], 1):
-        price_str = f"${c['price']}" if c['price'] < 1000 else f"${c['price']:,.0f}"
-        chg_str = f"{c.get('chg_1h',0):+.2f}%"
-        oi_str = fmt_volume(c.get('oi_usd',0))
-        oi_chg_str = f"{c.get('oi_chg',0):+.2f}%"
-        fund_str = fmt_funding(c.get('funding',0))
-        
-        bn = c.get("binance")
-        if bn:
-            ls_str = f"{bn.get('ls_ratio', '—'):.2f}x{bn.get('ls_dir','')}" if bn.get('ls_ratio') else "—"
-            taker_str = f"{bn.get('taker_dir','')}{bn.get('taker_ratio','—')}" if bn.get('taker_ratio') else "—"
-        else:
-            ls_str = "—"
-            taker_str = "—"
-        
-        conf_str = f"{c.get('confidence',0):.1f}"
-        
-        lines.append(f"| {i} | {c['symbol']} | {price_str} | {chg_str} | {oi_str} | {oi_chg_str} | {fund_str} | {ls_str} | {taker_str} | {conf_str} |")
-
+    lines.append("表1 · 验证链")
+    lines.append("| 来源 | 状态 | 备注 |")
+    lines.append("|:----|:----|:----|")
+    lines.append(f"| Orion Binance | ✅{len(candidates)}候选 | 高{high_conf}·中{med_conf} |")
+    lines.append(f"| Hyperliquid | {'✅跨所确认' if hl_ok else '❌无对应'} | {'有共振' if hl_ok else '单所为主'} |")
+    lines.append(f"| Binance/CG | {'✅' + str(bn_count) + '深验' if HAS_KEYS else '⏳无Key'} | CG{cg_count}确认 |")
     lines.append("")
 
-    # ── Table 3: 判断 ──
-    lines.append("**表3 · 判断**")
-    lines.append("| 品种 | OI+价 | 费率 | Taker | 综合判断 |")
-    lines.append("|:----|:-----|:----|:-----|:--------|")
-    for c in top[:6]:
+    lines.append("表2 · 候选数据")
+    lines.append("| 品种 | 数据 | 信号 |")
+    lines.append("|:----|:----|:----|")
+    for c in top:
+        symbol = c.get("symbol", "?")
+        price_str = fmt_price(c.get("price"))
+        chg_str = fmt_pct(c.get("chg_1h") or 0)
+        oi_str = fmt_volume(c.get("oi_usd", 0))
+        oi_chg_str = fmt_pct(c.get("oi_chg") or 0)
+        fund_str = fmt_funding(c.get("funding") or 0)
+        conf_str = f"{c.get('confidence', 0):.1f}"
+        bn = c.get("binance") or {}
+        taker = "—"
+        if bn.get("taker_ratio"):
+            taker = f"主动{bn.get('taker_dir', '中性')}{float(bn.get('taker_ratio', 1)):.2f}"
+        data = f"价`{price_str}`·1h`{chg_str}`·OI`{oi_str}`"
+        signal = f"OI`{oi_chg_str}`·费`{fund_str}`·信`{conf_str}`·{taker}"
+        lines.append(f"| {symbol} | {data} | {signal} |")
+    lines.append("")
+
+    lines.append("表3 · 判断")
+    lines.append("| 品种 | 判断 | 动作 |")
+    lines.append("|:----|:----|:----|")
+    for c in top:
+        symbol = c.get("symbol", "?")
         oi_chg = c.get("oi_chg") or 0
         chg = c.get("chg_1h") or 0
         funding = c.get("funding") or 0
-        bn = c.get("binance")
-        
-        # OI+price
-        if oi_chg > 0 and chg > 0: oi_price = "📈 同涨真突破"
-        elif oi_chg > 0 and chg < 0: oi_price = "⚠️ OI涨价跌出货"
-        elif oi_chg < 0 and chg > 0: oi_price = "💨 空平反弹"
-        elif oi_chg < 0 and chg < 0: oi_price = "📉 同跌趋势下行"
-        else: oi_price = "➖ 中性"
-        
-        # Funding
-        if funding < -0.001: fund_judge = "🔥 空头重仓"
-        elif funding > 0.001: fund_judge = "💰 多头拥挤"
-        else: fund_judge = "⚖ 中性"
-        
-        # Taker
-        if bn:
-            td = bn.get("taker_dir","")
-            tv = bn.get("taker_ratio", 1)
-            if td == "卖" and tv < 0.8: taker_judge = "⬇ 主动卖压"
-            elif td == "买" and tv > 1.2: taker_judge = "⬆ 主动买盘"
-            elif td == "卖": taker_judge = "🔻 卖方主导"
-            elif td == "买": taker_judge = "🔺 买方主导"
-            else: taker_judge = "➖ 无数据"
-        else:
-            taker_judge = "➖ 无数据"
-        
-        # Overall
         if oi_chg > 0 and chg > 0 and funding < -0.001:
-            verdict = "⚠️ 真突破+空头重仓·轧空潜力"
+            verdict, action = "⚡真突破+负费率", "等回踩做多"
         elif oi_chg > 0 and chg < 0 and funding < -0.001:
-            verdict = "❌ OI涨+价跌+费负=诱多陷阱"
+            verdict, action = "❌OI涨价跌", "禁抄底"
         elif oi_chg > 5 and chg < -3:
-            verdict = "❌ 暴跌中OI暴增=接盘"
+            verdict, action = "❌暴跌增仓", "等去杠杆"
         elif oi_chg > 0 and chg > 0:
-            verdict = "✅ 量价齐升·有机会"
+            verdict, action = "🐂量价齐升", "有机会"
         elif oi_chg < 0 and chg > 0:
-            verdict = "⚠️ 空平反弹·短命"
+            verdict, action = "⚠空平反弹", "只短打"
+        elif oi_chg < 0 and chg < 0:
+            verdict, action = "🐻去杠杆下跌", "不接刀"
         else:
-            verdict = "➖ 观望"
-        
-        lines.append(f"| {c['symbol']} | {oi_price} | {fund_judge} | {taker_judge} | {verdict} |")
+            verdict, action = "⚖中性", "观察"
+        lines.append(f"| {symbol} | {verdict} | {action} |")
 
     return "\n".join(lines)
 

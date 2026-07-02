@@ -11,8 +11,8 @@ WORKDIR = "D:/Hermes agent"
 
 
 def log(m):
-    safe = m.encode("ascii", "replace").decode("ascii")
-    print(f"[watchdog] {safe}", flush=True)
+    # 正常心跳不输出；异常重启只输出下方3表，避免Telegram收到调试散行。
+    return None
 
 
 # Check heartbeat
@@ -43,6 +43,7 @@ if alive:
 log("Heartbeat stale, restarting daemon...")
 
 # Kill old PID if file exists
+old = "无"
 try:
     if os.path.exists(PID_FILE):
         with open(PID_FILE) as f:
@@ -62,4 +63,25 @@ subprocess.Popen(
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
 )
 
-print(f"BTC daemon restarted at {time.strftime('%H:%M:%S')}")
+now_cn = time.strftime('%Y年%m月%d日%H：%M')
+print(f"⚠ BTC守护重启 · {now_cn}")
+print("")
+print("表1 · 任务概况")
+print("| 项目 | 数据 | 状态 |")
+print("|:----|:----|:----|")
+print("| 守护 | btc_daemon.py | 已重启 |")
+print("| 心跳 | 超过`120s` | 失联 |")
+print("| 目标 | TG386信号源 | 恢复中 |")
+print("")
+print("表2 · 处理结果")
+print("| 模块 | 数据 | 状态 |")
+print("|:----|:----|:----|")
+print(f"| 旧PID | `{old if 'old' in globals() else '无'}` | 已清理 |")
+print("| 新进程 | start/B python | 已拉起 |")
+print("| 日志 | stdout静默 | 防刷屏 |")
+print("")
+print("表3 · 处理预案")
+print("| 方向 | 触发 | 动作 |")
+print("|:---:|:----|:----|")
+print("| ○观察 | 2分钟后有心跳 | 无需操作 |")
+print("| ×修复 | 继续失联 | 查daemon日志 |")
