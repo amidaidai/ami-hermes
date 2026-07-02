@@ -1,7 +1,7 @@
 // This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // @HALDRO Project
-// @version=6
-indicator(title='Volume Aggregated Spot & Futures', shorttitle='Aggregated Volume', format=format.volume, max_bars_back=2000)
+//@version=6
+indicator(title='Volume Aggregated Spot & Futures', shorttitle='AggVol', format=format.volume, max_bars_back=2000)
 
 // ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————— \\
 // —————— Tips
@@ -28,7 +28,7 @@ TTEX   = 'You can write any name of the exchange in any field in the Exchanges g
 
 // —————— Inputs
 groupset     = '➤ 设置'
-mode         = input.string('Spot & Perp (%)', ' Mode     ',           group = groupset, inline = 'MODE', options = ['Volume', 'Volume (Colored)', 'Exchange Domination', 'Delta', 'Cumulative Delta', 'Spot & Perp (%)', 'Spot & Perp', 'Delta (Spot - Perp)', 'Liquidations', 'OBV', 'MFI'])
+mode         = input.string('Cumulative Delta', ' Mode     ',           group = groupset, inline = 'MODE', options = ['Volume', 'Volume (Colored)', 'Exchange Domination', 'Delta', 'Cumulative Delta', 'Spot & Perp (%)', 'Spot & Perp', 'Delta (Spot - Perp)', 'Liquidations', 'OBV', 'MFI'])
 datatype     = input.string('Aggregated',       ' 数据类型   ',        group = groupset, inline = 'MODE', options = ['Aggregated', 'Single'], tooltip = TTmode)
 coinusd      = input.string('USD',              ' 成交量单位 ',          group = groupset, inline = 'VOLM', options = ['COIN', 'USD', 'EUR', 'RUB'])
 calctype     = input.string('SUM',              ' 计算方式 ',       group = groupset, inline = 'VOLM', options = ['SUM', 'AVG', 'MEDIAN', 'VARIANCE'], tooltip = TTtype)
@@ -37,6 +37,9 @@ showMA       = input.bool  (false,              ' 显示均线',             g
 universalen  = input.int   (14,                 ' 回看周期  ',          group = groupset, inline = 'OTHR')
 FilterPeriod = input.int   (100,                ' 爆仓过滤',  group = groupset, inline = 'OTHR', minval=1, tooltip = TTlen)
 forceovy     = input.bool  (true,               '叠加到主图',                group = groupset, inline = 'CIPS', tooltip = TTtabl)
+MIN_COVERAGE_PCT = input.int(60, '聚合最低覆盖%', group = groupset, inline = 'CIPS', minval = 0, maxval = 100, tooltip = '聚合模式下，覆盖率低于该阈值时行动格会给出降权提示。0=关闭该告警。')
+MAX_EX_DOM_PCT = input.int(70, '单所主导阈值%', group = groupset, inline = 'CIPS', minval = 50, maxval = 100, tooltip = '聚合量能若主要来自单一交易所，说明共振质量下降，行动格会降权提示。')
+CONFIRM_ALERTS = input.bool(true, '提醒仅收盘确认', group = groupset, inline = 'CIPS', tooltip = '开启后告警只在K线收盘确认，减少盘中信号跳变。')
 
 // 交易所精简到5家（BINANCE/BYBIT/OKX/COINBASE/BITGET），省16个security配额供OI聚合
 groupexc     = '➤ 交易所(英文)'
@@ -74,7 +77,7 @@ GetTicker(exchange, typeSymbol) =>
 
 GetRequest(Ticker) =>
     GetVolume = request.security(Ticker, timeframe.period, CurrentVolume, ignore_invalid_symbol=true)
-    CheckVolume = GetVolume[1] > 0 ? GetVolume : 0
+    CheckVolume = not na(GetVolume) and GetVolume > 0 ? GetVolume : 0
 
 // 5家交易所（BINANCE/BYBIT/OKX/COINBASE/BITGET），20个静态security调用（5×4次GetExchange）
 GetExchange(typeSymbol)=>
@@ -106,7 +109,27 @@ GetSpotEX_5 = EditVolume(array.from(SPOT1_5, SPOT2_5)),     GetPerpEX_5 = EditVo
 
 SPOT   = GetSpotEX_1 + GetSpotEX_2 + GetSpotEX_3 + GetSpotEX_4 + GetSpotEX_5
 PERP   = GetPerpEX_1 + GetPerpEX_2 + GetPerpEX_3 + GetPerpEX_4 + GetPerpEX_5
-Volume = math.abs(datatype == 'Single' ? EditVolume(array.from(CurrentVolume)) : (SPOT + PERP + (EditVolume(array.from(CurrentVolume)))) - volume)
+ChartVolume = EditVolume(array.from(CurrentVolume))
+AggregatedVolume = SPOT + PERP
+Volume = math.abs(datatype == 'Single' ? ChartVolume : AggregatedVolume > 0 ? AggregatedVolume : ChartVolume)
+float exTotal1 = GetSpotEX_1 + GetPerpEX_1
+float exTotal2 = GetSpotEX_2 + GetPerpEX_2
+float exTotal3 = GetSpotEX_3 + GetPerpEX_3
+float exTotal4 = GetSpotEX_4 + GetPerpEX_4
+float exTotal5 = GetSpotEX_5 + GetPerpEX_5
+spotValidCount = (GetSpotEX_1 > 0 ? 1 : 0) + (GetSpotEX_2 > 0 ? 1 : 0) + (GetSpotEX_3 > 0 ? 1 : 0) + (GetSpotEX_4 > 0 ? 1 : 0) + (GetSpotEX_5 > 0 ? 1 : 0)
+perpValidCount = (GetPerpEX_1 > 0 ? 1 : 0) + (GetPerpEX_2 > 0 ? 1 : 0) + (GetPerpEX_3 > 0 ? 1 : 0) + (GetPerpEX_4 > 0 ? 1 : 0) + (GetPerpEX_5 > 0 ? 1 : 0)
+validExchangeCount = (exTotal1 > 0 ? 1 : 0) + (exTotal2 > 0 ? 1 : 0) + (exTotal3 > 0 ? 1 : 0) + (exTotal4 > 0 ? 1 : 0) + (exTotal5 > 0 ? 1 : 0)
+enabledExchangeCount = (EX_NO1 ? 1 : 0) + (EX_NO2 ? 1 : 0) + (EX_NO3 ? 1 : 0) + (EX_NO4 ? 1 : 0) + (EX_NO5 ? 1 : 0)
+coverageDenom = math.max(enabledExchangeCount, 1)
+aggCoveragePct = math.round(validExchangeCount / coverageDenom * 100)
+float maxExchangeVol = math.max(math.max(math.max(exTotal1, exTotal2), math.max(exTotal3, exTotal4)), exTotal5)
+float exchangeDominancePct = AggregatedVolume > 0 ? math.round(maxExchangeVol / AggregatedVolume * 100) : 0
+bool usingAggregatedFeed = datatype == 'Aggregated' and AggregatedVolume > 0
+bool fallbackToChartFeed = datatype == 'Aggregated' and AggregatedVolume <= 0
+bool lowCoverageWarn = datatype == 'Aggregated' and MIN_COVERAGE_PCT > 0 and aggCoveragePct < MIN_COVERAGE_PCT
+bool singleExchangeDomWarn = datatype == 'Aggregated' and AggregatedVolume > 0 and validExchangeCount >= 2 and exchangeDominancePct >= MAX_EX_DOM_PCT
+string coverageTxt = datatype == 'Single' ? '单源' : '聚合' + str.tostring(validExchangeCount) + '/' + str.tostring(enabledExchangeCount) + ' · 现' + str.tostring(spotValidCount) + ' 永' + str.tostring(perpValidCount) + (fallbackToChartFeed ? ' · 回退单图' : '') + (singleExchangeDomWarn ? ' · 单所' + str.tostring(exchangeDominancePct, '#') + '%' : '')
 
 // —————— Color Setup
 bull_color = #00d4b1bb
@@ -125,7 +148,7 @@ plot(mode == 'OBV' ? OBV : na, 'OBV', color = #7E57C2, style=plot.style_line)
 // —————— MFI
 float upperMFI = math.sum(Volume * (ta.change(hlc3) <= 0.0 ? 0.0 : hlc3), universalen)
 float lowerMFI = math.sum(Volume * (ta.change(hlc3) >= 0.0 ? 0.0 : hlc3), universalen)
-MFI = 100.0 - (100.0 / (1.0 + upperMFI / lowerMFI))
+MFI = lowerMFI == 0 ? (upperMFI == 0 ? 50.0 : 100.0) : 100.0 - (100.0 / (1.0 + upperMFI / lowerMFI))
 plot(mode == 'MFI' ? MFI : na, 'MFI', color = #7E57C2, style=plot.style_line)
 
 // ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————— \\
@@ -160,6 +183,7 @@ deltalen = universalen
 // —————— Check Candles
 bullCandle = (open < close)
 price_spread = (high - low)
+safe_spread = price_spread > 0 ? price_spread : na
 
 // —————— Set lengths
 upper_wick = (open < close) ? (high - close) : (high - open)
@@ -167,9 +191,9 @@ lower_wick = (open < close) ? (open - low) : (close - low)
 body = (high - low) - (upper_wick + lower_wick)
 
 // —————— Convert lengths to percents
-upper_wick_percent = upper_wick / (high - low)
-lower_wick_percent = lower_wick / (high - low)
-body_percent = body / (high - low)
+upper_wick_percent = not na(safe_spread) ? upper_wick / safe_spread : 0.0
+lower_wick_percent = not na(safe_spread) ? lower_wick / safe_spread : 0.0
+body_percent = not na(safe_spread) ? body / safe_spread : 0.0
 
 // —————— Calculate Delta
 volume_buy = Volume * ((open < close) ? (body_percent + (upper_wick_percent + lower_wick_percent) / 2) : (upper_wick_percent + lower_wick_percent) / 2)
@@ -204,9 +228,7 @@ colEXv3 = input.color( #9f0036, 'EX 3', group ='Volume (Colored)', inline = 'VC'
 colEXv4 = input.color( #a335ee, 'EX 4', group ='Volume (Colored)', inline = 'VC')
 colEXv5 = input.color( #0070dd, 'EX 5', group ='Volume (Colored)', inline = 'VC')
 
-EXlist = array.from(
-     (GetSpotEX_1 + GetPerpEX_1), (GetSpotEX_2 + GetPerpEX_2), (GetSpotEX_3 + GetPerpEX_3),
-     (GetSpotEX_4 + GetPerpEX_4), (GetSpotEX_5 + GetPerpEX_5))
+EXlist = array.from(exTotal1, exTotal2, exTotal3, exTotal4, exTotal5)
 EXnames  = array.from(IN_NO1, IN_NO2, IN_NO3, IN_NO4, IN_NO5)
 EXcolors = array.from(colEXv1, colEXv2, colEXv3, colEXv4, colEXv5)
 percform = array.new_float()
@@ -263,7 +285,7 @@ ACT_THEME= input.string('浅色', '配色主题', group = gp_act, options = ['�
 ACT_LB   = input.int(10,     '回看K数', group = gp_act, minval = 2, maxval = 50)
 ACT_TRANSP = input.int(50, '背景透明度', group = gp_act, minval = 0, maxval = 100, tooltip = '0=不透明完全挡K线，越大越透。默认50。')
 ACT_SIZE   = input.string('tiny', '字号', group = gp_act, options = ['tiny','small','normal','large'])
-ACT_COMPACT = input.bool(false, '精简模式(只留 信号/结论/操作)', group = gp_act, tooltip = '开启后只显示三行：信号灯共振、结论、操作，极简盯盘。')
+ACT_COMPACT = input.bool(true, '精简模式(只留 信号/结论/操作)', group = gp_act, tooltip = '开启后只显示三行：信号灯共振、结论、操作，极简盯盘。')
 ACT_CVD_ANCHOR = input.string('日', '会话CVD锚定', group = gp_act, options = ['日','周','月'], tooltip = '与主指标CVD口径对齐：日内盯盘用"日"，波段用"周/月"。默认日。')
 
 string baseA = syminfo.basecurrency
@@ -294,6 +316,7 @@ bool   oiUpA    = oiOkA and oiChgA > 0
 bool   oiDnA    = oiOkA and oiChgA < 0
 // OI×价格背离：价涨仓跌或价跌仓涨 = 杠杆与价格反向，挤压/瀑布前兆，标⚡
 bool   oiDivergeA = oiOkA and ((priceUpA and oiDnA) or (priceDnA and oiUpA))
+string flowTagA = not oiOkA ? '无OI' : priceUpA and oiUpA ? '新多' : priceDnA and oiUpA ? '新空' : priceUpA and oiDnA ? '空补' : priceDnA and oiDnA ? '多平' : '持平'
 string oiTxtA   = (not oiOkA ? '' : oiDivergeA ? '⚡' : oiUpA ? '▲' : oiDnA ? '▼' : '·') + (not oiOkA ? '无OI数据' : priceUpA and oiUpA ? '新多进场(真)' : priceUpA and oiDnA ? '空头回补(衰竭)' : priceDnA and oiUpA ? '新空进场' : priceDnA and oiDnA ? '多头平仓(去杠杆)' : '持平')
 
 // —— 低周期累计：把每根Delta按选定周期累计成会话CVD，与主指标口径对齐 ——
@@ -313,6 +336,7 @@ bool   volUpA   = not na(volMaA) and volMaA > 0 and Volume >= volMaA * 1.2
 bool   volDnA   = not na(volMaA) and volMaA > 0 and Volume < volMaA
 bool   perpDomA = perc_perp >= 70
 string volTxtA  = (volUpA ? '▲' : volDnA ? '▼' : '·') + (volUpA ? '放量' : volDnA ? '缩量' : '平量') + ' · 合' + str.tostring(perc_perp, '#') + '%' + (perpDomA ? '⚠主导' : '')
+string coverageRowA = coverageTxt + (datatype == 'Aggregated' ? ' · 覆盖' + str.tostring(aggCoveragePct) + '%' + (lowCoverageWarn ? ' ⚠低覆盖' : '') : '')
 
 // —— 爆仓(Liquidations)：difference为过滤后的爆仓尖峰，蜡烛方向定多/空爆 ——
 bool   liqA      = difference > 0
@@ -347,6 +371,10 @@ bool htfConflict = (vGood and htfBearA) or (vBad and htfBullA)
 bool volVetoA = volDnA
 bool topExhaustA = shortLiqA and priceUpA
 bool botExhaustA = longLiqA and priceDnA
+bool absorbA = (priceUpA and cvdDnA and not oiDnA) or (priceDnA and cvdUpA and not oiDnA)
+string flowShortA = absorbA ? '吸收' : vExh ? '衰竭' : vDelev ? '去杠杆' : flowTagA
+int confirmScoreA = math.min(math.max(confirmsA + (usingAggregatedFeed and not lowCoverageWarn and not singleExchangeDomWarn ? 1 : 0) - (htfConflict ? 2 : 0) - (lowCoverageWarn ? 1 : 0) - (singleExchangeDomWarn ? 1 : 0) - (oiDivergeA ? 1 : 0), 0), 5)
+string riskWarnA = lowCoverageWarn ? "⚠低覆盖" : singleExchangeDomWarn ? "⚠单所主导" : htfConflict ? "⚠HTF冲突" : oiDivergeA ? "⚠OI背离" : ""
 string actText = '中性 · 观望'
 if vGood
     actText := htfConflict ? '逆高周 · 短多但高周偏空,降级' : topExhaustA ? '轧空冲顶 · 追多风险大,警惕反转' : volVetoA ? '涨但缩量 · 动能弱,轻仓/不追' : '实涨可信 · 新钱+买盘 ✅'
@@ -358,7 +386,8 @@ else if vBad
     actText := htfConflict ? '逆高周 · 短空但高周偏多,降级' : botExhaustA ? '踩踏杀跌 · 或超跌反弹,别追空' : volVetoA ? '缩量阴跌 · 动能弱,别追空' : '真实下跌 · 新空进场 ✅'
 else if vDelev
     actText := '去杠杆 · 或超跌反弹'
-string comboTxt = htfConflict ? '逆高周,不追,等回调对齐' : volVetoA and (vGood or vBad) ? '⚠缩量,等放量再做' : vGood ? '配合主指标 A多/扫★HTF = 可做' : vDiv ? '主指标即便给多也降级/放弃' : vBad ? '配合主指标 A空 = 可做' : vDelev ? '别追空,等反弹' : '等方向明朗'
+bool dataQualityRiskA = lowCoverageWarn or singleExchangeDomWarn
+string comboTxt = dataQualityRiskA ? '数据质量降权,只作参考' : htfConflict ? '逆高周,不追,等回调对齐' : volVetoA and (vGood or vBad) ? '⚠缩量,等放量再做' : vGood ? '配合主指标 A多/扫★HTF = 可做' : vDiv ? '主指标即便给多也降级/放弃' : vBad ? '配合主指标 A空 = 可做' : vDelev ? '别追空,等反弹' : '等方向明朗'
 
 // —— 配色 ——
 bool  pnlLight = ACT_THEME == '浅色'
@@ -378,11 +407,11 @@ var string actPosSel = ACT_POS=='中上'?position.top_center:ACT_POS=='右上'?p
 var table actT = na
 if na(actT)
     if forceovy
-        actT := table.new(actPosSel, 2, 9, border_width = 1, border_color = color.new(color.gray, 60), frame_width = 1, frame_color = color.new(color.gray, 50), force_overlay = true)
+        actT := table.new(actPosSel, 2, 10, border_width = 1, border_color = color.new(color.gray, 60), frame_width = 1, frame_color = color.new(color.gray, 50), force_overlay = true)
     else
-        actT := table.new(actPosSel, 2, 9, border_width = 1, border_color = color.new(color.gray, 60), frame_width = 1, frame_color = color.new(color.gray, 50), force_overlay = false)
+        actT := table.new(actPosSel, 2, 10, border_width = 1, border_color = color.new(color.gray, 60), frame_width = 1, frame_color = color.new(color.gray, 50), force_overlay = false)
 if barstate.islast and SHOW_ACT
-    table.clear(actT, 0, 0, 1, 8)
+    table.clear(actT, 0, 0, 1, 9)
     if not isCryptoA
         table.cell(actT, 0, 0, '提示', text_color = color.new(#FFFFFF, 0), bgcolor = color.new(cWarn, 20), text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 1, 0, '非加密品种', text_color = color.new(#FFFFFF, 0), bgcolor = color.new(cWarn, 20), text_size = actSizeSel, text_halign = text.align_left)
@@ -392,9 +421,12 @@ if barstate.islast and SHOW_ACT
         table.cell(actT, 1, 2, '请看主指标判定', text_color = cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
     else
         table.cell(actT, 0, 0, '信号', text_color = color.new(#FFFFFF, 0), bgcolor = sigBg, text_size = actSizeSel, text_halign = text.align_left)
-        table.cell(actT, 1, 0, signalA, text_color = color.new(#FFFFFF, 0), bgcolor = sigBg, text_size = actSizeSel, text_halign = text.align_left)
+        table.cell(actT, 1, 0, signalA + ' · ' + flowShortA + ' ' + str.tostring(confirmScoreA) + '/5', text_color = color.new(#FFFFFF, 0), bgcolor = sigBg, text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 0, 1, '结论', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 1, 1, actText, text_color = vCol, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
+        if ACT_COMPACT and riskWarnA != ''
+            table.cell(actT, 0, 2, '风险', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 1, 2, riskWarnA, text_color = cWarn, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
         if not ACT_COMPACT
             table.cell(actT, 0, 2, '高周', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 2, htfTxtA, text_color = htfBullA ? cGood : htfBearA ? cBad : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
@@ -402,16 +434,36 @@ if barstate.islast and SHOW_ACT
             table.cell(actT, 1, 3, oiTxtA, text_color = oiUpA ? cGood : oiDnA ? cWarn : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 0, 4, '流向', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
             table.cell(actT, 1, 4, cvdTxtA, text_color = cvdUpA ? cGood : cvdDnA ? cBad : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 0, 5, '量能', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 1, 5, volTxtA, text_color = perpDomA ? cWarn : volUpA ? cGood : volDnA ? cWarn : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 0, 6, '爆仓', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
-            table.cell(actT, 1, 6, liqTxtA, text_color = shortLiqA ? cGood : longLiqA ? cBad : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
-        int opRow = ACT_COMPACT ? 2 : 7
+            table.cell(actT, 0, 5, '覆盖', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 1, 5, coverageRowA, text_color = fallbackToChartFeed or lowCoverageWarn ? cWarn : usingAggregatedFeed ? cGood : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 0, 6, '量能', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 1, 6, volTxtA, text_color = perpDomA ? cWarn : volUpA ? cGood : volDnA ? cWarn : cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 0, 7, '爆仓', text_color = cLabel, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
+            table.cell(actT, 1, 7, liqTxtA, text_color = shortLiqA ? cGood : longLiqA ? cBad : cVal, bgcolor = cBg2, text_size = actSizeSel, text_halign = text.align_left)
+        int opRow = ACT_COMPACT ? (riskWarnA != '' ? 3 : 2) : 8
         table.cell(actT, 0, opRow, '操作', text_color = cLabel, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
         table.cell(actT, 1, opRow, comboTxt, text_color = cVal, bgcolor = cBg1, text_size = actSizeSel, text_halign = text.align_left)
 
 // —— 共振提醒 ——
-alertcondition(strongA and dirUpA, '全网共振做多', '全网共振≥3 · 偏多 · 可配合主指标做多')
-alertcondition(strongA and dirDnA, '全网共振做空', '全网共振≥3 · 偏空 · 可配合主指标做空')
+bool alertOkA = not CONFIRM_ALERTS or barstate.isconfirmed
+alertcondition(alertOkA and strongA and dirUpA, '全网共振做多', '全网共振≥3 · 偏多 · 可配合主指标做多')
+alertcondition(alertOkA and strongA and dirDnA, '全网共振做空', '全网共振≥3 · 偏空 · 可配合主指标做空')
+alertcondition(alertOkA and lowCoverageWarn, '低覆盖降权', '聚合覆盖率不足，副指标信号需降权处理')
+alertcondition(alertOkA and singleExchangeDomWarn, '单所主导降权', '聚合量能由单一交易所主导，副指标信号需降权处理')
+alertcondition(alertOkA and oiDivergeA, 'OI背离', '价格与 OI 方向背离，警惕衰竭或挤仓')
+alertcondition(alertOkA and htfConflict, '高周期冲突', '副指标与高周期方向冲突，避免追单')
 
-// ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————— \\
+// — TV MCP Data Window 编码导出（供 study_values 读取 + 渲染器消费）
+plot(oiOkA ? oiCloseA : na, "OI Total", display=display.data_window)
+plot(na(sessCvdA) ? na : sessCvdA, "CVD Value", display=display.data_window)
+plot(volMaA > 0 ? Volume / volMaA : na, "Volume Ratio", display=display.data_window)
+plot(validExchangeCount, "Coverage Exchanges", display=display.data_window)
+plot(spotValidCount, "Coverage Spot", display=display.data_window)
+plot(perpValidCount, "Coverage Perp", display=display.data_window)
+plot(usingAggregatedFeed ? 1 : fallbackToChartFeed ? -1 : 0, "Coverage Feed Mode", display=display.data_window)
+plot(exchangeDominancePct, "Exchange Dominance %", display=display.data_window)
+plot(confirmScoreA, "Confirm Score", display=display.data_window)
+// 方向编码：负=空，零=无向，正=多，乘确认数编码强度
+plot(dirUpA ? 1 + confirmsA * 10 : dirDnA ? -(1 + confirmsA * 10) : 0, "Composite", display=display.data_window)
+
+// ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————— \\\
