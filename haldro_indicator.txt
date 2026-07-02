@@ -1,7 +1,7 @@
 // This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // @HALDRO Project
 //@version=6
-indicator(title='Volume Aggregated Spot & Futures', shorttitle='AggVol', format=format.volume, max_bars_back=2000)
+indicator(title='Volume Aggregated Spot & Futures', shorttitle='Aggregated Volume', format=format.volume, max_bars_back=2000)
 
 // ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————— \\
 // —————— Tips

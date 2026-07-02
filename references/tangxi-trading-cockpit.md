@@ -7,8 +7,8 @@
 | 模块 | 职责 | 主文件/能力 |
 |---|---|---|
 | 数据驾驶舱 | 多源采集、数据定级、新鲜度判断 | TV MCP、Binance、FinanceKit、Jin10、Web/X、CoinGecko、Polymarket、ETF Flow、Dune 链上、COT 报告 |
-| 结构驾驶舱 | 定方向、价值区、关键位、扫线、VWAP/EMA/CVD | TV主指标 SVP+ICT+VWAP+EMA+CVD |
-| 订单流驾驶舱 | 验证现货/永续、OI、CVD、Taker、Funding、期权 PCR/MaxPain | TV副指标、Binance OI/Taker/Funding、Deribit 期权 |
+| 结构驾驶舱 | 定方向、价值区、关键位、扫线、VWAP/EMA/CVD、FVG/HTF FVG、MCP DW | TV主指标 SVP+ICT+VWAP+CVD（2026-07-02生产版） |
+| 订单流驾驶舱 | 验证现货/永续、OI、CVD、覆盖率、Composite、Taker、Funding、期权 PCR/MaxPain | TV副指标 Volume Aggregated、Binance OI/Taker/Funding、Deribit 期权 |
 | 执行驾驶舱 | A/B/C/X 状态机、确认入场、失效、目标 | auto_card、render_tv_card、render_v8 |
 | 风控驾驶舱 | R:R、仓位、日损、连亏、事件禁做、复盘样本 | risk_state、strategy_model_stats、strategy_governance |
 | 监控驾驶舱 | 关键位接近/突破、自动推送、心跳、watchdog | 行情守望、watchdog、monitor_levels |

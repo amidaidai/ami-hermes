@@ -6,7 +6,7 @@
 > **策略**：分层分析（4h/1h收线分析·15m/5m实时监控）在 `references/tiered-analysis-strategy.md`
 > **数据源**：BTC主Binance(A级多空比·B级Taker·费率/OI/Basis) / XAU主OANDA→金十→Yahoo GC=F
 > **数据采集**：`python hermes/scripts/data_gatherer.py`（含恐慌贪婪+宏观关联）
-> **指标**：TV SVP+ICT+VWAP+EMA+CVD + Cumulative Volume Delta（MCP可读study_values/pine_tables）
+> **指标**：TV主指标 SVP+ICT+VWAP+CVD（含EMA/FVG/MCP DW） + 副指标 Volume Aggregated（OI/CVD/覆盖率/Composite；MCP可读study_values/pine_tables）
 > **情绪**：恐慌贪婪指数 + DMI决策表 + CoinDesk/Cointelegraph + Polymarket(浏览器)
 
 v9.7 完整能力：模板骨架(5段)+策略引擎(12模型+checklist+加权评分+置信公式)+监控(10s实时+双置信+事件禁做+看门狗)+数据(9源)+情绪(3路)+闭环(胜率追踪+仓位计算)

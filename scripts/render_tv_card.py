@@ -35,7 +35,7 @@ TZ = timezone(timedelta(hours=8))
 #   oiTxtA     = OI持仓变化
 #   cvdTxtA    = CVD流向
 #   volTxtA    = 量能状态
-#   shareTxtA  = 现货/永续占比
+#   coverageRowA = 覆盖率/单所主导
 #   liqTxtA    = 爆仓状态
 #   comboTxt   = 操作建议
 
@@ -103,7 +103,7 @@ def render_tv_card(
         }
         sub: 副指标(Volume行动格)数据 {
             signal, conclusion, htf, oi, cvd_flow,
-            volume, share, liquidation, operation,
+            volume, coverage, risk, liquidation, operation,
         }
         symbol: 品种代码
         price: 当前价格
@@ -119,7 +119,7 @@ def render_tv_card(
     oi_status = sub.get("oi", "")
     cvd_flow = sub.get("cvd_flow", "")
     vol_status = sub.get("volume", "")
-    share_data = sub.get("share", "")
+    share_data = sub.get("share", "") or sub.get("coverage", "") or sub.get("risk", "")
     liq_data = sub.get("liquidation", "")
     operation = sub.get("operation", "")
 
@@ -468,11 +468,14 @@ def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
                 except (ValueError, TypeError):
                     main[k.lower().replace(" ", "_")] = str(v)
 
-        # 副指标 Data Window 编码字段（子指标新增 plot dw 输出）
+        # 副指标 Data Window 字段（子指标新增 plot dw 输出）
         if "Volume" in name and ("Aggregated" in name or "Spot" in name):
             for k, v in vals.items():
-                if k in ("OI Total", "CVD Value", "Volume Ratio", "Composite"):
-                    main[k.lower().replace(" ", "_")] = v
+                if k in (
+                    "OI Total", "CVD Value", "Volume Ratio", "Coverage Exchanges", "Coverage Spot",
+                    "Coverage Perp", "Coverage Feed Mode", "Exchange Dominance %", "Confirm Score", "Composite",
+                ):
+                    sub[k.lower().replace(" ", "_").replace("%", "pct")] = v
 
     # 标准化 study_values 字段名：S VWAP → vwap, VAH Price → vah 等
     for src_key, dst_key in [
@@ -524,8 +527,10 @@ def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
             sub.setdefault("oi", sub.get("持仓", ""))
             sub.setdefault("cvd_flow", sub.get("流向", ""))
             sub.setdefault("volume", sub.get("量能", ""))
-            # 子指标没有独立"占比"行——占比嵌入在"量能"行"合N%"中
-            sub.setdefault("share", "")
+            sub.setdefault("coverage", sub.get("覆盖", ""))
+            sub.setdefault("risk", sub.get("风险", ""))
+            # 当前子指标没有独立"占比"行——合约占比嵌入在"量能"行"合N%"中
+            sub.setdefault("share", sub.get("覆盖", ""))
             sub.setdefault("liquidation", sub.get("爆仓", ""))
             sub.setdefault("operation", sub.get("操作", ""))
 

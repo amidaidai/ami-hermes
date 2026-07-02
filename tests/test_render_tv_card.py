@@ -74,3 +74,39 @@ def test_auto_card_builds_v2_action_panel_fields_for_renderer():
     assert main["target"] == "VAL 62,900 2.1R"
     assert main["magnet_down"] == "VAL 62,900 分85"
     assert main["vwap"] == 64000
+
+
+def test_auto_card_accepts_current_mcp_data_window_fields():
+    ac = _load(AUTO_CARD, "auto_card_under_test_mcp_dw")
+    vals = ac._parse_tv_study_values([
+        {"name": "SVP+ICT+VWAP+CVD", "values": {
+            "MCP Side Code": "-1", "MCP Grade Code": "3", "MCP Setup Score": "8",
+            "MCP Entry Price": "64,200", "MCP Stop Price": "64,850",
+            "MCP Target Price": "62,900", "MCP Quality Code": "48",
+        }},
+        {"name": "Volume Aggregated Spot & Futures", "values": {
+            "OI Total": "106.25 K", "Coverage Exchanges": "4", "Confirm Score": "3", "Composite": "-31",
+        }},
+    ])
+    main = ac._build_tv_main_data({}, vals)
+    assert main["grade"] == "A空"
+    assert main["mcp_setup_score"] == 8
+    assert main["mcp_quality_code"] == 48
+    assert main["sub_oi_total"] == 106250
+    assert main["sub_composite"] == -31
+
+
+def test_auto_card_parses_current_sub_indicator_rows():
+    ac = _load(AUTO_CARD, "auto_card_under_test_sub_rows")
+    rows = ac._parse_tv_sub_table([{"name": "Volume Aggregated Spot & Futures", "tables": [{"rows": [
+        "信号 | 🟡 偏空 · 2/4共振 · 新空 3/5",
+        "结论 | 真实下跌 · 新空进场 ✅",
+        "风险 | ⚠单所主导",
+        "覆盖 | 聚合4/5 · 现3 永4 · 覆盖80%",
+        "量能 | ▲放量 · 合72%⚠主导",
+        "操作 | 配合主指标 A空 = 可做",
+    ]}]}])
+    assert rows["signal"].startswith("🟡 偏空")
+    assert rows["risk"] == "⚠单所主导"
+    assert rows["coverage"].startswith("聚合4/5")
+    assert rows["volume"].startswith("▲放量")

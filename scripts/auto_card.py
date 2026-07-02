@@ -257,20 +257,27 @@ def _parse_tv_dmi_table(tv_tables: list | None) -> dict:
 
 
 def _parse_tv_study_values(tv_studies: list | None) -> dict:
-    """从 TradingView study values 提取关键数据。"""
+    """从 TradingView study values 提取关键数据。
+
+    2026年7月2日双指标协议：主指标已恢复 MCP Data Window 导出
+    (MCP Side/Grade/Score/Entry/Stop/Target/CVD/Quality)，副指标也导出
+    OI/CVD/Volume/Coverage/Composite。这里统一保留这些字段，供表格缺失
+    或 TV MCP 只返回 data_window 时兜底；行动格文字仍是进出场首选。
+    """
     result = {}
     if not tv_studies:
         return result
     for s in tv_studies:
         name = s.get("name", "")
         vals = s.get("values", {})
-        if "CVD" in name or "SVP" in name:
+        if "CVD" in name or "SVP" in name or "VWAP" in name or "Volume" in name or "Aggregated" in name:
             for k, v in vals.items():
                 try:
-                    val_str = str(v).replace("\u2212", "-").replace(",", "").replace("\u202fK", "").replace("\u202f", "").strip()
+                    val_raw = str(v)
+                    val_str = val_raw.replace("\u2212", "-").replace(",", "").replace("\u202fK", "").replace("\u202f", "").replace("%", "").strip()
                     # Also handle unicode minus sign
                     val_str = val_str.replace("\u2212", "-")
-                    result[k] = float(val_str) * (1000 if "K" in str(v) else 1)
+                    result[k] = float(val_str) * (1000 if "K" in val_raw else 1)
                 except (ValueError, TypeError):
                     result[k] = str(v)
     return result
@@ -320,8 +327,8 @@ def _parse_tv_sub_table(tv_tables: list | None) -> dict:
         if len(parts) == 2:
             key, val = parts[0].strip(), parts[1].strip()
             # 标准化键名
-            key_map = {"信号": "signal", "结论": "conclusion", "高周": "htf",
-                       "持仓": "oi", "流向": "cvd_flow", "量能": "volume",
+            key_map = {"信号": "signal", "结论": "conclusion", "风险": "risk", "高周": "htf",
+                       "持仓": "oi", "流向": "cvd_flow", "覆盖": "coverage", "量能": "volume",
                        "占比": "share", "爆仓": "liquidation", "操作": "operation"}
             mapped_key = key_map.get(key, key)
             rows[mapped_key] = val
@@ -363,9 +370,32 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
             ("S VWAP", "vwap"), ("VAH Price", "vah"), ("VAL Price", "val"),
             ("POC Price", "poc"), ("CVD Value", "cvd_value"), ("CVD Slope", "cvd_slope"),
             ("EMA 9", "ema9"), ("EMA 21", "ema21"), ("EMA 34", "ema34"), ("EMA 55", "ema55"),
+            ("MCP Side Code", "mcp_side_code"), ("MCP Grade Code", "mcp_grade_code"),
+            ("MCP Setup Score", "mcp_setup_score"), ("MCP Entry Price", "mcp_entry_price"),
+            ("MCP Stop Price", "mcp_stop_price"), ("MCP Target Price", "mcp_target_price"),
+            ("MCP CVD Value", "mcp_cvd_value"), ("MCP Quality Code", "mcp_quality_code"),
+            ("OI Total", "sub_oi_total"), ("Volume Ratio", "sub_volume_ratio"),
+            ("Coverage Exchanges", "sub_coverage_exchanges"), ("Coverage Spot", "sub_coverage_spot"),
+            ("Coverage Perp", "sub_coverage_perp"), ("Coverage Feed Mode", "sub_coverage_feed_mode"),
+            ("Exchange Dominance %", "sub_exchange_dominance_pct"),
+            ("Confirm Score", "sub_confirm_score"), ("Composite", "sub_composite"),
         ]:
             if tv_key in tv_vals:
                 main[dict_key] = tv_vals[tv_key]
+        if not main.get("grade") and "MCP Side Code" in tv_vals and "MCP Grade Code" in tv_vals:
+            try:
+                side = int(float(tv_vals.get("MCP Side Code", 0)))
+                grade_code = int(float(tv_vals.get("MCP Grade Code", 0)))
+                if side == 9 or grade_code < 0:
+                    main["grade"] = "X"
+                elif side == 1:
+                    main["grade"] = "A多" if grade_code == 3 else "B多" if grade_code == 2 else "C反多" if grade_code == 1 else "C等待"
+                elif side == -1:
+                    main["grade"] = "A空" if grade_code == 3 else "B空" if grade_code == 2 else "C反空" if grade_code == 1 else "C等待"
+                else:
+                    main["grade"] = "C等待"
+            except (TypeError, ValueError):
+                pass
     return main
 
 
