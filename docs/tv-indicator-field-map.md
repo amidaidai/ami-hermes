@@ -9,8 +9,8 @@
 
 | 指标 | 权威文件 | Pine | 行数 | 分工 |
 |---|---|---:|---:|---|
-| 主指标 | `D:/Hermes agent/svp_indicator.txt` | v5 | 3163 | 结构、位置、ICT/FVG、VWAP/EMA/CVD、DMI状态、进场/止损/目标、磁吸 |
-| 副指标 | `D:/Hermes agent/haldro_indicator.txt` | v6 | 469 | 聚合现货/永续成交量、OI价仓、会话CVD、量能、覆盖率、爆仓、订单流降级 |
+| 主指标 | `D:/Hermes agent/svp_indicator.txt` | v5 | 3163 · sha703eb981 | 结构、位置、ICT/FVG、VWAP/EMA/CVD、DMI状态、进场/止损/目标、磁吸 |
+| 副指标 | `D:/Hermes agent/haldro_indicator.txt` | v6 | 469 · shab049bac0 | 聚合现货/永续成交量、OI价仓、会话CVD、量能、覆盖率、爆仓、订单流降级 |
 
 主指标当前标题是 `SVP+ICT+VWAP+CVD`，但源码仍包含 EMA9/21/34/55、周/月VWAP、DO、FVG、Funding、ADR 等模块；不要因标题少写 EMA 就误判 EMA 不存在。
 

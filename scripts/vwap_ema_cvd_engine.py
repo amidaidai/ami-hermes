@@ -8,7 +8,7 @@ if hasattr(sys.stderr, "reconfigure"):
 # -*- coding: utf-8 -*-
 """
 棠溪 · VWAP+EMA+CVD 本地计算引擎 v1.0
-基于 TV Pine 指标参数（棠溪自定义·SVP+ICT+VWAP+EMA+CVD.txt）
+基于 TV Pine 主指标参数（棠溪生产版·SVP+ICT+VWAP+CVD；源码含EMA/VWAP/CVD）
 
 本地计算（不依赖TV CDP连接）：
   - VWAP + SD bands (1σ/2σ) — 从K线OHLC+Volume计算
@@ -26,7 +26,7 @@ import json
 ROOT = Path("D:/Hermes agent")
 DATA = ROOT / "data"
 
-# ═══ 棠溪指标参数（对齐 SVP+ICT+VWAP+EMA+CVD.txt）═══
+# ═══ 棠溪指标参数（对齐生产主指标 SVP+ICT+VWAP+CVD）═══
 # EMA
 EMA_PERIODS = [9, 21, 34, 55]
 EMA_FAST_CLOUD = (9, 21)   # 快速趋势云

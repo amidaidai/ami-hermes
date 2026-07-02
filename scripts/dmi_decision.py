@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 棠溪 · DMI 决策引擎 v1.1
-对标 SVP+ICT+VWAP+EMA+CVD 指标中的 DMI Strategy Table 评分逻辑
+对标 SVP+ICT+VWAP+CVD 生产主指标中的行动格/DMI评分逻辑（标题不含EMA，但源码含EMA9/21/34/55）
 
 趋势分 0-10 · 反转分 0-10 · A/B/C/X 四级
 v1.1: +CVD吸收/派发 +TV决策表直读 +KillZone +三层确认 +周月VWAP

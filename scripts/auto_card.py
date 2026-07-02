@@ -357,7 +357,8 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
         main["execution"] = dmi_rows.get("执行", "")
         main["risk"] = dmi_rows.get("风控", "")
         # 行动格 v2 字段：结论/方向/进场/止损/目标/核对/磁吸↑/磁吸↓。
-        # v2 不再有 Data Window 编码导出，进出场价格必须优先从这些表格行进入渲染器。
+        # 2026年7月2日生产版已恢复 MCP Data Window；进出场仍优先采用行动格原文，
+        # MCP Side/Grade/Entry/Stop/Target/Quality 只作稳定读取兜底与交叉校验。
         for src_key, dst_key in [
             ("方向", "direction_text"), ("进场", "entry"), ("止损", "stop"),
             ("目标", "target"), ("核对", "check"), ("磁吸↑", "magnet_up"),
@@ -2671,10 +2672,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
                                ("EMA 34", "ema34"), ("EMA 55", "ema55")]:
                     _v = _tv_raw.get(_k)
                     if _v:
-                        _study_vals.append({"name": "SVP+ICT+VWAP+EMA+CVD", "values": {_t: _v}})
+                        _study_vals.append({"name": "SVP+ICT+VWAP+CVD", "values": {_t: _v}})
                 engine_data["_tv_pine"] = {
                     "studies": _study_vals,
-                    "tables": [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": _dmi_rows}]}],
+                    "tables": [{"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": _dmi_rows}]}],
                 }
                 print(f"  ✅ 行动格v2解码: 等级={_tv_grade} | 进场={_tv_raw.get('tv_entry') or '—'} | 止损={_tv_raw.get('tv_stop') or '—'} | 目标={_tv_raw.get('tv_target') or '—'}")
     except Exception as _tve:
@@ -2974,7 +2975,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
                             _synth.append(f"处理 | {cache['treatment']}")
                         if _synth:
                             _raw_rows = _synth + _raw_rows
-                        tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": _raw_rows}]}]
+                        tables = [{"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": _raw_rows}]}]
                         # v9: 副指标数据（单独缓存或与 table_raw 并列）
                         if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
                             tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
@@ -3005,7 +3006,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
                             f"执行 | {execution}",
                             f"风控 | {risk}",
                         ]
-                        tables = [{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": dmi_rows_data}]}]
+                        tables = [{"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": dmi_rows_data}]}]
                         # v9: 副指标缓存注入
                         if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
                             tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})

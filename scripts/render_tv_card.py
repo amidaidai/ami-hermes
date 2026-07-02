@@ -4,8 +4,8 @@
 基于两个TV自定义指标的实时数据，直接输出简洁分析卡。
 
 两个指标：
-  主指标: SVP+ICT+VWAP+EMA+CVD (3000+行，含DMI决策引擎+行动格)
-  副指标: Volume Aggregated Spot & Futures (含OI/CVD/量能/爆仓行动格)
+  主指标: SVP+ICT+VWAP+CVD (生产版3163行；标题不含EMA但源码含EMA9/21/34/55、FVG、MCP Data Window、行动格v2)
+  副指标: Volume Aggregated Spot & Futures (生产版469行；OI/CVD/覆盖率/Composite/量能/爆仓行动格)
 
 输出模式：
   - push: 推送决策卡 (6-8行，电报/飞书)

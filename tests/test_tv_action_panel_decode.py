@@ -57,7 +57,7 @@ def test_grade_override_maps_to_status(ac, grade, exp_status, exp_dir, exp_plan)
         "tv_grade": grade, "tv_treatment": "回踩", "tv_conclusion": f"{grade} 回踩",
         "tv_direction": "偏多", "tv_entry": "62,480", "tv_stop": "61,950", "tv_target": "63,820",
     }
-    rows = ac._parse_tv_dmi_table([{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": _synth_rows(tv_raw)}]}])
+    rows = ac._parse_tv_dmi_table([{"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": _synth_rows(tv_raw)}]}])
     assert rows["等级"] == grade
     meta: dict = {}
     changes = ac._apply_tv_dmi_override(meta, {}, "BTCUSDT", rows, {})
@@ -76,7 +76,7 @@ def test_parse_handles_real_panel_values(ac):
         "tv_entry": "扫低收回 62,480", "tv_stop": "61,950 (1.8ATR)",
         "tv_target": "POC 63,820 R:R 1:2.5",
     }
-    rows = ac._parse_tv_dmi_table([{"name": "SVP+ICT+VWAP+EMA+CVD", "tables": [{"rows": _synth_rows(tv_raw)}]}])
+    rows = ac._parse_tv_dmi_table([{"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": _synth_rows(tv_raw)}]}])
     assert rows["处理"] == "回踩"
     assert rows["位置"] == "扫低收回 62,480"
     assert "标:POC 63,820 R:R 1:2.5" in rows["执行"]

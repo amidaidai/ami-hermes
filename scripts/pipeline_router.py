@@ -13,6 +13,7 @@ v1.1 (2026-06-29): 五层TF统一(D/4h/1h/15m/5m)·cron_read捷径·步数精简
 """
 
 import sys
+import re
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -22,10 +23,12 @@ if hasattr(sys.stderr, "reconfigure"):
 def _asset_class(symbol: str) -> str:
     su = symbol.upper()
     su_clean = su.split(":")[-1].replace("1!", "").replace("!", "")
+    # 期权必须先于 BTC/ETH/USDT 加密识别，否则 Deribit 格式
+    # BTC-29MAR24-60000-C / ETH-29MAR24-3000-P 会误走 crypto 10步管线。
+    if "CALL" in su or "PUT" in su or "OPTION" in su or re.search(r"-[CP]$", su_clean):
+        return "option"
     if "XAU" in su or "GOLD" in su or "XAG" in su:
         return "gold"
-    if "CALL" in su or "PUT" in su or "OPTION" in su:
-        return "option"
     # Forex markers
     forex = ["EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF"]
     if any(x in su for x in forex):
