@@ -169,10 +169,13 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
     tv_summary = "待现场读取"
     tv_bias = "观望"
     tv_action = "主驾驶"
+    if ac == "贵金属":
+        tv_summary = "XAU走gold-api+金十；TV SVP加密字段限制"
+        tv_action = "已知降级"
     if tv_dmi:
         tv_summary = " · ".join(str(tv_dmi.get(k, "")) for k in ("grade", "action", "position") if tv_dmi.get(k)) or "已读行动格"
         tv_bias = tv_dmi.get("bias_4h") or tv_dmi.get("cvd") or bias
-    elif vwap_ema.get("available"):
+    elif ac != "贵金属" and vwap_ema.get("available"):
         v = vwap_ema.get("vwap", {}) or {}
         tv_summary = f"本地VWAP {v.get('vwap', '—')} · {v.get('price_vs_vwap', '待判')}"
 

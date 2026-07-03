@@ -15,12 +15,21 @@ from tv_data_bridge import collect_and_cache  # noqa: E402
 if __name__ == "__main__":
     result = collect_and_cache(alert_mode="--alert" in sys.argv)
     if result is None:
-        print("tv_dmi_cache.json refresh failed: TradingView CDP unavailable")
+        print("tv cache refresh failed: TradingView CDP unavailable")
         sys.exit(1)
-    print(
-        "tv_dmi_cache.json refreshed:",
-        "symbol", result.get("symbol"),
-        "POC", result.get("poc"),
-        "VAH", result.get("vah"),
-        "VAL", result.get("val"),
-    )
+
+    live_path = ROOT / "data" / "tv_live.json"
+    live_path.parent.mkdir(parents=True, exist_ok=True)
+    live_payload = dict(result)
+    live_payload["source"] = "tv_live_dump"
+    live_path.write_text(__import__("json").dumps(live_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # 默认静默成功，避免 no_agent cron 噪音；--verbose 才输出摘要。
+    if "--verbose" in sys.argv:
+        print(
+            "tv_live.json refreshed:",
+            "symbol", result.get("symbol"),
+            "POC", result.get("poc"),
+            "VAH", result.get("vah"),
+            "VAL", result.get("val"),
+        )

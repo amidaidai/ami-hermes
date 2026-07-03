@@ -2633,9 +2633,11 @@ def auto_card(symbol: str, push: bool = False) -> str:
             except Exception:
                 pass
             
-            # ── K线：基于 gold-api/Jin10 真实数据构建（避免 TV MCP XAU 限制）──
+            # ── K线：基于 gold-api/Jin10 真实数据构建（TV SVP v10 对 XAU 为已知限制）──
             klines_dict = engine_data.setdefault("klines", {})
             if price and price > 0:
+                xau_tv_note = "XAU使用gold-api+金十代理；TV SVP v10含加密Funding/OI字段，OANDA:XAUUSD程序化读数禁用"
+                engine_data["_xau_tv_limitation"] = xau_tv_note
                 # 从金十/Jin10取24h高低
                 j_high = engine_data.get("binance_spot", {}).get("24h_high", price * 1.005)
                 j_low = engine_data.get("binance_spot", {}).get("24h_low", price * 0.995)
@@ -3123,49 +3125,61 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # v9.6: TV实时数据注入 — 优先读tv_live.json(agent现场) → 回退tv_dmi_cache.json(cron)
     try:
         import json as _j2
-        # 优先：agent上下文现场dump的tv_live.json（含完整POC/VAH/VAL/行动格）
-        live_path = ROOT / "data" / "tv_live.json"
-        cache_path2 = ROOT / "data" / "tv_dmi_cache.json"
-        c2 = None
-        skipped_tv_caches = []
-        for p in [live_path, cache_path2]:
-            if p.exists():
-                try:
-                    candidate = _j2.loads(p.read_text(encoding="utf-8"))
-                    if candidate.get("fresh") and candidate.get("poc"):
-                        cache_status2 = _tv_cache_status(candidate, symbol)
-                        if cache_status2.get("usable"):
-                            c2 = candidate
-                            engine_data["_tv_live_status"] = cache_status2
-                            break
-                        skipped_tv_caches.append(f"{p.name}: {cache_status2.get('reason')}")
-                except Exception as exc:
-                    skipped_tv_caches.append(f"{p.name}: {exc}")
-        if not c2 and skipped_tv_caches:
-            engine_data["_tv_live_status"] = {"usable": False, "reason": "; ".join(skipped_tv_caches)}
-            print(f"  ⚠ TV实时注入未采用: {'; '.join(skipped_tv_caches)}")
-        if c2 and c2.get("fresh") and c2.get("poc"):
-            klines = engine_data.setdefault("klines", {})
-            poc = c2.get("poc"); vah = c2.get("vah"); val = c2.get("val")
-            ag = c2.get("action_grid", {})
-            direction = ag.get("方向", "待判")
-            for tf in ["D", "4h", "1h", "15m", "5m"]:
-                if tf == "D":
-                    klines[tf] = {
-                        "close": poc, "high": vah or poc, "low": val or poc,
-                        "open": poc, "change_pct": 0,
-                        "poc": poc, "vah": vah, "val": val,
-                        "direction": direction,
-                        "description": f"TV现场 POC {poc:.0f} | VAH {vah:.0f} VAL {val:.0f} | {direction}",
-                    }
-                elif tf in klines and isinstance(klines[tf], dict):
-                    k = klines[tf]; k["poc"] = poc; k["vah"] = vah; k["val"] = val
-                    if "待" in str(k.get("description", "")):
-                        k["description"] = f"TV注入 POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f}"
-            if vah and val:
-                merged = engine_data.setdefault("merged", {})
-                merged["vah"] = vah; merged["val"] = val; merged["poc"] = poc
-            print(f"  📡 TV实时注入: POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f} → {len(klines)}周期")
+        if engine_data.get("_xau_tv_limitation"):
+            xau_tv_reason = str(engine_data.get("_xau_tv_limitation"))
+            engine_data.setdefault("_tv_live_status", {})
+            engine_data.setdefault("_tv_cache_status", {})
+            if isinstance(engine_data.get("_tv_live_status"), dict):
+                engine_data["_tv_live_status"]["usable"] = False
+                engine_data["_tv_live_status"]["reason"] = xau_tv_reason
+            if isinstance(engine_data.get("_tv_cache_status"), dict):
+                engine_data["_tv_cache_status"]["usable"] = False
+                engine_data["_tv_cache_status"]["reason"] = xau_tv_reason
+            print(f"  ℹ TV实时注入跳过: {xau_tv_reason}")
+        else:
+            # 优先：agent上下文现场dump的tv_live.json（含完整POC/VAH/VAL/行动格）
+            live_path = ROOT / "data" / "tv_live.json"
+            cache_path2 = ROOT / "data" / "tv_dmi_cache.json"
+            c2 = None
+            skipped_tv_caches = []
+            for p in [live_path, cache_path2]:
+                if p.exists():
+                    try:
+                        candidate = _j2.loads(p.read_text(encoding="utf-8"))
+                        if candidate.get("fresh") and candidate.get("poc"):
+                            cache_status2 = _tv_cache_status(candidate, symbol)
+                            if cache_status2.get("usable"):
+                                c2 = candidate
+                                engine_data["_tv_live_status"] = cache_status2
+                                break
+                            skipped_tv_caches.append(f"{p.name}: {cache_status2.get('reason')}")
+                    except Exception as exc:
+                        skipped_tv_caches.append(f"{p.name}: {exc}")
+            if not c2 and skipped_tv_caches:
+                engine_data["_tv_live_status"] = {"usable": False, "reason": "; ".join(skipped_tv_caches)}
+                print(f"  ⚠ TV实时注入未采用: {'; '.join(skipped_tv_caches)}")
+            if c2 and c2.get("fresh") and c2.get("poc"):
+                klines = engine_data.setdefault("klines", {})
+                poc = c2.get("poc"); vah = c2.get("vah"); val = c2.get("val")
+                ag = c2.get("action_grid", {})
+                direction = ag.get("方向", "待判")
+                for tf in ["D", "4h", "1h", "15m", "5m"]:
+                    if tf == "D":
+                        klines[tf] = {
+                            "close": poc, "high": vah or poc, "low": val or poc,
+                            "open": poc, "change_pct": 0,
+                            "poc": poc, "vah": vah, "val": val,
+                            "direction": direction,
+                            "description": f"TV现场 POC {poc:.0f} | VAH {vah:.0f} VAL {val:.0f} | {direction}",
+                        }
+                    elif tf in klines and isinstance(klines[tf], dict):
+                        k = klines[tf]; k["poc"] = poc; k["vah"] = vah; k["val"] = val
+                        if "待" in str(k.get("description", "")):
+                            k["description"] = f"TV注入 POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f}"
+                if vah and val:
+                    merged = engine_data.setdefault("merged", {})
+                    merged["vah"] = vah; merged["val"] = val; merged["poc"] = poc
+                print(f"  📡 TV实时注入: POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f} → {len(klines)}周期")
     except Exception as _tve:
         print(f"  ⚠ TV注入跳过: {_tve}")
     
