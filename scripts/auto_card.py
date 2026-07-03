@@ -3291,7 +3291,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
         if tv_usable:
             completed_steps.add("tv")
         if "cron_read" in pipeline_steps: completed_steps.add("cron_read")
-        if engine_data.get("cmc") or "CMC" in card or "Binance" in card: completed_steps.add("binance")
+        price_fields = engine_data.get("prices")
+        if not isinstance(price_fields, dict):
+            price_fields = {}
+        if (engine_data.get("cmc") or engine_data.get("cmc_global") or price_fields.get("futures") or engine_data.get("funding") or engine_data.get("oi") or "CMC" in card or "Binance" in card): completed_steps.add("binance")
         if engine_data.get("cg_top") or "CoinGecko" in card: completed_steps.add("cg_pro")
         if engine_data.get("x_sentiment") or "X情绪" in card: completed_steps.add("x_sent")
         if engine_data.get("cvd") or "CVD" in card: completed_steps.add("cvd")
@@ -3317,17 +3320,30 @@ def auto_card(symbol: str, push: bool = False) -> str:
                 step_notes[s] = "已完成"
             else:
                 step_notes[s] = "本轮未采到有效字段"
-        print(f"| 步骤 | 状态 | 备注 |")
-        print(f"|:---|:---:|:---|")
+        audit_lines = [
+            "### 管线完成度审计",
+            "",
+            "| 步骤 | 状态 | 备注 |",
+            "|:---|:---:|:---|",
+        ]
         for s in pipeline_steps:
             label = {"tv":"TV五层","binance":"Binance衍生品","cg_pro":"CoinGecko Pro",
                      "macro":"宏观背景","x_sent":"X情绪","cron_read":"Cron缓存",
                      "cvd":"CVD订单流","depth":"深度数据","corr":"相关性",
                      "gold_macro":"黄金宏观","forex_rate":"外汇利率","fmp":"FMP基本面",
                      "options_chain":"期权链","card":"出卡","orphan":"孤儿模块"}.get(s, s)
-            print(f"| {label} | {step_status[s]} | {step_notes.get(s, '')} |")
-        print(f"\n管线路由：{len(pipeline_steps)}步 · 完成 {sum(1 for v in step_status.values() if v=='✅')}/{len(pipeline_steps)}")
-    
+            audit_lines.append(f"| {label} | {step_status[s]} | {step_notes.get(s, '')} |")
+        audit_lines.extend([
+            "",
+            f"管线路由：{len(pipeline_steps)}步 · 完成 {sum(1 for v in step_status.values() if v=='✅')}/{len(pipeline_steps)}",
+        ])
+        for line in audit_lines:
+            print(line)
+        try:
+            full_path.write_text(full_card.rstrip() + "\n\n" + "\n".join(audit_lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            print(f"  ⚠️ 管线完成度写入full卡失败: {e}")
+
     return card
 
 

@@ -96,13 +96,25 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         go = False
 
     # ── 门2: TV现场确认 ──
-    tv_data = engine_data.get("_tv_pine") or engine_data.get("tv", {})
-    tv_active = bool(tv_data)
-    tv_conflict = meta.get("gate_verdict", "").startswith("否决")
-    if tv_active and not tv_conflict:
-        gates["tv_live"] = {"status": "green", "reason": "TV SVP已读·方向一致"}
+    tv_data = engine_data.get("_tv_pine") or engine_data.get("tv", {}) or engine_data.get("_tv_main") or {}
+    tv_override = engine_data.get("_tv_override") or {}
+    if not isinstance(tv_override, dict):
+        tv_override = {}
+    tv_status = engine_data.get("_tv_cache_status") or engine_data.get("_tv_live_status") or {}
+    if not isinstance(tv_status, dict):
+        tv_status = {}
+    tv_active = bool(tv_data) or bool(tv_override.get("tv_active")) or bool(tv_status.get("usable"))
+    tv_grade = str(tv_override.get("tv_grade") or engine_data.get("_tv_main", {}).get("grade") or "")
+    tv_block = str(meta.get("status", "")).startswith("X") or tv_grade.startswith("X")
+    if tv_active and not tv_block:
+        reason = "TV SVP已读"
+        if tv_grade:
+            reason += f"·{tv_grade}"
+        if tv_status.get("usable"):
+            reason += "·缓存新鲜"
+        gates["tv_live"] = {"status": "green", "reason": reason}
     elif tv_active:
-        gates["tv_live"] = {"status": "red", "reason": f"TV方向冲突: {meta.get('gate_verdict','')}"}
+        gates["tv_live"] = {"status": "red", "reason": f"TV禁做/结构冲突: {tv_grade or meta.get('status','')}"}
         red_gates.append("tv_live")
         go = False
     else:
