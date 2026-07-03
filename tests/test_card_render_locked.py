@@ -106,7 +106,9 @@ def test_render_card_locked_waiting_no_entry_price():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # B等待状态：v6.9允许预案A/B展开（标记为"等确认后优先"），验证规则需放宽
+    # B等待状态：不可把当前价当作可执行入场价，必须显示等待触发/空价位
+    assert "等待触发" in card
+    assert "| 主线 空 |" in card or "| 主线 多 |" in card
     errors = auto_card.validate_card_rules(card, meta)
     # 只检查 R:R 和机器字段缺失，不禁止B等待出价
     for err in errors:

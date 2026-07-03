@@ -274,13 +274,91 @@ def _parse_tv_study_values(tv_studies: list | None) -> dict:
             for k, v in vals.items():
                 try:
                     val_raw = str(v)
-                    val_str = val_raw.replace("\u2212", "-").replace(",", "").replace("\u202fK", "").replace("\u202f", "").replace("%", "").strip()
+                    mult = 1
+                    raw_upper = val_raw.upper()
+                    if "B" in raw_upper:
+                        mult = 1000000000
+                    elif "M" in raw_upper:
+                        mult = 1000000
+                    elif "K" in raw_upper:
+                        mult = 1000
+                    val_str = (val_raw.replace("\u2212", "-").replace(",", "")
+                               .replace("\u202f", "").replace("%", "")
+                               .replace("K", "").replace("k", "")
+                               .replace("M", "").replace("m", "")
+                               .replace("B", "").replace("b", "").strip())
                     # Also handle unicode minus sign
                     val_str = val_str.replace("\u2212", "-")
-                    result[k] = float(val_str) * (1000 if "K" in val_raw else 1)
+                    result[k] = float(val_str) * mult
                 except (ValueError, TypeError):
                     result[k] = str(v)
     return result
+
+
+def _tv_cache_indicators_to_studies(cache: dict | None) -> list[dict]:
+    """把 tv_data_bridge 的 snake_case indicators 缓存转回 study_values 形态。
+
+    tv_data_bridge.py 落盘的是 indicators={mcp_side_code:..., composite:...}，
+    而正式消费链 _parse_tv_study_values() 只认 TV MCP 原始字段名。
+    这里做一次反向映射，避免新鲜缓存也丢失 MCP Data Window / Composite。
+    """
+    if not isinstance(cache, dict):
+        return []
+    indicators = cache.get("indicators") or {}
+    if not isinstance(indicators, dict):
+        return []
+
+    main_map = {
+        "s_vwap": "S VWAP", "vah_price": "VAH Price", "val_price": "VAL Price",
+        "poc_price": "POC Price", "npoc_price": "nPOC Price", "w_vwap_price": "W VWAP Price",
+        "m_vwap_price": "M VWAP Price", "do_price": "DO Price", "ema_9": "EMA 9",
+        "ema_21": "EMA 21", "ema_34": "EMA 34", "ema_55": "EMA 55",
+        "mcp_side_code": "MCP Side Code", "mcp_grade_code": "MCP Grade Code",
+        "mcp_setup_score": "MCP Setup Score", "mcp_entry_price": "MCP Entry Price",
+        "mcp_stop_price": "MCP Stop Price", "mcp_target_price": "MCP Target Price",
+        "mcp_cvd_value": "MCP CVD Value", "mcp_quality_code": "MCP Quality Code",
+        "mcp_bull_fvg_ce": "MCP Bull FVG CE", "mcp_bear_fvg_ce": "MCP Bear FVG CE",
+        "mcp_fvg_quality_code": "MCP FVG Quality Code",
+    }
+    sub_map = {
+        "oi_total": "OI Total", "estimated_cvd_value": "Estimated CVD Value", "cvd_value": "Estimated CVD Value",
+        "cvd_method_code": "CVD Method Code", "cvd_quality_code": "CVD Quality Code",
+        "volume_ratio": "Volume Ratio", "coverage_exchanges": "Coverage Exchanges",
+        "coverage_spot": "Coverage Spot", "coverage_perp": "Coverage Perp",
+        "coverage_feed_mode": "Coverage Feed Mode", "exchange_dominance_%": "Exchange Dominance %",
+        "exchange_dominance_pct": "Exchange Dominance %", "confirm_score": "Confirm Score",
+        "composite": "Composite",
+    }
+    main_vals = {tv_key: indicators[src] for src, tv_key in main_map.items() if src in indicators}
+    sub_vals = {tv_key: indicators[src] for src, tv_key in sub_map.items() if src in indicators}
+    studies = []
+    if main_vals:
+        studies.append({"name": "SVP+ICT+VWAP+CVD", "values": main_vals})
+    if sub_vals:
+        studies.append({"name": "Volume Aggregated Spot & Futures", "values": sub_vals})
+    return studies
+
+
+def _tv_cache_decision_tables(cache: dict, grade: str = "C等待", treatment: str = "?") -> list[dict]:
+    """把 tv_dmi_cache.json 的 decision_table 拆成主/副两个行动格表。"""
+    dt = cache.get("decision_table") if isinstance(cache, dict) else None
+    if not isinstance(dt, dict):
+        return []
+    tables = []
+    synth = []
+    if grade:
+        synth.append(f"等级 | {grade}")
+    if treatment:
+        synth.append(f"处理 | {treatment}")
+    main_keys = ["结论", "方向", "进场", "止损", "目标", "确认", "核对", "风险", "磁吸↑", "磁吸↓"]
+    main_rows = synth + [f"{k} | {dt[k]}" for k in main_keys if k in dt]
+    if main_rows:
+        tables.append({"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": main_rows}]})
+    sub_keys = ["信号", "结论", "风险", "高周", "持仓", "流向", "覆盖", "量能", "爆仓", "操作"]
+    sub_rows = [f"{k} | {dt[k]}" for k in sub_keys if k in dt]
+    if sub_rows and any(r.startswith("信号 |") for r in sub_rows):
+        tables.append({"name": "Volume Aggregated", "tables": [{"rows": sub_rows}]})
+    return tables
 
 
 def _parse_tv_sub_table(tv_tables: list | None) -> dict:
@@ -375,7 +453,11 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
             ("MCP Setup Score", "mcp_setup_score"), ("MCP Entry Price", "mcp_entry_price"),
             ("MCP Stop Price", "mcp_stop_price"), ("MCP Target Price", "mcp_target_price"),
             ("MCP CVD Value", "mcp_cvd_value"), ("MCP Quality Code", "mcp_quality_code"),
-            ("OI Total", "sub_oi_total"), ("Volume Ratio", "sub_volume_ratio"),
+            ("MCP Bull FVG CE", "mcp_bull_fvg_ce"), ("MCP Bear FVG CE", "mcp_bear_fvg_ce"),
+            ("MCP FVG Quality Code", "mcp_fvg_quality_code"),
+            ("OI Total", "sub_oi_total"), ("Estimated CVD Value", "sub_estimated_cvd_value"),
+            ("CVD Method Code", "sub_cvd_method_code"), ("CVD Quality Code", "sub_cvd_quality_code"),
+            ("Volume Ratio", "sub_volume_ratio"),
             ("Coverage Exchanges", "sub_coverage_exchanges"), ("Coverage Spot", "sub_coverage_spot"),
             ("Coverage Perp", "sub_coverage_perp"), ("Coverage Feed Mode", "sub_coverage_feed_mode"),
             ("Exchange Dominance %", "sub_exchange_dominance_pct"),
@@ -2980,10 +3062,16 @@ def auto_card(symbol: str, push: bool = False) -> str:
                         if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
                             tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
                         tv_dmi_data = {
-                            "studies": cache.get("studies", []),
+                            "studies": cache.get("studies", []) or _tv_cache_indicators_to_studies(cache),
                             "tables": tables,
                         }
                     else:
+                        decision_tables = _tv_cache_decision_tables(cache, grade=grade, treatment=treatment)
+                        if decision_tables:
+                            tv_dmi_data = {
+                                "studies": cache.get("studies", []) or _tv_cache_indicators_to_studies(cache),
+                                "tables": decision_tables,
+                            }
                         treatment = cache.get("action") or cache.get("treatment", "?")
                         background = cache.get("background") or cache.get("bias", "?")
                         position = cache.get("position", "?")
@@ -3011,7 +3099,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
                         if "sub_table_raw" in cache and isinstance(cache["sub_table_raw"], list):
                             tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
                         tv_dmi_data = {
-                            "studies": [],
+                            "studies": cache.get("studies", []) or _tv_cache_indicators_to_studies(cache),
                             "tables": tables,
                         }
                     engine_data["_tv_pine"] = tv_dmi_data
@@ -3191,7 +3279,17 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print(f"{'='*50}")
         # Mark known completed steps
         # 基于 engine_data 判断各步骤完成（比卡文本匹配更可靠）
-        completed_steps.update(["tv", "macro", "card"])
+        completed_steps.update(["macro", "card"])
+        tv_status_obj = engine_data.get("_tv_cache_status") or engine_data.get("_tv_live_status") or {}
+        if not isinstance(tv_status_obj, dict):
+            tv_status_obj = {}
+        tv_override_obj = engine_data.get("_tv_override") or {}
+        if not isinstance(tv_override_obj, dict):
+            tv_override_obj = {}
+        tv_active = bool(tv_override_obj.get("tv_active"))
+        tv_usable = tv_active or bool(tv_status_obj.get("usable"))
+        if tv_usable:
+            completed_steps.add("tv")
         if "cron_read" in pipeline_steps: completed_steps.add("cron_read")
         if engine_data.get("cmc") or "CMC" in card or "Binance" in card: completed_steps.add("binance")
         if engine_data.get("cg_top") or "CoinGecko" in card: completed_steps.add("cg_pro")
@@ -3204,18 +3302,30 @@ def auto_card(symbol: str, push: bool = False) -> str:
         completed_steps.add("orphan")  # orphan integration always runs
         
         step_status = {}
+        step_notes = {}
         for s in pipeline_steps:
             emoji = "✅" if s in completed_steps else "⚠️"
             step_status[s] = emoji
-        print(f"| 步骤 | 状态 |")
-        print(f"|:---|:---:|")
+            if s == "tv":
+                if tv_usable:
+                    step_notes[s] = "TV行动格/缓存已采用"
+                else:
+                    step_notes[s] = (tv_status_obj.get("reason") or "TV未实时读取/缓存不可用")
+            elif s == "cron_read":
+                step_notes[s] = "读取本地cron缓存；需看各源mtime"
+            elif s in completed_steps:
+                step_notes[s] = "已完成"
+            else:
+                step_notes[s] = "本轮未采到有效字段"
+        print(f"| 步骤 | 状态 | 备注 |")
+        print(f"|:---|:---:|:---|")
         for s in pipeline_steps:
             label = {"tv":"TV五层","binance":"Binance衍生品","cg_pro":"CoinGecko Pro",
                      "macro":"宏观背景","x_sent":"X情绪","cron_read":"Cron缓存",
                      "cvd":"CVD订单流","depth":"深度数据","corr":"相关性",
                      "gold_macro":"黄金宏观","forex_rate":"外汇利率","fmp":"FMP基本面",
                      "options_chain":"期权链","card":"出卡","orphan":"孤儿模块"}.get(s, s)
-            print(f"| {label} | {step_status[s]} |")
+            print(f"| {label} | {step_status[s]} | {step_notes.get(s, '')} |")
         print(f"\n管线路由：{len(pipeline_steps)}步 · 完成 {sum(1 for v in step_status.values() if v=='✅')}/{len(pipeline_steps)}")
     
     return card

@@ -189,6 +189,14 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
 
     st_a = st_a or {"stop": None, "target": None}
     st_b = st_b or {"stop": None, "target": None}
+    a_exec = rr_a_state == "可执行" and status.startswith("A")
+    b_exec = rr_b_state == "可执行" and status.startswith("A")
+    a_entry = _price(price) if a_exec else "等待触发"
+    a_stop = _price(st_a.get("stop")) if a_exec else "`—`"
+    a_target = _price(st_a.get("target")) if a_exec else "`—`"
+    b_entry = _price(price) if b_exec else "等待触发"
+    b_stop = _price(st_b.get("stop")) if b_exec else "`—`"
+    b_target = _price(st_b.get("target")) if b_exec else "`—`"
 
     bull_evidence = []
     bear_evidence = []
@@ -260,8 +268,8 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         "",
         "| 方案 | 条件 | 入场 | 止损 | 目标 | R:R | 仓位 |",
         "|---|---|---:|---:|---:|---:|---|",
-        f"| 主线 {dir_a} | {one_reason or '等关键位确认'} | {_price(price)} | {_price(st_a.get('stop'))} | {_price(st_a.get('target'))} | 1:{rr_a:.1f} | {rr_a_state} · {_num(risk_amt, 2)}U |",
-        f"| 反向 {dir_b} | 反向突破/回收确认 | {_price(price)} | {_price(st_b.get('stop'))} | {_price(st_b.get('target'))} | 1:{rr_b:.1f} | {rr_b_state} · {_num(risk_amt, 2)}U |",
+        f"| 主线 {dir_a} | {one_reason or '等关键位确认'} | {a_entry} | {a_stop} | {a_target} | 1:{rr_a:.1f} | {rr_a_state} · {_num(risk_amt, 2)}U |",
+        f"| 反向 {dir_b} | 反向突破/回收确认 | {b_entry} | {b_stop} | {b_target} | 1:{rr_b:.1f} | {rr_b_state} · {_num(risk_amt, 2)}U |",
         f"| 等待/禁做 | 数据过期、SVP冲突、R:R<1:2 | - | - | - | - | {status} |",
         "",
         "### 风控闸门",

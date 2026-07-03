@@ -472,7 +472,8 @@ def extract_from_tv_data(tv_data: dict) -> tuple[dict, dict]:
         if "Volume" in name and ("Aggregated" in name or "Spot" in name):
             for k, v in vals.items():
                 if k in (
-                    "OI Total", "CVD Value", "Volume Ratio", "Coverage Exchanges", "Coverage Spot",
+                    "OI Total", "CVD Value", "Estimated CVD Value", "CVD Method Code", "CVD Quality Code",
+                    "Volume Ratio", "Coverage Exchanges", "Coverage Spot",
                     "Coverage Perp", "Coverage Feed Mode", "Exchange Dominance %", "Confirm Score", "Composite",
                 ):
                     sub[k.lower().replace(" ", "_").replace("%", "pct")] = v
