@@ -85,7 +85,6 @@ def main() -> int:
     mid = sum(1 for c in candidates if 4 <= float(c.get("confidence") or 0) < 7)
     print(f"⚡ Orion雷达 · 候选{len(candidates)}个 · 高{high}中{mid} · {ts}")
     print()
-    print("表1 · 验证链")
     print("| 来源 | 状态 | 备注 |")
     print("|:----|:----|:----|")
     print(f"| Orion Binance | ✅{len(candidates)}候选 | 高{high}·中{mid} |")
@@ -94,7 +93,6 @@ def main() -> int:
     print(f"| Hyperliquid | {'✅' if hl_ok else '⏳'}{hl_ok}确认 | 跨所验证 |")
     print(f"| Binance/CG | ✅{cg_ok}深验 | 量价/OI/费率 |")
     print()
-    print("表2 · 候选数据")
     print("| 品种 | 数据 | 信号 |")
     print("|:----|:----|:----|")
     for c in top[:4]:
@@ -103,7 +101,6 @@ def main() -> int:
         sig = f"OI`{fmt_pct(c.get('oi_chg'))}`·费`{fmt_pct((c.get('funding') or 0) * 100)}`·信`{float(c.get('confidence') or 0):.1f}`"
         print(f"| {sym} | {data} | {sig} |")
     print()
-    print("表3 · 判断")
     print("| 品种 | 判断 | 动作 |")
     print("|:----|:----|:----|")
     for c in top[:4]:

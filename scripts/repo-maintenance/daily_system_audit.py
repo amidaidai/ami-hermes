@@ -302,14 +302,12 @@ def main() -> int:
 
     lines = [f"{status_text} · 每日系统审计 · {date_str}", ""]
     lines.extend([
-        "表1 · 任务概况",
         "| 项目 | 数据 | 状态 |",
         "|:----|:----|:----|",
         f"| 任务 | 每日系统审计 | {status_text} |",
         f"| 耗时 | `{elapsed:.0f}s` | no_agent |",
         f"| 报告 | `{LOG_DIR.as_posix()}` | 已落盘 |",
         "",
-        "表2 · 核心健康",
         "| 模块 | 数据 | 状态 |",
         "|:----|:----|:----|",
         f"| 技能 | `{skill_result.get('scanned_skill_md', 0)}`个SKILL | {skill_status_text} |",
@@ -319,7 +317,6 @@ def main() -> int:
         f"| Git | 未提交`{git_result.get('modified', 0)}`项 | {git_status_text} |",
         f"| 日志 | 最近5个log | {log_status_text} |",
         "",
-        "表3 · 处理预案",
         "| 方向 | 触发 | 动作 |",
         "|:---:|:----|:----|",
         f"| {'×修复' if total_issues else '○保持'} | 异常`{total_issues}`项 | {'按模块处理' if total_issues else '静默不推'} |",

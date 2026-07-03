@@ -62,12 +62,16 @@ def parse_telegram_target(target: str) -> tuple[str, int | None]:
 
 def build_payload(chat_id: str, thread_id: int | None, text: str,
                   parse_mode: str | None = None) -> dict:
-    """构造 sendMessage 请求体。thread_id 为 None 时不带该键。"""
-    payload = {"chat_id": chat_id, "text": text}
+    """构造 sendMessage/sendRichMessage 请求体。thread_id 为 None 时不带该键。"""
+    payload: dict[str, object] = {"chat_id": chat_id}
     if thread_id is not None:
         payload["message_thread_id"] = thread_id
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
+    if parse_mode in {"RichMarkdown", "rich_markdown"}:
+        payload["rich_message"] = {"markdown": text, "skip_entity_detection": False}
+    else:
+        payload["text"] = text
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
     return payload
 
 
@@ -130,7 +134,8 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
     chat_id, thread_id = parse_telegram_target(target)
     payload = build_payload(chat_id, thread_id, text, parse_mode=parse_mode)
 
-    url = f"{API_BASE}/bot{token}/sendMessage"
+    method = "sendRichMessage" if parse_mode in {"RichMarkdown", "rich_markdown"} else "sendMessage"
+    url = f"{API_BASE}/bot{token}/{method}"
     data = json.dumps(payload).encode("utf-8")
 
     for attempt in range(3):

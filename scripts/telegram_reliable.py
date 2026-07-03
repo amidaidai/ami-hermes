@@ -78,16 +78,61 @@ def token_from_env_file() -> str | None:
     return None
 
 
-def _post_message(target: str, text: str, token: str, parse_mode: str | None, timeout: int) -> tuple[bool, str]:
+def _contains_markdown_table(text: str) -> bool:
+    """Detect GitHub/Rich-Markdown pipe tables.
+
+    Telegram normal sendMessage MarkdownV2 does not render tables. Bot API 10.1
+    rich messages do render Markdown pipe tables when sent through
+    sendRichMessage with rich_message.markdown, so table-like push cards must be
+    routed there instead of plain sendMessage.
+    """
+    lines = [ln.strip() for ln in text.splitlines()]
+    for i in range(len(lines) - 1):
+        header = lines[i]
+        sep = lines[i + 1]
+        if not (header.startswith("|") and header.endswith("|") and "|" in header.strip("|")):
+            continue
+        cells = [c.strip() for c in sep.strip("|").split("|")]
+        if cells and all(c.replace(":", "").replace("-", "").strip() == "" and "-" in c for c in cells):
+            return True
+    return False
+
+
+def _normalize_rich_markdown_tables(text: str) -> str:
+    """Make Telegram RichMarkdown table parsing reliable on mobile.
+
+    Bot API 10.1 RichMarkdown parses a pipe table into RichBlockTable when the
+    table starts directly at the block boundary. Standalone Chinese title lines
+    such as "表1 · 行情全景" immediately before the pipe header make Telegram keep
+    the following table as paragraph text on some clients/server parses. Drop
+    those redundant title lines; the table headers carry the section meaning.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i].strip()
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if cur.startswith("表") and "·" in cur and nxt.startswith("|") and nxt.endswith("|"):
+            i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+def _build_base_payload(target: str) -> dict[str, object]:
     chat_id, thread_id = parse_telegram_target(target)
-    payload: dict[str, object] = {"chat_id": chat_id, "text": text}
+    payload: dict[str, object] = {"chat_id": chat_id}
     if thread_id is not None:
         payload["message_thread_id"] = thread_id
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
+    return payload
+
+
+def _post_json(method: str, payload: dict[str, object], token: str, timeout: int) -> tuple[bool, str]:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
-        f"{API_BASE}/bot{token}/sendMessage",
+        f"{API_BASE}/bot{token}/{method}",
         data=data,
         headers={"Content-Type": "application/json"},
     )
@@ -106,6 +151,34 @@ def _post_message(target: str, text: str, token: str, parse_mode: str | None, ti
         return False, f"http {exc.code}: {desc}"
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return False, f"network: {exc}"
+
+
+def _post_message(target: str, text: str, token: str, parse_mode: str | None, timeout: int) -> tuple[bool, str]:
+    rich_requested = parse_mode in {"RichMarkdown", "rich_markdown"}
+    rich_auto = parse_mode is None and _contains_markdown_table(text)
+    if rich_requested or rich_auto:
+        rich_text = _normalize_rich_markdown_tables(text)
+        payload = _build_base_payload(target)
+        payload["rich_message"] = {"markdown": rich_text, "skip_entity_detection": False}
+        ok, reason = _post_json("sendRichMessage", payload, token, timeout)
+        if ok:
+            return True, "rich_sent"
+        # If Telegram rejects the new endpoint/format, preserve delivery for
+        # non-explicit auto-detected tables but make the downgrade visible.
+        if rich_requested:
+            return False, reason
+        fallback = _build_base_payload(target)
+        fallback["text"] = text
+        ok2, reason2 = _post_json("sendMessage", fallback, token, timeout)
+        if ok2:
+            return True, f"sent_plain_after_rich_fail:{reason}"
+        return False, f"rich:{reason}; plain:{reason2}"
+
+    payload = _build_base_payload(target)
+    payload["text"] = text
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    return _post_json("sendMessage", payload, token, timeout)
 
 
 def append_pending(target: str, text: str, reason: str, parse_mode: str | None = None) -> Path:

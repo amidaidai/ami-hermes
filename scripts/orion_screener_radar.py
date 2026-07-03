@@ -524,18 +524,15 @@ def build_report(candidates, ts):
     if not candidates:
         lines.append(f"○ Orion雷达 · 无高置信候选 · {ts}")
         lines.append("")
-        lines.append("表1 · 验证链")
         lines.append("| 来源 | 状态 | 备注 |")
         lines.append("|:----|:----|:----|")
         lines.append("| Orion | ✅已扫描 | 无通过候选 |")
         lines.append("| Binance/CG | ○待触发 | 无需深验 |")
         lines.append("")
-        lines.append("表2 · 候选数据")
         lines.append("| 品种 | 数据 | 信号 |")
         lines.append("|:----|:----|:----|")
         lines.append("| — | confidence≥4无通过 | ○等待 |")
         lines.append("")
-        lines.append("表3 · 判断")
         lines.append("| 方向 | 条件 | 动作 |")
         lines.append("|:---:|:----|:----|")
         lines.append("| ○等待 | 无中高置信异动 | 不追单 |")
@@ -544,7 +541,6 @@ def build_report(candidates, ts):
     lines.append(f"⚡ Orion雷达 · 候选{len(candidates)}个 · {ts}")
     lines.append("")
 
-    lines.append("表1 · 验证链")
     lines.append("| 来源 | 状态 | 备注 |")
     lines.append("|:----|:----|:----|")
     lines.append(f"| Orion Binance | ✅{len(candidates)}候选 | 高{high_conf}·中{med_conf} |")
@@ -552,7 +548,6 @@ def build_report(candidates, ts):
     lines.append(f"| Binance/CG | {'✅' + str(bn_count) + '深验' if HAS_KEYS else '⏳无Key'} | CG{cg_count}确认 |")
     lines.append("")
 
-    lines.append("表2 · 候选数据")
     lines.append("| 品种 | 数据 | 信号 |")
     lines.append("|:----|:----|:----|")
     for c in top:
@@ -572,7 +567,6 @@ def build_report(candidates, ts):
         lines.append(f"| {symbol} | {data} | {signal} |")
     lines.append("")
 
-    lines.append("表3 · 判断")
     lines.append("| 品种 | 判断 | 动作 |")
     lines.append("|:----|:----|:----|")
     for c in top:

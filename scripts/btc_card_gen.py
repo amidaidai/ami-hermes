@@ -247,7 +247,7 @@ def extract_indicators(results, decision_data):
 
 # ── Step 4: Build card ──
 def build_card(ind, zone, screenshot_path):
-    """Build analysis card in v4.2 format"""
+    """Build mobile-first Telegram card as true Markdown pipe tables."""
     p = ind.get("price", 0)
     vwap = ind.get("vwap")
     cvd = ind.get("cvd")
@@ -257,23 +257,16 @@ def build_card(ind, zone, screenshot_path):
     grade = ind.get("grade", "C")
     treatment = ind.get("treatment", "—")
 
-    # EMA alignment
-    e9 = ind.get("ema9"); e21 = ind.get("ema21")
-    if e9 and e21:
-        ema_state = "多头" if e9 > e21 else "空头"
-    else:
-        ema_state = "—"
-
-    # CVD bias
+    e9 = ind.get("ema9")
+    e21 = ind.get("ema21")
+    ema_state = "多头" if e9 and e21 and e9 > e21 else "空头" if e9 and e21 else "—"
     cvd_bias = "空" if (cvd is not None and cvd < 0) else "多" if (cvd is not None and cvd > 0) else "中性"
 
-    # Price vs VWAP
-    vwap_pos = ""
+    vwap_pos = "—"
     if vwap and p:
         pct = ((p - vwap) / vwap) * 100
         vwap_pos = f"{'上' if pct > 0 else '下'}{abs(pct):.2f}%"
 
-    # Direction
     if "A多" in grade or ("A" in grade and "做多" in grade):
         direction = "↑做多"
     elif "A空" in grade or ("A" in grade and "做空" in grade):
@@ -285,44 +278,41 @@ def build_card(ind, zone, screenshot_path):
     else:
         direction = "○等待"
 
-    lines = [
-        f"{direction} BTC · {zone} · `{fmt_price(p)}` · {tnow().strftime('%m/%d %H:%M')}",
-        f"① VWAP`{fmt_price(vwap)}`{vwap_pos} · CVD`{fmt_price(cvd)}`{cvd_bias} · EMA{ema_state}",
-    ]
+    now = tnow()
+    time_cn = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
+    risk = "轻仓0.5U" if zone in ("大底", "前低已破") else "常规1.0U"
 
-    # TV grade line
-    lines.append(f"   TV{grade} · {treatment} · {ind.get('bias_1d','')}")
-
-    # Key levels
-    levels = []
-    if vah: levels.append(f"VAH`{fmt_price(vah)}`")
-    if poc: levels.append(f"POC`{fmt_price(poc)}`")
-    if val: levels.append(f"VAL`{fmt_price(val)}`")
-    if vwap: levels.append(f"VWAP`{fmt_price(vwap)}`")
-    if levels:
-        lines.append(f"② {'·'.join(levels)}")
-
-    # Plan
-    if "做多" in direction or "等待" in direction:
-        lines.append(f"③ 多→守`{fmt_price(val)}`做多 · 止损`{fmt_price(vwap)}` · 目标`{fmt_price(poc)}`")
-    if "做空" in direction or "等待" in direction:
-        lines.append(f"   空→破`{fmt_price(vwap)}`做空 · 止损`{fmt_price(vah)}` · 目标`{fmt_price(val)}`")
-
-    # 4h context
-    bias_4h = f"4h"
+    bias_4h = "4h"
     if ind.get("ema9_4h") and ind.get("ema21_4h"):
-        bias_4h += f" EMA{'多' if ind['ema9_4h']>ind['ema21_4h'] else '空'}"
+        bias_4h += f" EMA{'多' if ind['ema9_4h'] > ind['ema21_4h'] else '空'}"
     if ind.get("cvd_4h"):
         bias_4h += f" CVD{ind['cvd_4h']:.0f}"
-    lines.append(f"④ {bias_4h}")
 
-    # Risk
-    risk = "轻仓0.5U" if zone in ("大底", "前低已破") else "常规1.0U"
-    lines.append(f"⑤ 风控 {risk} · 100x")
+    lines = [
+        f"{direction} BTC · {zone} · `{fmt_price(p)}` · {time_cn}",
+        "",
+        "| 项目 | 数据 | 状态 |",
+        "|:----|:----|:----|",
+        f"| 现价 | `{fmt_price(p)}` | {zone} |",
+        f"| VWAP | `{fmt_price(vwap)}` | {vwap_pos} |",
+        f"| CVD | `{fmt_price(cvd)}` | {cvd_bias} |",
+        f"| EMA | `{fmt_price(e9)}/{fmt_price(e21)}` | {ema_state} |",
+        "",
+        "| 位置 | 价格 | 用途 |",
+        "|:----|:----|:----|",
+        f"| VAH | `{fmt_price(vah)}` | 上沿压力 |",
+        f"| POC | `{fmt_price(poc)}` | 成交重心 |",
+        f"| VAL | `{fmt_price(val)}` | 下沿支撑 |",
+        f"| VWAP | `{fmt_price(vwap)}` | 多空分界 |",
+        "",
+        "| 方向 | 触发 | 动作 |",
+        "|:---:|:----|:----|",
+        f"| ↑多 | 守`{fmt_price(val)}`并站回VWAP | 轻多·止损`{fmt_price(vwap)}`·目标`{fmt_price(poc)}` |",
+        f"| ↓空 | 破`{fmt_price(vwap)}`且反抽不过 | 轻空·止损`{fmt_price(vah)}`·目标`{fmt_price(val)}` |",
+        f"| ○风控 | TV{grade}·{treatment}·{bias_4h} | {risk}·100x |",
+    ]
 
     card = "\n".join(lines)
-
-    # MEDIA suffix for screenshot
     media_suffix = ""
     if screenshot_path and Path(screenshot_path).exists():
         media_suffix = f"\nMEDIA:{screenshot_path}"

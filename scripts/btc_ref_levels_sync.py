@@ -96,13 +96,31 @@ def pick_cache() -> dict[str, Any]:
 
 
 def recent_hilo() -> tuple[float | None, float | None]:
-    url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=100"
-    req = urllib.request.Request(url, headers={"User-Agent": "TangXi/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        bars = json.loads(resp.read().decode("utf-8"))
-    highs = [float(k[2]) for k in bars]
-    lows = [float(k[3]) for k in bars]
-    return max(highs), min(lows)
+    """Fetch recent BTC 15m high/low with regional fallback.
+
+    binance.com futures endpoint can return 403 from this host. For reference
+    levels, spot BTCUSDT high/low is good enough as a fallback; TV SVP remains
+    the authoritative source for executable futures levels.
+    """
+    urls = [
+        "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=100",
+        "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=100",
+        "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=100",
+    ]
+    last_exc: Exception | None = None
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "TangXi/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                bars = json.loads(resp.read().decode("utf-8"))
+            if isinstance(bars, list) and bars:
+                highs = [float(k[2]) for k in bars]
+                lows = [float(k[3]) for k in bars]
+                return max(highs), min(lows)
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise RuntimeError(f"Binance recent hilo unavailable: {last_exc}")
 
 
 def main() -> int:
@@ -158,7 +176,26 @@ def main() -> int:
         OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0
     except Exception as exc:
-        print(f"BTC ref levels sync failed: {exc}")
+        now = datetime.now(TZ)
+        print(f"×同步失败 · BTC关键位 · {now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}")
+        print("")
+        print("| 项目 | 数据 | 状态 |")
+        print("|:----|:----|:----|")
+        print("| 任务 | BTC关键位同步 | 失败 |")
+        print("| 来源 | TradingView MCP | 异常 |")
+        print("| 输出 | btc_ref_levels.json | 未更新 |")
+        print("")
+        print("| 模块 | 数据 | 状态 |")
+        print("|:----|:----|:----|")
+        print(f"| 异常 | `{str(exc)[:160]}` | 需处理 |")
+        print("| 缓存 | tv_live/tv_dmi | 检查新鲜度 |")
+        print("| Binance | recent hilo | 重测接口 |")
+        print("")
+        print("| 方向 | 触发 | 动作 |")
+        print("|:---:|:----|:----|")
+        print("| ×修复 | TV字段缺失/过期 | 先修复TV MCP |")
+        print("| ○降级 | Binance可用 | 只保留高低点不下结论 |")
+        print("| ↑恢复 | 缓存30分钟内更新 | 重跑同步脚本 |")
         return 1
 
 

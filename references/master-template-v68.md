@@ -9,15 +9,17 @@
 3. 时间一律北京时间中文格式：`2026年6月29日21：30`，不用 UTC，不用 BJT 后缀。
 4. 先给结论，不让用户自己猜；首段 3-5 行浓缩。
 5. 正文采用 Markdown 表格，不使用长装饰分隔线，不使用编号①②③。
-6. 状态只允许：`A可执行` / `B等确认` / `C轻仓试探` / `X禁做观察`。
-7. TV SVP v10 是主驾驶：行动格、关键位、VWAP/EMA/CVD/OI、labels/lines/Data Window 优先。
-8. Binance / Deribit / Dune / X / 宏观 / COT 是验证层，不覆盖 TV 主结构，只负责增强或降级。
-9. R:R < 1:2 不得输出为可执行方案；只能列为观察或重算。
-10. 单笔风险≤1%，硬上限 10U；风控状态过期则降级。
-11. DMI/行动格等级是参考，不单独决定方向；方向来自五因子投票：VWAP位置、CVD压力、EMA排列、结构偏向、关键位距离。
-12. 正文不给 `setup_id/model_id/entry_tag` 等机器字段；这些只落盘到 JSONL 供复盘。
-13. 中文优先。允许保留 BTC、USDT、VWAP、EMA、CVD、OI、Funding、Spot、FVG、OB、ATR、R:R、DXY。
-14. cron/no_agent stdout 保持 ASCII-only；中文写 UTF-8 文件或 Telegram 直发。
+6. Telegram 手机推送版必须走 Bot API 10.1 `sendRichMessage` + `rich_message.markdown`；表格前不能紧贴 standalone `表1 · xxx`/章节标题行，表格要直接从 `| 表头 |` 开始。
+7. 非完整交易卡/告警/cron 推送必须恰好 3 张≤3列表；完整驾驶舱如需发 Telegram，也优先压缩成手机三表版，避免 4列以上宽表。
+8. 状态只允许：`A可执行` / `B等确认` / `C轻仓试探` / `X禁做观察`。
+9. TV SVP v10 是主驾驶：行动格、关键位、VWAP/EMA/CVD/OI、labels/lines/Data Window 优先。
+10. Binance / Deribit / Dune / X / 宏观 / COT 是验证层，不覆盖 TV 主结构，只负责增强或降级。
+11. R:R < 1:2 不得输出为可执行方案；只能列为观察或重算。
+12. 单笔风险≤1%，硬上限 10U；风控状态过期则降级。
+13. DMI/行动格等级是参考，不单独决定方向；方向来自五因子投票：VWAP位置、CVD压力、EMA排列、结构偏向、关键位距离。
+14. 正文不给 `setup_id/model_id/entry_tag` 等机器字段；这些只落盘到 JSONL 供复盘。
+15. 中文优先。允许保留 BTC、USDT、VWAP、EMA、CVD、OI、Funding、Spot、FVG、OB、ATR、R:R、DXY。
+16. cron/no_agent stdout 保持 ASCII-only；中文写 UTF-8 文件或 Telegram 直发。
 
 ## 完整分析卡模板
 
