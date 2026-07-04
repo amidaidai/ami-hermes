@@ -79,6 +79,28 @@ def _main_tf(symbol: str) -> str:
     return {"加密": "15m", "贵金属": "5m", "外汇": "15m", "股票": "1h", "期货": "15m", "期权": "跟底层"}.get(ac, "15m")
 
 
+def _dual_indicator_rows(dual: dict | None, asset_cn: str) -> list[str]:
+    """渲染主副指标裁决表。
+
+    SVP 是全市场主驾驶；HALDRO 只在加密市场启用。非加密市场明确降权，
+    避免把加密订单流误套到黄金/外汇/股票。
+    """
+    d = dual if isinstance(dual, dict) else {}
+    if asset_cn != "加密":
+        return [
+            f"| 方向 | {_cell(d.get('svp_direction') or 'SVP主结构')} | HALDRO不适用 | 非加密只用SVP+对应市场数据 |",
+            f"| 订单流 | {_cell(d.get('svp_flow') or 'CVD/VWAP/EMA降权参考')} | 已隐藏 | 不因副指标缺失降级 |",
+            f"| 执行 | {_cell(d.get('svp_state') or '按A/B/C/X状态机')} | — | {_cell(d.get('state') or '按资产路由裁决')} |",
+        ]
+    return [
+        f"| 方向 | {_cell(d.get('svp_direction') or d.get('svp_state') or '待刷新')} | {_cell(d.get('haldro_direction') or '待刷新')} | {_cell(d.get('direction_verdict') or d.get('state') or '等待共振')} |",
+        f"| 位置/结构 | {_cell(d.get('svp_position') or 'VAL/POC/VWAP待判')} | {_cell(d.get('haldro_position') or '现货/合约待判')} | {_cell(d.get('structure_verdict') or '等关键位确认')} |",
+        f"| 动能/订单流 | {_cell(d.get('svp_flow') or 'CVD/位移待判')} | {_cell(d.get('haldro_flow') or 'CVD/OI/量能待判')} | {_cell(d.get('flow_verdict') or 'CVD不配不追')} |",
+        f"| 覆盖/质量 | {_cell(d.get('svp_quality') or 'TV质量待判')} | {_cell(d.get('haldro_quality') or '覆盖率待判')} | {_cell(d.get('quality_verdict') or '质量不足降级')} |",
+        f"| 执行 | {_cell(d.get('svp_execution') or 'Entry/Stop/Target待判')} | {_cell(d.get('haldro_confirm') or 'Confirm待判')} | {_cell(d.get('state') or 'B等确认')} |",
+    ]
+
+
 def _tf_row(tf: str, k: dict, fallback: str = "") -> str:
     if not isinstance(k, dict) or not k:
         return f"| {tf} | 待刷新 | 待刷新 | — | 待刷新 |"
@@ -157,7 +179,8 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
                    leverage_text: str, inv_line, prot_status: str,
                    data_grade: str, sweep_state: str, displacement: str,
                    one_reason: str, model_id: str, n5, eng_conf,
-                   klines: dict = None, tv_dmi: dict = None) -> str:
+                   klines: dict = None, tv_dmi: dict = None,
+                   dual_indicator: dict | None = None) -> str:
     """v9.6 完整分析卡 · 表格驾驶舱。"""
     klines = klines or {}
     now = datetime.now(TZ).strftime("%Y年%m月%d日%H：%M")
@@ -230,6 +253,14 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         f"现价 {_price(price)} · 主周期 `{main_tf}` · 数据质量 `{data_grade}`",
         f"结论：{one_reason or bias}。R:R不足或风控过期时只观察，不追单。",
         "",
+        "### 双指标裁决",
+        "",
+        "| 裁决项 | SVP v10主驾驶 | HALDRO副驾驶 | 结论 |",
+        "|---|---|---|---|",
+    ]
+    lines.extend(_dual_indicator_rows(dual_indicator, ac))
+    lines.extend([
+        "",
         "### 多周期定位",
         "",
         "| 周期 | SVP | 副指标 | Composite | 价 vs VWAP |",
@@ -244,7 +275,7 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         "",
         "| 方向 | 价位 | 性质 | 距现价 |",
         "|---|---:|---|---:|",
-    ]
+    ])
     lines.extend(_level_rows(levels, price, klines))
     lines.extend([
         "",

@@ -51,7 +51,7 @@ def test_render_card_locked_has_speed_read_block():
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
     # v9.6: 表格驾驶舱结构
-    for marker in ["### 多周期定位", "### 关键位矩阵", "### 多源交叉验证", "### 执行预案", "### 风控闸门"]:
+    for marker in ["### 双指标裁决", "### 多周期定位", "### 关键位矩阵", "### 多源交叉验证", "### 执行预案", "### 风控闸门"]:
         assert marker in card, f"v9.6卡缺少 {marker}"
 
 

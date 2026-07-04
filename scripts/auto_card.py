@@ -413,6 +413,109 @@ def _parse_tv_sub_table(tv_tables: list | None) -> dict:
     return rows
 
 
+
+def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
+                            cvd_dir: str = "", cvd_quality: str = "") -> dict:
+    """生成 SVP 主驾驶 + HALDRO 副驾驶的统一裁决。"""
+    su = str(symbol or "").upper()
+    is_crypto = su.endswith("USDT") or "BTC" in su or "ETH" in su or "SOL" in su
+    tv_main = engine_data.get("_tv_main") if isinstance(engine_data, dict) else {}
+    tv_sub = engine_data.get("_tv_sub") if isinstance(engine_data, dict) else {}
+    if not isinstance(tv_main, dict):
+        tv_main = {}
+    if not isinstance(tv_sub, dict):
+        tv_sub = {}
+    # TradingView 主/副指标字段可能同处一个 study values 字典。
+    # 旧解析会把 HALDRO 的 Composite / Confirm / OI 同时挂在 _tv_main 的 sub_* 字段；
+    # 这里把这些字段也映射成 _tf_row 能识别的短字段，避免多周期表显示“副指标待刷新”。
+    if not tv_sub and any(k.startswith("sub_") for k in tv_main):
+        tv_sub = {
+            "composite": tv_main.get("sub_composite"),
+            "confirm_score": tv_main.get("sub_confirm_score"),
+            "oi": tv_main.get("sub_oi_total"),
+            "cvd_flow": tv_main.get("sub_estimated_cvd_value"),
+            "coverage": tv_main.get("sub_coverage_exchanges"),
+            "volume": tv_main.get("sub_volume_ratio"),
+            "risk": tv_main.get("sub_cvd_quality_code"),
+        }
+
+    status = str(meta.get("status") or tv_main.get("grade") or "C等待")
+    direction = str(meta.get("direction") or "")
+    svp_dir = tv_main.get("direction_text") or direction or status
+    svp_state = tv_main.get("grade") or status
+    svp_flow = tv_main.get("cvd_state") or tv_main.get("mcp_cvd_value") or cvd_dir or "待判"
+    dual = {
+        "asset_is_crypto": is_crypto,
+        "svp_state": svp_state,
+        "svp_direction": svp_dir,
+        "svp_position": tv_main.get("position") or tv_main.get("background") or "关键位待判",
+        "svp_flow": svp_flow,
+        "svp_quality": tv_main.get("mcp_quality_code") or meta.get("data_grade") or "待判",
+        "svp_execution": " / ".join(str(x) for x in [tv_main.get("entry"), tv_main.get("stop"), tv_main.get("target")] if x) or "等待触发",
+        "haldro_direction": "HALDRO不适用" if not is_crypto else "待刷新",
+        "haldro_position": "—" if not is_crypto else "现货/合约待判",
+        "haldro_flow": "—" if not is_crypto else "CVD/OI待判",
+        "haldro_quality": "—" if not is_crypto else "覆盖率待判",
+        "haldro_confirm": "—" if not is_crypto else "Confirm待判",
+        "direction_verdict": "非加密不套HALDRO" if not is_crypto else "等待副指标",
+        "structure_verdict": "按SVP+对应市场数据" if not is_crypto else "等关键位确认",
+        "flow_verdict": "对应市场订单流降权参考" if not is_crypto else "CVD不配不追",
+        "quality_verdict": "不因HALDRO缺失降级" if not is_crypto else "覆盖不足降级",
+        "state": status,
+        "conflict": False,
+        "usable": bool(tv_main) or not is_crypto,
+    }
+    if not is_crypto:
+        engine_data["_dual_indicator_verdict"] = dual
+        return dual
+
+    composite = tv_main.get("sub_composite") or tv_sub.get("composite") or tv_sub.get("signal")
+    confirm = tv_main.get("sub_confirm_score") or tv_sub.get("confirm_score") or tv_sub.get("operation")
+    oi = tv_main.get("sub_oi_total") or tv_sub.get("oi")
+    sub_cvd = tv_main.get("sub_estimated_cvd_value") or tv_sub.get("cvd_flow") or cvd_dir
+    coverage = tv_main.get("sub_coverage_exchanges") or tv_sub.get("coverage")
+    volume_ratio = tv_main.get("sub_volume_ratio") or tv_sub.get("volume")
+    quality = tv_main.get("sub_cvd_quality_code") or tv_sub.get("risk") or coverage
+
+    comp_text = str(composite) if composite not in (None, "") else "待刷新"
+    comp_num = None
+    try:
+        comp_num = float(composite)
+    except (TypeError, ValueError):
+        pass
+    if comp_num is not None:
+        haldro_dir = "偏多" if comp_num > 0 else "偏空" if comp_num < 0 else "中性"
+    elif any(x in comp_text for x in ("多", "买", "long", "LONG", "+")):
+        haldro_dir = "偏多"
+    elif any(x in comp_text for x in ("空", "卖", "short", "SHORT", "-")):
+        haldro_dir = "偏空"
+    else:
+        haldro_dir = "中性/待判"
+
+    svp_long = "多" in status or direction == "long" or "多" in str(svp_dir)
+    svp_short = "空" in status or direction == "short" or "空" in str(svp_dir)
+    sub_long = "偏多" in haldro_dir
+    sub_short = "偏空" in haldro_dir
+    conflict = (svp_long and sub_short) or (svp_short and sub_long)
+    aligned = (svp_long and sub_long) or (svp_short and sub_short)
+
+    dual.update({
+        "haldro_direction": f"{haldro_dir} · Composite {comp_text}",
+        "haldro_position": f"OI {oi or '待判'}",
+        "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
+        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'}",
+        "haldro_confirm": f"Confirm {confirm or '待判'}",
+        "direction_verdict": "主副强冲突" if conflict else "主副同向" if aligned else "副指标不足",
+        "structure_verdict": "结构顺向" if aligned else "结构需确认",
+        "flow_verdict": "订单流冲突，不追" if conflict else "订单流支持" if aligned else "等CVD/OI确认",
+        "quality_verdict": "覆盖/质量需确认" if not coverage and not quality else "质量已读",
+        "state": "X禁做观察" if conflict and status.startswith("A") else status,
+        "conflict": conflict,
+        "usable": bool(tv_sub or composite is not None or confirm is not None),
+    })
+    engine_data["_dual_indicator_verdict"] = dual
+    return dual
+
 def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict:
     """从TV DMI表+study values构建主指标完整数据字典，供render_tv_card使用。"""
     main = {}
@@ -816,6 +919,16 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                     except (TypeError, ValueError):
                         pass
     
+    dual_indicator = _dual_indicator_verdict(symbol, meta, engine_data, cvd_dir, cvd_quality)
+    if dual_indicator.get("asset_is_crypto") and dual_indicator.get("usable"):
+        sub_line = dual_indicator.get("haldro_flow") or dual_indicator.get("haldro_direction")
+        comp_line = dual_indicator.get("haldro_direction")
+        for tf in ("D", "4h", "1h", "15m", "5m"):
+            k = klines.get(tf)
+            if isinstance(k, dict):
+                k.setdefault("sub_indicator", sub_line)
+                k.setdefault("sub_composite", comp_line)
+
     full = render_v8_card(
         symbol=symbol, status=status, direction=direction, price=price,
         high=high, low=low, chg=chg, tf_lines=tf_lines,
@@ -833,6 +946,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         model_id=model_id, n5=n5, eng_conf=eng_conf,
         klines=klines,
         tv_dmi=tv_dmi_rows if tv_dmi_rows else None,
+        dual_indicator=dual_indicator,
     )
     
     # v9: TV双指标直出卡（优先：主+副指标数据齐全时使用）

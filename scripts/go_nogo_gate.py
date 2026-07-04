@@ -48,6 +48,12 @@ GATE_RULES = {
         "pass_condition": "历史样本≥20且WFO效率≥0.5",
         "red_light": "历史样本不足或WFO未通过，降级观察"
     },
+    "dual_indicator": {
+        "weight": 2,
+        "description": "双指标共振",
+        "pass_condition": "SVP主方向与HALDRO副指标同向或副指标不适用",
+        "red_light": "SVP主驾驶与HALDRO副驾驶强冲突，禁止A级执行"
+    },
     "portfolio_exposure": {
         "weight": 1,
         "description": "组合暴露",
@@ -173,7 +179,22 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         gates["wfo_samples"] = {"status": "yellow", "reason": f"样本仅{reviews_count}<20·WFO置信不足"}
         yellow_gates.append("wfo_samples")
 
-    # ── 门7: 组合暴露 ──
+    # ── 门7: 双指标共振 ──
+    dual = engine_data.get("_dual_indicator_verdict") or {}
+    if not isinstance(dual, dict):
+        dual = {}
+    if dual.get("conflict"):
+        gates["dual_indicator"] = {"status": "red", "reason": GATE_RULES["dual_indicator"]["red_light"]}
+        red_gates.append("dual_indicator")
+        go = False
+    elif dual.get("usable") or not dual.get("asset_is_crypto", True):
+        reason = dual.get("direction_verdict") or "主副指标已读"
+        gates["dual_indicator"] = {"status": "green", "reason": reason}
+    else:
+        gates["dual_indicator"] = {"status": "yellow", "reason": "HALDRO副指标未读·降级确认型计划"}
+        yellow_gates.append("dual_indicator")
+
+    # ── 门8: 组合暴露 ──
     corr_high = engine_data.get("_corr_high", False)
     total_exposure = engine_data.get("_total_exposure_pct", 0)
     if not corr_high and total_exposure <= 15:
@@ -191,7 +212,7 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     red_count = len(red_gates)
     
     verdict = (
-        f"✅ GO · 绿灯{green_count}/7"
+        f"✅ GO · 绿灯{green_count}/8"
         if go
         else f"✗ NO-GO · 红灯{red_count}灯·{'/'.join(red_gates[:3])}"
     )
@@ -224,14 +245,14 @@ def gate_report_card(result: dict, symbol: str) -> str:
         "",
         "### GO/NO-GO 下单闸门",
         "",
-        f"{emoji} **{status_text}** · 绿灯{result['green_count']}/7",
+        f"{emoji} **{status_text}** · 绿灯{result['green_count']}/8",
         "",
         "| # | 闸门 | 状态 | 原因 |",
         "|---:|---|---|---|",
     ]
     
-    gate_order = ["data_freshness", "tv_live", "rr_ratio", "event_window", 
-                  "protections", "wfo_samples", "portfolio_exposure"]
+    gate_order = ["data_freshness", "tv_live", "rr_ratio", "event_window",
+                  "protections", "wfo_samples", "dual_indicator", "portfolio_exposure"]
     
     for i, gate_name in enumerate(gate_order, 1):
         g = result["gates"].get(gate_name, {})
