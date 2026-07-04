@@ -1188,10 +1188,10 @@ if SHOW_SMT
 float smtRefClose = SHOW_SMT and smtTicker != "" and smtTicker != stdTicker ? request.security(smtTicker, timeframe.period, close, ignore_invalid_symbol=true) : na
 
 // 市场特定参考数据：DXY(金属/外汇) + VIX(股票/金属) + 资金费率(永续) —— 免费账号可用 TVC 数据源
-// 按需请求：只在用得到的市场才拉取，避免加密等图表上每根K线无谓占用 request 配额。
+// Pine 的 request.security 按编译期静态计数；以下条件门控只控制使用逻辑，不减少配额。
 bool needDxy = marketMetal or marketForex
 bool needVix = marketStock or marketIndex or marketMetal
-// 按需拆分：DXY 收成单值并用 needDxy 门控（与 VIX 一致），加密/股票/指数图上不再每根K无谓拉取 TVC:DXY。
+// DXY/VIX 仅在相关市场参与评分；配额优化必须物理删除 request.security 调用点，条件包裹不省配额。
 // dxyPrev 用本地上一根（chart TF 下 dxyClose[1] 等价于原来请求的 close[1]）。
 float dxyClose = needDxy ? request.security("TVC:DXY", timeframe.period, close, ignore_invalid_symbol=true) : na
 float dxyPrev  = needDxy ? dxyClose[1] : na
@@ -2796,7 +2796,7 @@ if not na(candidatePlanPrice) and not na(candidateInvalidPrice) and not na(magne
 string rrText = not na(rrRatio) ? str.tostring(rrRatio, "#.1") + "R" : ""
 bool rrHardOk = not na(rrRatio) and rrRatio >= 2.0
 bool bcDirectOk = bcDirectRaw and not na(rrRatio) and rrRatio >= 1.5
-bool executablePlan = displayLongA or displayShortA or bcDirectOk
+bool executablePlan = ((displayLongA or displayShortA) and rrHardOk) or bcDirectOk
 float replayPlanPrice = executablePlan ? candidatePlanPrice : na
 float replayInvalidPrice = executablePlan ? candidateInvalidPrice : na
 float replayStopDistance = not na(replayInvalidPrice) ? math.abs(close - replayInvalidPrice) : na
@@ -3022,13 +3022,14 @@ color concTextCol = panelRisk ? PNL_WARN_COL : panelLongSide ? PNL_LONG_COL : pa
 
 // 进场 / 止损 / 目标值（无具体价时回退到结构描述）
 // 进场：按 ICT 入场质量分级——优先 进FVG@CE → 扫流动性收回/受阻 → C级反转(站回VAL·吸收 / 跌破VAH·派发) → 退回结构 回踩/反抽/破位
-string panelEntryVal = "等触发"
-if panelLongSide
-    panelEntryVal := not executablePlan ? (setupLongB ? "等回踩" + pullbackLevelText + "确认" : setupLongC ? "等站回" + longBreakName + "确认" : "等触发") : inBullFvg and not na(bullFvgCe) ? "进FVG@CE " + f_fmt_price(bullFvgCe) : sweptLowReclaimed and not na(ictEventPrice) ? "扫低收回 " + f_fmt_price(ictEventPrice) : valReclaimed and not na(curVal) ? "站回VAL " + f_fmt_price(curVal) : cvdAbsorbBuyQualified ? "吸收反多 " + f_fmt_price(pullbackLevelPrice) : (bcDirectOk and (bcLongDirectRaw or cLongDirectRaw) ? "挂单 " + entryPriceText : longPlanAction + " " + f_fmt_price(longPlanPrice))
-else if panelShortSide
-    panelEntryVal := not executablePlan ? (setupShortB ? "等反抽" + reboundLevelText + "确认" : setupShortC ? "等跌回" + shortBreakName + "确认" : "等触发") : inBearFvg and not na(bearFvgCe) ? "进FVG@CE " + f_fmt_price(bearFvgCe) : sweptHighRejected and not na(ictEventPrice) ? "扫高受阻 " + f_fmt_price(ictEventPrice) : vahRejected and not na(curVah) ? "跌破VAH " + f_fmt_price(curVah) : cvdDistributeSellQualified ? "派发反空 " + f_fmt_price(reboundLevelPrice) : (bcDirectOk and (bcShortDirectRaw or cShortDirectRaw) ? "挂单 " + entryPriceText : shortPlanAction + " " + f_fmt_price(shortPlanPrice))
-string panelStopVal  = stopPriceText != "" ? stopPriceText + (not na(replayStopAtr) ? " (" + str.tostring(replayStopAtr, "#.1") + "ATR)" : "") : "—"
-string panelTgtVal   = magnetTargetText != "" ? magnetTargetText + (rrText != "" ? "  " + rrText : "") : "—"
+string panelEntryVal = rrHardBlock ? "不做，R:R不足" : "等触发"
+if not rrHardBlock
+    if panelLongSide
+        panelEntryVal := not executablePlan ? (setupLongB ? "等回踩" + pullbackLevelText + "确认" : setupLongC ? "等站回" + longBreakName + "确认" : "等触发") : inBullFvg and not na(bullFvgCe) ? "进FVG@CE " + f_fmt_price(bullFvgCe) : sweptLowReclaimed and not na(ictEventPrice) ? "扫低收回 " + f_fmt_price(ictEventPrice) : valReclaimed and not na(curVal) ? "站回VAL " + f_fmt_price(curVal) : cvdAbsorbBuyQualified ? "吸收反多 " + f_fmt_price(pullbackLevelPrice) : (bcDirectOk and (bcLongDirectRaw or cLongDirectRaw) ? "挂单 " + entryPriceText : longPlanAction + " " + f_fmt_price(longPlanPrice))
+    else if panelShortSide
+        panelEntryVal := not executablePlan ? (setupShortB ? "等反抽" + reboundLevelText + "确认" : setupShortC ? "等跌回" + shortBreakName + "确认" : "等触发") : inBearFvg and not na(bearFvgCe) ? "进FVG@CE " + f_fmt_price(bearFvgCe) : sweptHighRejected and not na(ictEventPrice) ? "扫高受阻 " + f_fmt_price(ictEventPrice) : vahRejected and not na(curVah) ? "跌破VAH " + f_fmt_price(curVah) : cvdDistributeSellQualified ? "派发反空 " + f_fmt_price(reboundLevelPrice) : (bcDirectOk and (bcShortDirectRaw or cShortDirectRaw) ? "挂单 " + entryPriceText : shortPlanAction + " " + f_fmt_price(shortPlanPrice))
+string panelStopVal  = rrHardBlock ? "—" : stopPriceText != "" ? stopPriceText + (not na(replayStopAtr) ? " (" + str.tostring(replayStopAtr, "#.1") + "ATR)" : "") : "—"
+string panelTgtVal   = rrHardBlock ? "—" : magnetTargetText != "" ? magnetTargetText + (rrText != "" ? "  " + rrText : "") : "—"
 // 扫位计数（社区共识：已知待扫位=知道等什么，已扫位=知道什么发生了）
 string sweepCntText = ictSweptCount + ictActiveCount > 0 ? "扫" + str.tostring(ictSweptCount) + "/" + str.tostring(ictActiveCount) : ""
 // KillZone 缩写（省空间：亚/伦/纽 · 完整标保留在联动行）
