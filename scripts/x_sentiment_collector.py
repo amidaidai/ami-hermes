@@ -46,7 +46,7 @@ def fetch_fear_greed():
 
 def main():
     now = datetime.now(TZ)
-    ts = now.strftime("%Y-%m-%d %H:%M BJT")
+    ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
     
     trending = fetch_trending()
     fg = fetch_fear_greed()

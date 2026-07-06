@@ -65,7 +65,7 @@ def analyze(symbol: str, current: dict, prev: dict) -> dict:
 
 
 def main():
-    now = datetime.now(TZ); ts = now.strftime("%Y-%m-%d %H:%M BJT")
+    now = datetime.now(TZ); ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
     results = []
     for sym in SYMBOLS:
         current = fetch_oi_and_price(sym)

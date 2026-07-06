@@ -329,7 +329,7 @@ def _send_one(target, msg):
         try:
             cp = subprocess.run(
                 [sys.executable, "-m", "hermes_cli.main", "send", "-t", target, "-q", msg],
-                timeout=6, capture_output=True, text=True
+                timeout=6, capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             if cp.returncode == 0:
                 log(f"推送成功 {target}: hermes_cli")
@@ -346,6 +346,7 @@ def _send_one(target, msg):
         if attempt < 1:
             time.sleep(1)
     return False
+
 
 
 def _push_worker_loop():
@@ -418,7 +419,7 @@ def pid_alive(pid):
         return False
     try:
         if os.name == "nt":
-            out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True, timeout=5).stdout
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5).stdout
             return str(int(pid)) in out and "No tasks" not in out
         os.kill(int(pid), 0)
         return True
@@ -468,6 +469,38 @@ def write_heartbeat(status="running", symbol=None):
     if symbol:
         payload["symbol"] = symbol
     save_json(HEARTBEAT_FILE, payload)
+
+
+def maybe_refresh_source_snapshot(symbol: str, state: dict, block: dict | None = None, ttl_seconds: int = 300):
+    """Refresh per-symbol source_snapshot even when no active monitor levels exist.
+
+    Before this guard, expired monitor levels caused process_block() to return
+    before ``ts.source_snapshot(symbol)``. XAUUSD then stayed stale for days while
+    the monitor heartbeat looked healthy. Throttle per symbol to avoid hammering
+    APIs in the 10s daemon loop.
+    """
+    if not ts:
+        return None
+    bucket = state.setdefault("last_snapshot_refresh", {})
+    now = time.time()
+    try:
+        last = float(bucket.get(symbol, 0) or 0)
+    except (TypeError, ValueError):
+        last = 0.0
+    if now - last < ttl_seconds:
+        return None
+    try:
+        snap = ts.source_snapshot(symbol, {
+            "plan_id": (block or {}).get("plan_id"),
+            "cycle": (block or {}).get("analysis_cycle"),
+            "price_at_analysis": (block or {}).get("price_at_analysis"),
+        })
+        bucket[symbol] = now
+        return snap
+    except Exception as e:
+        bucket[symbol] = now
+        log(f"source_snapshot刷新失败 {symbol}: {type(e).__name__}: {str(e)[:120]}")
+        return None
 
 
 def release_lock():
@@ -1430,6 +1463,17 @@ def process_block(raw, symbol, block, state):
     if not isinstance(price, (int, float)) or price != price or abs(price) == float('inf'):
         log(f"数据完整性失败 {symbol}: 价格={price} 非法值，跳过本轮")
         return raw, False
+    try:
+        snapshot = maybe_refresh_source_snapshot(symbol, state, block)
+        if snapshot:
+            raw.setdefault("source_snapshot", {})[symbol] = {
+                "quality": snapshot.get("quality"),
+                "confidence": snapshot.get("confidence"),
+                "updated": snapshot.get("time") or snapshot.get("ts"),
+            }
+    except Exception:
+        snapshot = None
+
     items = [x for x in normalize_levels(block) if x.get("status", "active") == "active"]
     if not items:
         return raw, False
@@ -1438,7 +1482,7 @@ def process_block(raw, symbol, block, state):
     setup = block.get("latest_setup") if isinstance(block.get("latest_setup"), dict) else {}
     cycle = block.get("analysis_cycle") or raw.get("analysis_cycle") or "—"
     last = state.setdefault("last_alerts", {})
-    snapshot = ts.source_snapshot(symbol, {"plan_id": plan_id, "cycle": cycle, "price_at_analysis": block.get("price_at_analysis")}) if ts else None
+    snapshot = snapshot or (ts.source_snapshot(symbol, {"plan_id": plan_id, "cycle": cycle, "price_at_analysis": block.get("price_at_analysis")}) if ts else None)
     data_ok, data_reason = anomaly_check(symbol, price, snapshot, state)
     if not data_ok:
         log(f"数据异常熔断 {symbol}: {data_reason}")

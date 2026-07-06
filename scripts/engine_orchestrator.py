@@ -40,7 +40,7 @@ def _read_json(fp):
 
 def main():
     now = datetime.now(TZ)
-    ts = now.strftime("%Y-%m-%d %H:%M BJT")
+    ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
     
     # 读取最新数据
     tv = _read_json(os.path.join(DATA, "btc_ref_levels.json"))

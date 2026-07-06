@@ -6,9 +6,9 @@ v1.1 (2026-06-29): 五层TF统一(D/4h/1h/15m/5m)·cron_read捷径·步数精简
 
 用法:
     from pipeline_router import route_pipeline, timeframe_info, pipeline_summary
-    steps = route_pipeline("BTCUSDT")   # → ['tv', 'binance', 'cg_pro', 'macro', 'cron_read', 'cvd', 'depth', 'card']
-    steps = route_pipeline("XAUUSD")    # → ['tv', 'macro', 'cron_read', 'cvd', 'card']
-    steps = route_pipeline("EURUSD")    # → ['tv', 'macro', 'cron_read', 'card']
+    steps = route_pipeline("BTCUSDT")   # → 10步: tv/binance/cg_pro/macro/x_sent/cron_read/cvd/depth/corr/card
+    steps = route_pipeline("XAUUSD")    # → 8步: tv/macro/x_sent/cron_read/cvd/corr/gold_macro/card
+    steps = route_pipeline("EURUSD")    # → 7步: tv/macro/x_sent/cron_read/corr/forex_rate/card
     tfinfo = timeframe_info("BTCUSDT")  # → {'layers': ['D','4h','1h','15m','5m'], 'main':'15m', 'screenshot':'15m'}
 """
 

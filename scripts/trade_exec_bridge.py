@@ -110,7 +110,7 @@ def bridge_signal_to_execution():
 
 def main():
     now = datetime.now(TZ)
-    ts = now.strftime("%Y-%m-%d %H:%M BJT")
+    ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
     
     result = bridge_signal_to_execution()
     

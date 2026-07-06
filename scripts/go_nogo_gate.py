@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""棠溪 v9.6 GO/NO-GO 硬闸门 — 下单前七问。
+"""棠溪 v9.6 GO/NO-GO 硬闸门 — 下单前八问。
 
 在分析卡输出后、实际下单前执行。任一红灯 = 禁止执行，给出明确原因。
-社区对标：EdgeFlo 盘前7问、NautilusTrader pre-trade risk、Freqtrade Protections。
+社区对标：EdgeFlo 盘前7问、NautilusTrader pre-trade risk、Freqtrade Protections；
+v9.6 增加双指标共振闸门后为8问。
 """
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
@@ -63,7 +64,7 @@ GATE_RULES = {
 }
 
 def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
-    """执行GO/NO-GO七问，返回通过/拒绝和详情。
+    """执行GO/NO-GO八问，返回通过/拒绝和详情。
 
     Args:
         symbol: 品种代码 (BTCUSDT, XAUUSD, etc.)
@@ -73,8 +74,8 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     Returns:
         {
             "go": bool,           # True=通过，False=禁止
-            "score": int,         # 绿灯计数 0-7
-            "max_score": 7,
+            "score": int,         # 绿灯计数 0-8
+            "max_score": 8,
             "red_gates": [str],   # 红灯门名称
             "yellow_gates": [str], # 黄灯门名称（警告但不拦截）
             "gates": {gate_name: {"status": "green"|"yellow"|"red", "reason": str}},
@@ -130,14 +131,11 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     # ── 门3: R:R底线 ──
     rr_a = float(meta.get("rr_a") or meta.get("rr1", 0) or 0)
     rr_b = float(meta.get("rr_b") or meta.get("rr2", 0) or 0)
-    best_rr = max(rr_a, rr_b) if rr_a or rr_b else 0
-    if best_rr >= 2.0:
-        gates["rr_ratio"] = {"status": "green", "reason": f"最佳R:R 1:{best_rr:.1f}·≥1:2"}
-    elif best_rr >= 1.5:
-        gates["rr_ratio"] = {"status": "yellow", "reason": f"R:R 1:{best_rr:.1f}·低于1:2标准"}
-        yellow_gates.append("rr_ratio")
+    primary_rr = rr_a or rr_b or 0
+    if primary_rr >= 2.0:
+        gates["rr_ratio"] = {"status": "green", "reason": f"主线R:R 1:{primary_rr:.1f}·≥1:2"}
     else:
-        gates["rr_ratio"] = {"status": "red", "reason": GATE_RULES["rr_ratio"]["red_light"]}
+        gates["rr_ratio"] = {"status": "red", "reason": f"{GATE_RULES['rr_ratio']['red_light']} 当前主线1:{primary_rr:.1f}"}
         red_gates.append("rr_ratio")
         go = False
 
@@ -220,7 +218,7 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     return {
         "go": go,
         "score": green_count,
-        "max_score": 7,
+        "max_score": 8,
         "red_gates": red_gates,
         "yellow_gates": yellow_gates,
         "green_count": green_count,

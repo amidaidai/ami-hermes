@@ -323,6 +323,7 @@ def _tv_cache_indicators_to_studies(cache: dict | None) -> list[dict]:
     sub_map = {
         "oi_total": "OI Total", "estimated_cvd_value": "Estimated CVD Value", "cvd_value": "Estimated CVD Value",
         "cvd_method_code": "CVD Method Code", "cvd_quality_code": "CVD Quality Code",
+        "lsr": "LSR", "long_short_ratio": "LSR",
         "volume_ratio": "Volume Ratio", "coverage_exchanges": "Coverage Exchanges",
         "coverage_spot": "Coverage Spot", "coverage_perp": "Coverage Perp",
         "coverage_feed_mode": "Coverage Feed Mode", "exchange_dominance_%": "Exchange Dominance %",
@@ -436,6 +437,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
             "cvd_flow": tv_main.get("sub_estimated_cvd_value"),
             "coverage": tv_main.get("sub_coverage_exchanges"),
             "volume": tv_main.get("sub_volume_ratio"),
+            "lsr": tv_main.get("sub_lsr"),
             "risk": tv_main.get("sub_cvd_quality_code"),
         }
 
@@ -475,6 +477,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     sub_cvd = tv_main.get("sub_estimated_cvd_value") or tv_sub.get("cvd_flow") or cvd_dir
     coverage = tv_main.get("sub_coverage_exchanges") or tv_sub.get("coverage")
     volume_ratio = tv_main.get("sub_volume_ratio") or tv_sub.get("volume")
+    lsr = tv_main.get("sub_lsr") or tv_sub.get("lsr")
     quality = tv_main.get("sub_cvd_quality_code") or tv_sub.get("risk") or coverage
 
     comp_text = str(composite) if composite not in (None, "") else "待刷新"
@@ -492,6 +495,14 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     else:
         haldro_dir = "中性/待判"
 
+    lsr_text = "待判"
+    try:
+        lsr_num = float(str(lsr))
+        lsr_text = f"LSR {lsr_num:.2f}" + ("·多头拥挤" if lsr_num > 1.3 else "·空头拥挤" if lsr_num < 0.8 else "·均衡")
+    except (TypeError, ValueError):
+        if lsr not in (None, ""):
+            lsr_text = str(lsr)
+
     svp_long = "多" in status or direction == "long" or "多" in str(svp_dir)
     svp_short = "空" in status or direction == "short" or "空" in str(svp_dir)
     sub_long = "偏多" in haldro_dir
@@ -501,7 +512,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
 
     dual.update({
         "haldro_direction": f"{haldro_dir} · Composite {comp_text}",
-        "haldro_position": f"OI {oi or '待判'}",
+        "haldro_position": f"OI {oi or '待判'} · {lsr_text}",
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
         "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'}",
         "haldro_confirm": f"Confirm {confirm or '待判'}",
@@ -560,6 +571,7 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
             ("MCP FVG Quality Code", "mcp_fvg_quality_code"),
             ("OI Total", "sub_oi_total"), ("Estimated CVD Value", "sub_estimated_cvd_value"),
             ("CVD Method Code", "sub_cvd_method_code"), ("CVD Quality Code", "sub_cvd_quality_code"),
+            ("LSR", "sub_lsr"),
             ("Volume Ratio", "sub_volume_ratio"),
             ("Coverage Exchanges", "sub_coverage_exchanges"), ("Coverage Spot", "sub_coverage_spot"),
             ("Coverage Perp", "sub_coverage_perp"), ("Coverage Feed Mode", "sub_coverage_feed_mode"),
@@ -740,6 +752,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     cvd_quality = cvd_quality_raw.replace("级", "") if isinstance(cvd_quality_raw, str) else str(cvd_quality_raw)
     # 数据等级降级：木桶原理——最弱一环决定
     data_grade = _effective_grade(data_grade, taker_data, engine_data)
+    meta["data_grade"] = data_grade
     ls_long = ls_data.get("long") or "N/A"
     ls_short = ls_data.get("short") or "N/A"
 
@@ -872,6 +885,12 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     st_a = _calc_stop_target_atr(price, "short" if bearish else "long", klines, symbol)
     st_b = _calc_stop_target_atr(price, "long" if bearish else "short", klines, symbol)
     rr_a, rr_b = st_a["rr"], st_b["rr"]
+    meta["rr_a"] = round(float(rr_a or 0), 3)
+    meta["rr_b"] = round(float(rr_b or 0), 3)
+    meta["rr1"] = meta["rr_a"]
+    meta["rr2"] = meta["rr_b"]
+    if not meta.get("invalid_price"):
+        meta["invalid_price"] = st_a.get("stop")
     rr_a_note = "" if rr_a >= 2.0 else " ⚠R:R不足"
     rr_b_note = "" if rr_b >= 2.0 else " ⚠R:R不足"
 
@@ -945,7 +964,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         displacement=displacement, one_reason=one_reason,
         model_id=model_id, n5=n5, eng_conf=eng_conf,
         klines=klines,
-        tv_dmi=tv_dmi_rows if tv_dmi_rows else None,
+        tv_dmi=engine_data.get("_tv_main") or tv_dmi_rows or {},
         dual_indicator=dual_indicator,
     )
     
@@ -2203,7 +2222,7 @@ def validate_card_rules(card: str, meta: dict) -> list[str]:
 
 
 def _parse_bjt_dt(value) -> datetime | None:
-    """Parse BJT/ISO timestamps used by cache files."""
+    """Parse Beijing/ISO timestamps used by cache files."""
     if not value:
         return None
     try:
@@ -2253,6 +2272,51 @@ def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dic
     }
 
 
+def _source_snapshot_status(symbol: str, max_age_hours: float = 1.0) -> dict:
+    """Return freshness metadata for the per-symbol source snapshot.
+
+    GO/NO-GO previously used a hard-coded 24h default because auto_card never
+    stamped ``engine_data['_snapshot_age_h']``. That made the freshness gate a
+    warning-only decoration instead of a real accuracy control. This helper is
+    deliberately file-based so it works after either source_snapshot() refreshes
+    data or a cron/daemon refreshed it out of band.
+    """
+    candidates = [DATA / f"source_snapshot_{symbol}.json"]
+    if str(symbol).upper() == "BTCUSDT":
+        candidates.append(DATA / "source_snapshot.json")
+    existing = [p for p in candidates if p.exists()]
+    if not existing:
+        return {"usable": False, "age_hours": 24.0, "reason": "source_snapshot缺失", "path": ""}
+    newest = max(existing, key=lambda p: p.stat().st_mtime)
+    age_h = max(0.0, (datetime.now(TZ).timestamp() - newest.stat().st_mtime) / 3600.0)
+    usable = age_h <= max_age_hours
+    reason = f"{age_h:.2f}h新鲜" if usable else f"source_snapshot过期{age_h:.1f}h"
+    return {"usable": usable, "age_hours": age_h, "reason": reason, "path": str(newest)}
+
+
+def _refresh_and_mark_snapshot(symbol: str, engine_data: dict) -> None:
+    """Refresh source snapshot when possible and mark freshness for gates/cards."""
+    try:
+        import sys as _snap_sys
+        sp = str(ROOT / "scripts")
+        if sp not in _snap_sys.path:
+            _snap_sys.path.insert(0, sp)
+        from trading_system import source_snapshot
+        snap = source_snapshot(symbol)
+        if isinstance(snap, dict) and snap:
+            engine_data["source_snapshot"] = snap
+            if snap.get("quality"):
+                engine_data.setdefault("grades", {})["source_snapshot"] = snap.get("quality")
+    except Exception as exc:
+        engine_data["_snapshot_refresh_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+    status = _source_snapshot_status(symbol)
+    engine_data["_snapshot_status"] = status
+    engine_data["_snapshot_age_h"] = float(status.get("age_hours") or 24.0)
+    if not status.get("usable") and engine_data.get("quality") in ("A", "A-", "B"):
+        # Do not silently keep A/B if the underlying source snapshot is stale.
+        engine_data["quality"] = "B" if status.get("age_hours", 24) <= 4 else "C"
+
+
 def _freshness_line(engine_data: dict) -> str:
     """Human-readable freshness line for the cockpit card."""
     tvs = engine_data.get("_tv_cache_status") or {}
@@ -2266,8 +2330,12 @@ def _freshness_line(engine_data: dict) -> str:
         tv_part = "TV实时/直连"
     else:
         tv_part = "TV未接入"
+    snap = engine_data.get("_snapshot_status") or {}
+    snap_part = f"快照{snap.get('reason')}" if snap else "快照未检测"
     src = (engine_data.get("prices") or {}).get("source") or "多源"
-    return f"数据新鲜度：{tv_part} · 价格源{src} · {datetime.now(TZ).strftime('%m-%d %H:%M')} BJT"
+    now_cn = datetime.now(TZ)
+    time_cn = f"{now_cn.year}年{now_cn.month}月{now_cn.day}日{now_cn.hour:02d}：{now_cn.minute:02d}"
+    return f"数据新鲜度：{tv_part} · {snap_part} · 价格源{src} · {time_cn}"
 
 
 def append_trade_plan(meta: dict, card: str) -> None:
@@ -2579,7 +2647,8 @@ def auto_card(symbol: str, push: bool = False) -> str:
     print(f"  {datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}\n")
     
-    asset = "crypto" if symbol in ("BTCUSDT", "ETHUSDT") else "metal" if "XAU" in symbol.upper() else "stock"
+    asset_class = _asset_class(symbol)
+    asset = "crypto" if asset_class == "crypto" else "metal" if asset_class == "gold" else asset_class
     
     # 管线路由：确定应该执行的步骤
     pipeline_steps = []
@@ -2595,7 +2664,12 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # ═══ Step 1: 数据采集 ═══
     print("① 数据采集...")
     
-    engine_data = {"symbol": symbol, "quality": "B"}
+    engine_data = {"symbol": symbol, "quality": "B", "asset_class": asset_class}
+    _refresh_and_mark_snapshot(symbol, engine_data)
+    _snap_status = engine_data.get("_snapshot_status") or {}
+    if not isinstance(_snap_status, dict):
+        _snap_status = {}
+    print(f"  📌 SourceSnapshot: {_snap_status.get('reason','未检测')}")
     
     if asset == "crypto":
         # 期货价格优先（TV/Binance Perp），CMC现货作 backup
@@ -2984,25 +3058,33 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # ═══ Step 5: 社区情绪 ═══
     print("⑤ 社区情绪...")
     community = ""
-    try:
-        from coingecko_collector import community_dashboard
-        community = community_dashboard()
-        print(f"  ✅ {community[:80]}...")
-    except Exception as e:
-        print(f"  ⚠️ 社区: {e}")
-    
-    # v2.1: Polymarket 预测市场情绪
-    try:
-        import importlib, sys as _sys
-        _sys.path.insert(0, str(ROOT / "scripts"))
-        from polymarket_bridge import get_polymarket_line
-        poly_line = get_polymarket_line()
-        print(f"  📊 {poly_line}")
-        engine_data["poly_sentiment"] = poly_line
-    except Exception as e:
+    if asset == "crypto":
+        try:
+            from coingecko_collector import community_dashboard
+            community = community_dashboard()
+            print(f"  ✅ {community[:80]}...")
+        except Exception as e:
+            print(f"  ⚠️ 社区: {e}")
+    else:
+        community = search_sent
+        print("  ℹ️ 社区: 非加密跳过CoinGecko加密社区面板·使用本品种热点")
+
+    # v2.1: Polymarket 预测市场情绪（当前桥接源只采 BTC/crypto，非加密禁用，避免跨资产误导）
+    if asset == "crypto":
+        try:
+            import importlib, sys as _sys
+            _sys.path.insert(0, str(ROOT / "scripts"))
+            from polymarket_bridge import get_polymarket_line
+            poly_line = get_polymarket_line()
+            print(f"  📊 {poly_line}")
+            engine_data["poly_sentiment"] = poly_line
+        except Exception as e:
+            engine_data["poly_sentiment"] = ""
+            print(f"  ⚠️ Poly: {e}")
+    else:
         engine_data["poly_sentiment"] = ""
-        print(f"  ⚠️ Poly: {e}")
-    
+        print("  ℹ️ Poly: 非加密跳过BTC/crypto预测市场桥")
+
     # ═══ 外汇利差（仅外汇品种）═══
     if any(p in symbol.upper() for p in ['EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']):
         try:
@@ -3027,21 +3109,25 @@ def auto_card(symbol: str, push: bool = False) -> str:
 
     # ═══ X情绪上下文读取 ═══
     try:
-        _x_path = ROOT / "data" / "x_sentiment_context.json"
-        if _x_path.exists():
-            import json as _xj
-            _x_data = _xj.loads(_x_path.read_text(encoding="utf-8"))
-            _fg = _x_data.get("fear_greed", {})
-            _gm = _x_data.get("global_market", {})
-            _queries = _x_data.get("suggested_x_queries", [])
-            _btc_dom = _gm.get("btc_dominance", "?")
-            _fg_v = _fg.get("value", "?")
-            _fg_c = _fg.get("classification", "?")
-            _q_str = " | ".join(_queries[:2]) if _queries else "无"
-            print(f"  ✅ X情绪: BTC恐贪{_fg_v}({_fg_c}) · 市占{str(_btc_dom)[:6]}% · {_q_str}")
-            engine_data["x_sentiment"] = _x_data
+        if asset == "crypto":
+            _x_path = ROOT / "data" / "x_sentiment_context.json"
+            if _x_path.exists():
+                import json as _xj
+                _x_data = _xj.loads(_x_path.read_text(encoding="utf-8"))
+                _fg = _x_data.get("fear_greed", {})
+                _gm = _x_data.get("global_market", {})
+                _queries = _x_data.get("suggested_x_queries", [])
+                _btc_dom = _gm.get("btc_dominance", "?")
+                _fg_v = _fg.get("value", "?")
+                _fg_c = _fg.get("classification", "?")
+                _q_str = " | ".join(_queries[:2]) if _queries else "无"
+                print(f"  ✅ X情绪: BTC恐贪{_fg_v}({_fg_c}) · 市占{str(_btc_dom)[:6]}% · {_q_str}")
+                engine_data["x_sentiment"] = _x_data
+            else:
+                print(f"  ⚠️ X情绪: 缓存文件不存在")
         else:
-            print(f"  ⚠️ X情绪: 缓存文件不存在")
+            engine_data["x_sentiment"] = f"{symbol}: {search_sent} · 非加密不采用BTC情绪缓存"
+            print(f"  ℹ️ X情绪: 非加密不采用BTC缓存·使用本品种热点/宏观替代")
     except Exception as _xe:
         print(f"  ⚠️ X情绪: {_xe}")
 

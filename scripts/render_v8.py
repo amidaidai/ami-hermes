@@ -10,10 +10,17 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone, timedelta
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+def _safe_reconfigure(stream):
+    """Windows/MSYS cron/pipe handles can reject reconfigure(); never break rendering."""
+    try:
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        pass
+
+
+_safe_reconfigure(sys.stdout)
+_safe_reconfigure(sys.stderr)
 
 TZ = timezone(timedelta(hours=8))
 
@@ -196,8 +203,10 @@ def render_v8_card(symbol: str, status: str, direction: str, price: float,
         tv_summary = "XAU走gold-api+金十；TV SVP加密字段限制"
         tv_action = "已知降级"
     if tv_dmi:
-        tv_summary = " · ".join(str(tv_dmi.get(k, "")) for k in ("grade", "action", "position") if tv_dmi.get(k)) or "已读行动格"
-        tv_bias = tv_dmi.get("bias_4h") or tv_dmi.get("cvd") or bias
+        tv_action_text = tv_dmi.get("action") or tv_dmi.get("treatment") or tv_dmi.get("conclusion") or ""
+        tv_pos_text = tv_dmi.get("position") or tv_dmi.get("background") or ""
+        tv_summary = " · ".join(str(x) for x in (tv_dmi.get("grade"), tv_action_text, tv_pos_text) if x) or "已读行动格"
+        tv_bias = tv_dmi.get("bias_4h") or tv_dmi.get("direction_text") or tv_dmi.get("cvd") or tv_dmi.get("cvd_state") or bias
     elif ac != "贵金属" and vwap_ema.get("available"):
         v = vwap_ema.get("vwap", {}) or {}
         tv_summary = f"本地VWAP {v.get('vwap', '—')} · {v.get('price_vs_vwap', '待判')}"

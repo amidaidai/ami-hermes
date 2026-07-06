@@ -1673,8 +1673,10 @@ if sz > 0
                 // 扫线判定时机由 SWEEP_MARK_MODE 控制（只管线条变虚的早晚，不影响评分用的扫流动性判定）
                 // wickPierce=上影/下影刺穿线；closeReclaim=收盘回到线内(真扫拒绝)
                 bool wickPierce  = lvl.isHigh ? high > lvl.price : low < lvl.price
+                bool gapThroughLine = lvl.isHigh ? (low > lvl.price and high[1] <= lvl.price) : (high < lvl.price and low[1] >= lvl.price)
+                bool touchOrGap = wickPierce or gapThroughLine
                 bool closeReclaim = lvl.isHigh ? close < lvl.price : close > lvl.price
-                isSwept := SWEEP_MARK_MODE == "触碰即扫" ? wickPierce : SWEEP_MARK_MODE == "收盘即扫" ? (barstate.isconfirmed and wickPierce) : (barstate.isconfirmed and wickPierce and closeReclaim)
+                isSwept := SWEEP_MARK_MODE == "触碰即扫" ? touchOrGap : SWEEP_MARK_MODE == "收盘即扫" ? (barstate.isconfirmed and touchOrGap) : (barstate.isconfirmed and touchOrGap and closeReclaim)
             if isSwept
                 lvl.swept := true
                 bool keepSweptLine = str.contains(lvl.name, "上周")

@@ -119,7 +119,7 @@ if __name__ == "__main__":
     else:
         data = gather_onchain()
         now = datetime.now(TZ)
-        ts = now.strftime("%Y-%m-%d %H:%M BJT")
+        ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
         lines = [f"Dune链上 {ts}"]
         lines.append("")
         

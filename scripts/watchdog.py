@@ -72,7 +72,7 @@ def send_watchdog_alert(msg: str) -> bool:
     except Exception as e:
         log(f"watchdog直发告警失败: {type(e).__name__}: {str(e)[:100]}")
     try:
-        subprocess.run(["hermes", "send", "telegram:-1003733144325:416", msg], cwd=str(ROOT), capture_output=True, text=True, timeout=20)
+        subprocess.run([sys.executable, "-m", "hermes_cli.main", "send", "-t", "telegram:-1003733144325:416", "-q", msg], cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         return True
     except Exception as e:
         log(f"watchdog兜底告警失败: {type(e).__name__}: {str(e)[:100]}")
@@ -117,7 +117,7 @@ def pid_alive(pid: int) -> bool:
         if os.name == "nt":
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
             ).stdout
             return str(pid) in out and "No tasks" not in out
         os.kill(pid, 0)

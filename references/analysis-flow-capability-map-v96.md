@@ -1,6 +1,6 @@
 # 棠溪驾驶舱 v9.6 · 六市场分析流程与能力映射
 
-更新时间：2026年6月29日22：10
+更新时间：2026年7月6日18：50
 
 ## 1. 本轮使用的技能与工具
 
@@ -55,6 +55,16 @@
 | `scripts/render_v8.py` | 保留旧函数名，实际升级为 v9.6 表格驾驶舱渲染器 | BTC/XAU 出卡含五大表格 |
 | `hermes/scripts/auto_card.py` | 标准手动出卡不再被旧极简卡覆盖，统一返回 v9.6 表格卡 | `auto_card_BTCUSDT.md` / `auto_card_XAUUSD.md` 均为完整表格 |
 | `tests/test_card_render_locked.py` | 回归测试从 v8.0 叙事 marker 更新为 v9.6 表格 marker | pytest 116 passed |
+
+## 4b. 2026年7月6日准确度硬化
+
+| 文件 | 改动 | 为什么提高准确度 |
+|---|---|---|
+| `scripts/auto_card.py` | 每次出卡刷新并标注 `source_snapshot_{symbol}` 年龄；实际 R:R 写回 meta；全部 USDT 合约按 crypto 路由 | 数据新鲜度闸门、预测评级、山寨/合约分析不再虚挂 |
+| `scripts/行情守望.py` | 无 active levels 时仍按 5 分钟节流刷新每个品种 source snapshot | 避免 heartbeat 正常但 XAU 快照过期数天 |
+| `scripts/data_freshness_watchdog.py` | 新增 XAU 快照、TV live、Deribit、Dune、QLib、Orion、X情绪等关键源监控 | 关键数据源过期会被监控发现 |
+| `scripts/render_v8.py` | TV行优先吃 `_tv_main` 的 grade/treatment/position | 驾驶舱不再因键名不一致显示“待现场读取” |
+| `references/analysis-accuracy-hardening-2026-07-06.md` | 固化本次硬化规则与验证命令 | skill/流程后续可复用 |
 
 ## 5. 社区对照后的下一批优化
 

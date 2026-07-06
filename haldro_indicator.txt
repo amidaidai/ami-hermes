@@ -1,7 +1,7 @@
 // This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // @HALDRO Project
 //@version=6
-indicator(title='Volume Aggregated Spot & Futures', shorttitle='Aggregated Volume', format=format.volume, max_bars_back=2000)
+indicator(title='Volume Aggregated Spot & Futures', shorttitle='AggVol', format=format.volume, max_bars_back=2000)
 
 // ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————— \\
 // —————— Tips
@@ -299,6 +299,7 @@ bool   priceDnA  = priceChgA < 0
 // 永续图优先用当前合约自身OI做主；现货/其它图用聚合值；缺失的自动跳过。
 // 安全配额：交易所20 + EUR/RUB 2 + OI聚合4 + OI回退1 = 27/40，远在限制内。
 SHOW_OI_AGG = input.bool(true, 'OI聚合(4家合成)', group = gp_act, tooltip = '跨市场持仓总量更准。关=仅用单源。注：Pine静态计数不省配额，关仅减运行时负载。')
+SHOW_LSR = input.bool(true, 'LSR多空比(Binance)', group = gp_act, tooltip = '读取 BINANCE:{BASE}USDT_LSR 多空比，用于识别多头/空头拥挤。注：Pine静态计数会增加1个security配额。')
 bool   isPerpChartA = str.endswith(syminfo.ticker, '.P') or str.endswith(syminfo.ticker, 'PERP')
 f_oi(string ex) => request.security(ex + ':' + baseA + 'USDT.P_OI', timeframe.period, close, ignore_invalid_symbol = true)
 float  oiBinA = SHOW_OI_AGG ? nz(f_oi('BINANCE')) : 0.0
@@ -316,8 +317,13 @@ bool   oiUpA    = oiOkA and oiChgA > 0
 bool   oiDnA    = oiOkA and oiChgA < 0
 // OI×价格背离：价涨仓跌或价跌仓涨 = 杠杆与价格反向，挤压/瀑布前兆，标⚡
 bool   oiDivergeA = oiOkA and ((priceUpA and oiDnA) or (priceDnA and oiUpA))
+float  lsrA = SHOW_LSR ? request.security('BINANCE:' + baseA + 'USDT_LSR', timeframe.period, close, ignore_invalid_symbol = true) : na
+bool   lsrOkA = not na(lsrA) and lsrA > 0
+bool   lsrLongCrowdedA = lsrOkA and lsrA > 1.3
+bool   lsrShortCrowdedA = lsrOkA and lsrA < 0.8
+string lsrSuffixA = not lsrOkA ? '' : lsrLongCrowdedA ? ' · 多拥挤 LSR' + str.tostring(lsrA, '#.##') : lsrShortCrowdedA ? ' · 空拥挤 LSR' + str.tostring(lsrA, '#.##') : ' · 均衡 LSR' + str.tostring(lsrA, '#.##')
 string flowTagA = not oiOkA ? '无OI' : priceUpA and oiUpA ? '新多' : priceDnA and oiUpA ? '新空' : priceUpA and oiDnA ? '空补' : priceDnA and oiDnA ? '多平' : '持平'
-string oiTxtA   = (not oiOkA ? '' : oiDivergeA ? '⚡' : oiUpA ? '▲' : oiDnA ? '▼' : '·') + (not oiOkA ? '无OI数据' : priceUpA and oiUpA ? '新多进场(真)' : priceUpA and oiDnA ? '空头回补(衰竭)' : priceDnA and oiUpA ? '新空进场' : priceDnA and oiDnA ? '多头平仓(去杠杆)' : '持平')
+string oiTxtA   = (not oiOkA ? '' : oiDivergeA ? '⚡' : oiUpA ? '▲' : oiDnA ? '▼' : '·') + (not oiOkA ? '无OI数据' : priceUpA and oiUpA ? '新多进场(真)' : priceUpA and oiDnA ? '空头回补(衰竭)' : priceDnA and oiUpA ? '新空进场' : priceDnA and oiDnA ? '多头平仓(去杠杆)' : '持平') + lsrSuffixA
 
 // —— 低周期累计：把每根Delta按选定周期累计成会话CVD，与主指标口径对齐 ——
 string cvdAnchorTf = ACT_CVD_ANCHOR == '周' ? 'W' : ACT_CVD_ANCHOR == '月' ? 'M' : 'D'
@@ -342,7 +348,7 @@ bool   cvdBearDivA = cvdPriceNewHighA and not na(prevCvdHighA) and sessCvdA < pr
 bool   cvdBullDivA = cvdPriceNewLowA and not na(prevCvdLowA) and sessCvdA > prevCvdLowA and cvdSwingOkA and cvdSlopeA >= 0
 bool   cvdDivAnyA = cvdBearDivA or cvdBullDivA
 int    cvdMethodCodeA = 1
-int    cvdQualityCodeA = not isCryptoA ? 0 : cvdDivAnyA ? 3 : math.abs(cvdSlopeA) > 0 ? 2 : 1
+int    cvdQualityCodeA = not isCryptoA ? 4 : cvdDivAnyA ? 1 : 0
 string cvdBaseTxtA = (cvdUpA ? '▲' : cvdDnA ? '▼' : '·') + (cvdUpA ? '买盘占优' : cvdDnA ? '卖盘占优' : '均衡')
 string cvdTxtA = '估算CVD ' + (cvdBearDivA ? '⚠卖背离' : cvdBullDivA ? '⚠买背离' : cvdBaseTxtA)
 // 占比已并入量能行(volTxtA含合{perp}%)，shareTxtA不再显示
@@ -390,9 +396,10 @@ bool volVetoA = volDnA
 bool topExhaustA = shortLiqA and priceUpA
 bool botExhaustA = longLiqA and priceDnA
 bool absorbA = (priceUpA and cvdDnA and not oiDnA) or (priceDnA and cvdUpA and not oiDnA)
+bool lsrCrowdRiskA = (dirUpA and lsrLongCrowdedA) or (dirDnA and lsrShortCrowdedA)
 string flowShortA = cvdBearDivA ? '卖背离' : cvdBullDivA ? '买背离' : absorbA ? '吸收' : vExh ? '衰竭' : vDelev ? '去杠杆' : flowTagA
-int confirmScoreA = math.min(math.max(confirmsA + (usingAggregatedFeed and not lowCoverageWarn and not singleExchangeDomWarn ? 1 : 0) - (htfConflict ? 2 : 0) - (lowCoverageWarn ? 1 : 0) - (singleExchangeDomWarn ? 1 : 0) - (oiDivergeA ? 1 : 0) - (cvdDivAnyA ? 1 : 0), 0), 5)
-string riskWarnA = lowCoverageWarn ? "⚠低覆盖" : singleExchangeDomWarn ? "⚠单所主导" : htfConflict ? "⚠HTF冲突" : cvdDivAnyA ? "⚠CVD背离" : oiDivergeA ? "⚠OI背离" : ""
+int confirmScoreA = math.min(math.max(confirmsA + (usingAggregatedFeed and not lowCoverageWarn and not singleExchangeDomWarn ? 1 : 0) - (htfConflict ? 2 : 0) - (lowCoverageWarn ? 1 : 0) - (singleExchangeDomWarn ? 1 : 0) - (oiDivergeA ? 1 : 0) - (cvdDivAnyA ? 1 : 0) - (lsrCrowdRiskA ? 1 : 0), 0), 5)
+string riskWarnA = lowCoverageWarn ? "⚠低覆盖" : singleExchangeDomWarn ? "⚠单所主导" : htfConflict ? "⚠HTF冲突" : cvdDivAnyA ? "⚠CVD背离" : lsrCrowdRiskA ? "⚠LSR拥挤" : oiDivergeA ? "⚠OI背离" : ""
 string actText = '中性 · 观望'
 if vGood
     actText := htfConflict ? '逆高周 · 短多但高周偏空,降级' : topExhaustA ? '轧空冲顶 · 追多风险大,警惕反转' : volVetoA ? '涨但缩量 · 动能弱,轻仓/不追' : '实涨可信 · 新钱+买盘 ✅'
@@ -474,12 +481,21 @@ alertcondition(alertOkA and singleExchangeDomWarn, '单所主导降权', '聚合
 alertcondition(alertOkA and oiDivergeA, 'OI背离', '价格与 OI 方向背离，警惕衰竭或挤仓')
 alertcondition(alertOkA and htfConflict, '高周期冲突', '副指标与高周期方向冲突，避免追单')
 alertcondition(alertOkA and cvdDivAnyA, '估算CVD背离', '估算CVD与价格出现三重过滤背离，副指标信号降权')
+alertcondition(alertOkA and lsrCrowdRiskA, 'LSR拥挤降权', '多空比拥挤且与当前方向同侧，副指标信号需降权')
 
 // — TV MCP Data Window 编码导出（供 study_values 读取 + 渲染器消费）
+int oiDirCodeA = oiUpA ? 1 : oiDnA ? -1 : 0
+int cvdDirCodeA = cvdUpA ? 1 : cvdDnA ? -1 : 0
+int spotPerpBiasCodeA = perc_perp >= 70 ? 2 : perc_spot >= 60 ? 1 : 0
+int haldroRiskCodeA = (lowCoverageWarn ? 1 : 0) + (singleExchangeDomWarn ? 2 : 0) + (htfConflict ? 4 : 0) + (oiDivergeA ? 8 : 0) + (cvdDivAnyA ? 16 : 0) + (lsrCrowdRiskA ? 32 : 0) + (not isCryptoA ? 64 : 0)
+int haldroValidCodeA = not isCryptoA ? 0 : usingAggregatedFeed ? 2 : fallbackToChartFeed ? 1 : 0
+plot(haldroValidCodeA, "HALDRO Valid Code", display=display.data_window)
 plot(oiOkA ? oiCloseA : na, "OI Total", display=display.data_window)
 plot(na(sessCvdA) ? na : sessCvdA, "Estimated CVD Value", display=display.data_window)
+plot(na(sessCvdA) ? na : sessCvdA, "CVD Value", display=display.data_window)
 plot(cvdMethodCodeA, "CVD Method Code", display=display.data_window)
 plot(cvdQualityCodeA, "CVD Quality Code", display=display.data_window)
+plot(lsrOkA ? lsrA : na, "LSR", display=display.data_window)
 plot(volMaA > 0 ? Volume / volMaA : na, "Volume Ratio", display=display.data_window)
 plot(validExchangeCount, "Coverage Exchanges", display=display.data_window)
 plot(spotValidCount, "Coverage Spot", display=display.data_window)
@@ -487,6 +503,8 @@ plot(perpValidCount, "Coverage Perp", display=display.data_window)
 plot(usingAggregatedFeed ? 1 : fallbackToChartFeed ? -1 : 0, "Coverage Feed Mode", display=display.data_window)
 plot(exchangeDominancePct, "Exchange Dominance %", display=display.data_window)
 plot(confirmScoreA, "Confirm Score", display=display.data_window)
+plot(haldroRiskCodeA, "HALDRO Risk Code", display=display.data_window)
+plot(oiDirCodeA * 100 + cvdDirCodeA * 10 + spotPerpBiasCodeA, "HALDRO Flow Pack (OI*100+CVD*10+SP)", display=display.data_window)
 // 方向编码：负=空，零=无向，正=多，乘确认数编码强度
 plot(dirUpA ? 1 + confirmsA * 10 : dirDnA ? -(1 + confirmsA * 10) : 0, "Composite", display=display.data_window)
 
