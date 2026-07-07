@@ -56,9 +56,9 @@ def test_protections_json_shape() -> None:
 
 
 def test_render_contains_conflict_table() -> None:
-    from render_v8 import render_v8_card
+    from render_v96 import render_v96_card
 
-    card = render_v8_card(
+    card = render_v96_card(
         "BTCUSDT", "B等待", "long", 60000, None, None, None, "", "买", "A", "buy", "1.2", "0.01%",
         "亚洲", {"available": True, "vwap": {"vwap": 60010, "price_vs_vwap": "下方"}}, "50", [], False,
         {"stop": 59000, "target": 62000}, {"stop": 61000, "target": 58000}, 2.0, 2.0, "", "", 1.0,
@@ -70,9 +70,9 @@ def test_render_contains_conflict_table() -> None:
 
 
 def test_markdown_tables_are_rectangular() -> None:
-    from render_v8 import render_v8_card
+    from render_v96 import render_v96_card
 
-    card = render_v8_card(
+    card = render_v96_card(
         "XAUUSD", "B等待", "long", 3978, None, None, None, "", "N/A", "C", "N/A", "N/A", "N/A",
         "亚洲", {}, "?", [], False,
         {"stop": 3962, "target": 3993}, {"stop": 3997, "target": 3947}, 0.9, 1.7, "", "", 1.0,

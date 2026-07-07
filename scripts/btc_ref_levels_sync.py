@@ -103,6 +103,26 @@ def pick_cache() -> dict[str, Any]:
     return data
 
 
+def _pick_cache_relaxed() -> dict[str, Any]:
+    """P0修复：放宽年龄限制读最新 TV cache（用于TV刷新失败兜底，不卡30min）。"""
+    candidates = []
+    for path in (TV_LIVE, TV_DMI):
+        if not path.exists():
+            continue
+        data = load_json(path)
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("symbol")) != "BINANCE:BTCUSDT.P":
+            continue
+        candidates.append((path.stat().st_mtime, data, path.name))
+    if not candidates:
+        raise RuntimeError("no BINANCE:BTCUSDT.P TV cache (relaxed)")
+    candidates.sort(reverse=True, key=lambda x: x[0])
+    data = candidates[0][1]
+    data["_picked_cache"] = candidates[0][2]
+    return data
+
+
 def recent_hilo() -> tuple[float | None, float | None]:
     """Fetch recent BTC 15m high/low with regional fallback.
 
@@ -133,7 +153,12 @@ def recent_hilo() -> tuple[float | None, float | None]:
 
 def main() -> int:
     try:
-        refresh_note = refresh_tv_cache()
+        # P0修复：TV缓存刷新失败不再直接退出，转warning继续（Binance直取兜底）
+        try:
+            refresh_note = refresh_tv_cache()
+        except Exception as tv_exc:
+            refresh_note = f"TV刷新失败(降级Binance直取): {tv_exc}"[:200]
+            print(f"⚠ {refresh_note}", file=sys.stderr)
         cache = pick_cache()
         ind = cache.get("indicators") or {}
         vwap = num(ind.get("s_vwap") or ind.get("S VWAP"))
@@ -153,9 +178,17 @@ def main() -> int:
                 stale_ok = age <= 30 and bool(refresh_note)
                 stale_note = f"; reused cache age {age:.1f}min after refresh stdout: {refresh_note[:160]}" if stale_ok else ""
             if not stale_ok:
-                raise RuntimeError("missing TV fields: " + ",".join(missing))
+                # P0修复：TV刷新已失败时不直接raise，放宽cache年龄到120min兜底一次
+                relaxed_age = None
+                if all(path.exists() for path in (TV_LIVE, TV_DMI)):
+                    relaxed_age = min(age_minutes(TV_LIVE), age_minutes(TV_DMI))
+                if relaxed_age is not None and relaxed_age <= 120:
+                    stale_note = f"; TV刷新失败,复用{relaxed_age:.1f}min前cache兜底"
+                else:
+                    raise RuntimeError("missing TV fields: " + ",".join(missing))
             # Cron 子进程偶发读到刷新前缓存时，复读磁盘最新文件兜底一次。
-            cache = pick_cache()
+            # P0修复：兜底分支放宽年龄限制（pick_cache 卡30min会再次raise），直接读最新文件
+            cache = _pick_cache_relaxed()
             ind = cache.get("indicators") or {}
             vwap = num(ind.get("s_vwap") or ind.get("S VWAP"))
             val = num(ind.get("val_price") or cache.get("val"))

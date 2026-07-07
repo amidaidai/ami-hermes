@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""棠溪 v9.6 表格驾驶舱渲染器。
+"""棠溪 v9.6 表格驾驶舱渲染器（原 render_v8.py 重命名，函数 render_v96_card）。
 
-保持旧函数名 ``render_v8_card``，避免大范围调用方改动；实际输出已升级为
-v9.6 表格格式：多周期定位、关键位矩阵、多源交叉验证、执行预案、风控闸门。
+输出 v9.6 表格格式：多周期定位、关键位矩阵、多源交叉验证、执行预案、风控闸门。
 """
 from __future__ import annotations
 
@@ -177,7 +176,7 @@ def _bias_label(direction: str, status: str) -> str:
     return "观望"
 
 
-def render_v8_card(symbol: str, status: str, direction: str, price: float,
+def render_v96_card(symbol: str, status: str, direction: str, price: float,
                    high, low, chg, tf_lines: str, cvd_dir: str, cvd_quality: str,
                    taker_dir: str, taker_ratio, funding_rate, kill_zone: str,
                    vwap_ema: dict, fg_v: str, levels: list[dict],

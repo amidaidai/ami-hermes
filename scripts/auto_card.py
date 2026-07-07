@@ -948,7 +948,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     ]
 
     # v8.0: 叙事模板渲染
-    from render_v8 import render_v8_card
+    from render_v96 import render_v96_card
     monitor_levels = engine_data.get("monitor_levels", {}).get("symbols", {}).get(symbol, {})
     all_levels_list = monitor_levels.get("levels", [])
     
@@ -982,7 +982,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                 k.setdefault("sub_indicator", sub_line)
                 k.setdefault("sub_composite", comp_line)
 
-    full = render_v8_card(
+    full = render_v96_card(
         symbol=symbol, status=status, direction=direction, price=price,
         high=high, low=low, chg=chg, tf_lines=tf_lines,
         cvd_dir=cvd_dir, cvd_quality=cvd_quality,
@@ -1392,6 +1392,10 @@ def _compute_perfect_signals(engine_data: dict, symbol: str, price: float) -> di
     if "Kill Zone" in kill_zone and is_xau: conf += 2
     if "主要交易时段" in kill_zone and not is_btc: conf += 1   # forex/stock boost
     if displacement == "强": conf += 1
+    # P2修复：XAU 占位推算时降级（非TV现场读数，可信度降一级）
+    if is_xau and engine_data.get("_xau_placeholder"):
+        conf = max(0, conf - 2)
+        kill_zone = f"{kill_zone} · ⚠️XAU占位推算"
 
     # Asset specific confluence from new data bridge (DXY SMT, earnings)
     try:
@@ -2879,27 +2883,57 @@ def auto_card(symbol: str, push: bool = False) -> str:
             # ── K线：基于 gold-api/Jin10 真实数据构建（TV SVP v10 对 XAU 为已知限制）──
             klines_dict = engine_data.setdefault("klines", {})
             if price and price > 0:
-                xau_tv_note = "XAU使用gold-api+金十代理；TV SVP v10含加密Funding/OI字段，OANDA:XAUUSD程序化读数禁用"
-                engine_data["_xau_tv_limitation"] = xau_tv_note
-                # 从金十/Jin10取24h高低
-                j_high = engine_data.get("binance_spot", {}).get("24h_high", price * 1.005)
-                j_low = engine_data.get("binance_spot", {}).get("24h_low", price * 0.995)
-                daily_range = j_high - j_low if j_high > j_low else price * 0.01
-                # 推算Value Area
-                vah = min(price + daily_range * 0.35, j_high)
-                val = max(price - daily_range * 0.35, j_low)
-                poc = price
-                for tf in ["5m", "15m", "1h", "4h"]:
-                    tf_scale = {"5m": 0.15, "15m": 0.25, "1h": 0.50, "4h": 1.0}.get(tf, 0.5)
-                    tf_range = daily_range * tf_scale
-                    klines_dict[tf] = {
-                        "close": price, "high": price + tf_range * 0.6, "low": max(price - tf_range * 0.4, j_low),
-                        "open": price - tf_range * 0.1, "change_pct": 0,
-                        "poc": poc, "vah": vah, "val": val,
-                        "direction": "待获取",
-                        "description": f"gold-api·金十 现货{int(price)} | 24h高{int(j_high)} 低{int(j_low)}",
-                    }
-                print(f"  📊 XAU K线: gold-api+金十 现货{int(price)} · 日内高{int(j_high)} 低{int(j_low)} · VAH{int(vah)} VAL{int(val)}")
+                # P2修复：优先用 TV MCP 现场读取的真实 XAU 状态；无则占位推算并明确降级标注
+                xau_tv_state_path = ROOT / "data" / "xau_tv_state.json"
+                tv_xau = None
+                if xau_tv_state_path.exists():
+                    _age_min = (datetime.now(TZ).timestamp() - xau_tv_state_path.stat().st_mtime) / 60.0
+                    if _age_min <= 30:
+                        try:
+                            tv_xau = json.loads(xau_tv_state_path.read_text(encoding="utf-8"))
+                        except Exception:
+                            tv_xau = None
+                if tv_xau:
+                    xau_tv_note = "XAU TV MCP现场读取(OANDA:XAUUSD 5/15/1h/4h真实结构)"
+                    engine_data["_xau_tv_limitation"] = xau_tv_note
+                    # 用 TV 真实高低覆盖占位
+                    for tf in ["5m", "15m", "1h", "4h"]:
+                        tvd = (tv_xau.get("timeframes") or {}).get(tf) or {}
+                        if tvd.get("high") and tvd.get("low"):
+                            klines_dict[tf] = {
+                                "close": tvd.get("close", price),
+                                "high": tvd["high"], "low": tvd["low"],
+                                "open": tvd.get("open", price),
+                                "change_pct": tvd.get("change_pct", 0),
+                                "poc": tvd.get("poc", price),
+                                "vah": tvd.get("vah", price), "val": tvd.get("val", price),
+                                "direction": tvd.get("direction", "TV现场"),
+                                "description": f"TV MCP·OANDA:XAUUSD {tf} 现场读取",
+                            }
+                    print(f"  📊 XAU K线: TV MCP现场读取 {int(price)} · 真实结构覆盖占位")
+                else:
+                    xau_tv_note = "⚠️XAU使用gold-api+金十占位推算(非TV现场)；OANDA:XAUUSD程序化读数需xau_tv_sync.py补真"
+                    engine_data["_xau_tv_limitation"] = xau_tv_note
+                    engine_data["_xau_placeholder"] = True  # 标记占位，供状态降级
+                    # 从金十/Jin10取24h高低
+                    j_high = engine_data.get("binance_spot", {}).get("24h_high", price * 1.005)
+                    j_low = engine_data.get("binance_spot", {}).get("24h_low", price * 0.995)
+                    daily_range = j_high - j_low if j_high > j_low else price * 0.01
+                    # 推算Value Area
+                    vah = min(price + daily_range * 0.35, j_high)
+                    val = max(price - daily_range * 0.35, j_low)
+                    poc = price
+                    for tf in ["5m", "15m", "1h", "4h"]:
+                        tf_scale = {"5m": 0.15, "15m": 0.25, "1h": 0.50, "4h": 1.0}.get(tf, 0.5)
+                        tf_range = daily_range * tf_scale
+                        klines_dict[tf] = {
+                            "close": price, "high": price + tf_range * 0.6, "low": max(price - tf_range * 0.4, j_low),
+                            "open": price - tf_range * 0.1, "change_pct": 0,
+                            "poc": poc, "vah": vah, "val": val,
+                            "direction": "占位推算",
+                            "description": f"gold-api·金十 现货{int(price)} | 24h高{int(j_high)} 低{int(j_low)} | ⚠️非TV现场",
+                        }
+                    print(f"  📊 XAU K线: gold-api+金十 现货{int(price)} · 日内高{int(j_high)} 低{int(j_low)} · VAH{int(vah)} VAL{int(val)} · ⚠️占位")
                 engine_data["_xau_klines_pending"] = False
             else:
                 for tf in ["5m", "15m", "1h", "4h"]:

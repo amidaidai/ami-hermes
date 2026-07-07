@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""XAU TV MCP 现场同步 v1.0 — 读 OANDA:XAUUSD 五层真实结构写 data/xau_tv_state.json
+
+解决 v9.6 地图 P0：XAU 占位推算虚挂。本脚本通过 TradingView MCP 现场切
+5/15/1h/4h 读真实 high/low/close/OHLCV，auto_card.py 优先用此真实数据覆盖占位。
+
+用法: python scripts/xau_tv_sync.py
+依赖: tools/tradingview-mcp (TV MCP CDP 已启动)
+降级: TV MCP 不可用则静默退出(不写文件，auto_card 走占位并标注⚠️)
+"""
+import sys
+import json
+import asyncio
+import os
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+
+ROOT = Path(__file__).resolve().parents[1]
+TZ = timezone(timedelta(hours=8))
+OUT = ROOT / "data" / "xau_tv_state.json"
+SYMBOL = "OANDA:XAUUSD"
+TIMEFRAMES = ["5m", "15m", "1h", "4h"]
+
+# TV MCP 连接依赖（与 fetch_tv_mcp.py 一致）
+hermes_venv = Path(os.path.expanduser("~/AppData/Local/hermes/hermes-agent/venv/Lib/site-packages"))
+if hermes_venv.exists():
+    sys.path.insert(0, str(hermes_venv))
+
+
+async def _run():
+    try:
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+        from fetch_tv_mcp import (
+            call_tool, set_symbol, set_timeframe,
+            get_chart_state, get_ohlcv, parse_result,
+        )
+    except Exception as e:
+        print(f"⚠ TV MCP 模块不可用: {e}", file=sys.stderr)
+        return 1
+
+    server_script = ROOT / "tools" / "tradingview-mcp" / "src" / "server.js"
+    if not server_script.exists():
+        print(f"⚠ TV MCP server 未找到: {server_script}", file=sys.stderr)
+        return 1
+
+    server_params = StdioServerParameters(command="node", args=[str(server_script)])
+    async with stdio_client(server_params) as (read, write):
+        from mcp import ClientSession
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            # 切到 XAU
+            await set_symbol(session, SYMBOL)
+            await asyncio.sleep(2)
+
+            result = {"symbol": SYMBOL, "updated_at": datetime.now(TZ).isoformat(), "timeframes": {}}
+            for tf in TIMEFRAMES:
+                await set_timeframe(session, tf)
+                await asyncio.sleep(3)
+                state = await get_chart_state(session)
+                ohlcv = await get_ohlcv(session)
+                st = parse_result(state)
+                ov = parse_result(ohlcv)
+                tf_data = _parse_ohlcv(ov, st)
+                if tf_data:
+                    result["timeframes"][tf] = tf_data
+                    print(f"  ✅ {tf}: H{tf_data['high']:.1f} L{tf_data['low']:.1f} C{tf_data['close']:.1f}")
+                else:
+                    print(f"  ⚠ {tf}: 解析失败", file=sys.stderr)
+
+            OUT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"✅ XAU TV状态已写 {OUT}")
+            return 0
+
+
+def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
+    """从 TV MCP OHLCV/state 文本提取最新K线 high/low/close/open。"""
+    import re
+    # 尝试 OHLCV 文本中的数字行: [time, open, high, low, close, volume]
+    nums = re.findall(r"-?\d+\.?\d*", ohlcv_text)
+    # 取末尾一组 4-6 个数字 (high/low/close/open 附近)
+    if len(nums) >= 4:
+        try:
+            floats = [float(x) for x in nums[-6:]]
+            # 假设顺序 open high low close ... 取合理区间
+            candidates = [f for f in floats if 1000 < f < 5000]  # XAU 价格区间
+            if len(candidates) >= 3:
+                return {
+                    "open": candidates[0],
+                    "high": max(candidates),
+                    "low": min(candidates),
+                    "close": candidates[-1],
+                    "change_pct": 0,
+                }
+        except Exception:
+            pass
+    return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(_run()))
