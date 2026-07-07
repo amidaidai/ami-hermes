@@ -2085,15 +2085,15 @@ def _downgrade_low_rr_a_status(meta: dict, engine_data: dict, price, symbol: str
 def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     """Fetch Binance futures data with HMAC signing for authenticated endpoints."""
     import requests, time as _time, hmac, hashlib, urllib.parse
-    # 只用于加密品种，金属/股票/外汇不碰（防止覆盖已有K线）
     su = symbol.upper()
-    if "XAU" in su or "GOLD" in su:
-        return
-    ac = _asset_class(symbol) if callable(_asset_class) else (lambda s: "crypto" if s.endswith("USDT") else "other")(symbol)
-    if ac not in ("crypto",):
-        return
+    is_xau = ("XAU" in su or "GOLD" in su)
+    # 金属只拉 public K线供 VWAP/EMA 引擎（不覆盖 gold-api 价格）
+    if not is_xau:
+        ac = _asset_class(symbol) if callable(_asset_class) else (lambda s: "crypto" if s.endswith("USDT") else "other")(symbol)
+        if ac not in ("crypto",):
+            return
     base = "https://fapi.binance.com"
-    sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+    sym = "XAUUSDT" if is_xau else (symbol if symbol.endswith("USDT") else f"{symbol}USDT")
     api_key, secret = _load_binance_keys()
     
     # ── K-lines (public, no sign needed) ──
@@ -2815,6 +2815,12 @@ def auto_card(symbol: str, push: bool = False) -> str:
                 engine_data["quality"] = quality
                 engine_data["grades"] = {"overall": quality, "confidence": confidence}
                 print(f"  ✅ XAU: ${price:,.0f} [{quality}] ({source_label})")
+                
+                # P1b-R2: 补 Binance XAUUSDT K线供 VWAP/EMA 引擎（不覆盖 gold-api 价格）
+                try:
+                    _collect_binance_data(engine_data, symbol)
+                except Exception:
+                    pass
                 
                 # ── 金十 Quote 原始数据（用于获取24h高/低/今开）──
                 jin10_raw = None
