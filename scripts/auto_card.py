@@ -824,6 +824,40 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
             _k15m_list = k15m.get("bars") or k15m.get("data") or []
             if _k15m_list:
                 _vwap_klines = _k15m_list
+        if not _vwap_klines:
+            # P1b: 从 _raw_klines_multi 原始 Binance OHLCV 重组（klines[tf] 无 bars 键时）
+            _raw_multi = engine_data.get("_raw_klines_multi") or {}
+            _raw_15m = _raw_multi.get("15m") or []
+            if isinstance(_raw_15m, list) and _raw_15m:
+                _vwap_klines = [
+                    {"open": float(c[1]), "high": float(c[2]),
+                     "low": float(c[3]), "close": float(c[4]), "volume": float(c[5])}
+                    for c in _raw_15m if isinstance(c, (list, tuple)) and len(c) >= 6
+                ]
+        if not _vwap_klines:
+            # P1b: Binance futures_klines 兜底（TV 实时 K线未注入时）
+            _fk = engine_data.get("futures_klines") or {}
+            _fk_src = None
+            if isinstance(_fk, dict):
+                _fk_src = max(_fk.values(),
+                              key=lambda v: len(v.get("closes", []))
+                              if isinstance(v, dict) else 0, default={})
+            elif isinstance(_fk, list):
+                _fk_src = _fk
+            if isinstance(_fk_src, dict) and _fk_src.get("closes"):
+                # 重组为 [{"open","high","low","close","volume"}, ...]
+                _o = _fk_src.get("opens") or _fk_src.get("open") or []
+                _h = _fk_src.get("highs") or _fk_src.get("high") or []
+                _l = _fk_src.get("lows") or _fk_src.get("low") or []
+                _c = _fk_src.get("closes") or _fk_src.get("close") or []
+                _v = _fk_src.get("volumes") or _fk_src.get("volume") or []
+                _n = min(len(_o), len(_h), len(_l), len(_c), len(_v) or len(_c))
+                if _n > 0:
+                    _vwap_klines = [
+                        {"open": _o[i], "high": _h[i], "low": _l[i],
+                         "close": _c[i], "volume": _v[i] if i < len(_v) else 0}
+                        for i in range(_n)
+                    ]
         if _vwap_klines:
             vwap_ema = vwap_ema_cvd_summary(symbol, _vwap_klines)
             engine_data["_vwap_ema"] = vwap_ema
@@ -2067,31 +2101,41 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     klines = {}
     _raw_klines_multi = {}
     for tf, limit in [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]:
-        try:
-            r = requests.get(f"{base}/fapi/v1/klines", params={"symbol": sym, "interval": tf, "limit": limit}, timeout=8)
-            data = r.json()
-            if isinstance(data, list) and data:
-                _raw_klines_multi[tf] = data  # v4.4: 原始 OHLCV 供 FVG/OB/吸收检测
-                closes = [float(c[4]) for c in data]
-                highs = [float(c[2]) for c in data]
-                lows = [float(c[3]) for c in data]
-                volumes = [float(c[5]) for c in data]
-                chg_pct = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0
-                avg_vol = sum(volumes) / len(volumes) if volumes else 0
-                rng = max(highs) - min(lows)
-                poc = sum(closes) / len(closes) if closes else closes[-1]
-                direction = "偏多" if chg_pct > 0.3 else "偏空" if chg_pct < -0.3 else "震荡"
-                klines[tf] = {
-                    "close": closes[-1], "high": max(highs), "low": min(lows),
-                    "open": float(data[0][1]), "volume": sum(volumes),
-                    "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
-                    "change_pct": round(chg_pct, 4),
-                    "avg_volume": avg_vol, "range": rng,
-                    "poc": round(poc, 2), "vah": round(max(highs), 2), "val": round(min(lows), 2),
-                    "direction": direction,
-                    "description": _kl_desc(tf, closes, highs, lows, volumes),
-                }
-        except Exception:
+        _ok = False
+        # P1b: 多源回退（fapi 403 时切 spot/vision）
+        for _b in (base, "https://api.binance.com/api/v3",
+                   "https://data-api.binance.vision/api/v3"):
+            try:
+                _endpoint = f"{_b}/fapi/v1/klines" if "fapi" in _b else f"{_b}/klines"
+                r = requests.get(_endpoint, params={"symbol": sym, "interval": tf, "limit": limit}, timeout=6)
+                data = r.json()
+                if isinstance(data, list) and data:
+                    _raw_klines_multi[tf] = data  # v4.4: 原始 OHLCV 供 FVG/OB/吸收检测
+                    closes = [float(c[4]) for c in data]
+                    highs = [float(c[2]) for c in data]
+                    lows = [float(c[3]) for c in data]
+                    volumes = [float(c[5]) for c in data]
+                    chg_pct = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0
+                    avg_vol = sum(volumes) / len(volumes) if volumes else 0
+                    rng = max(highs) - min(lows)
+                    poc = sum(closes) / len(closes) if closes else closes[-1]
+                    direction = "偏多" if chg_pct > 0.3 else "偏空" if chg_pct < -0.3 else "震荡"
+                    klines[tf] = {
+                        "close": closes[-1], "high": max(highs), "low": min(lows),
+                        "open": float(data[0][1]), "volume": sum(volumes),
+                        "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
+                        "change_pct": round(chg_pct, 4),
+                        "avg_volume": avg_vol, "range": rng,
+                        "poc": round(poc, 2), "vah": round(max(highs), 2), "val": round(min(lows), 2),
+                        "direction": direction,
+                        "description": _kl_desc(tf, closes, highs, lows, volumes),
+                    }
+                    _ok = True
+                    break
+            except Exception:
+                continue
+        if not _ok:
+            # 回退源全失败：留空该 tf，不阻断其他周期
             pass
     engine_data["klines"] = klines
     engine_data["_raw_klines_multi"] = _raw_klines_multi  # v4.4: 原始 OHLCV 供高级订单流分析
@@ -2699,6 +2743,11 @@ def auto_card(symbol: str, push: bool = False) -> str:
             }
             engine_data["quality"] = "A"
             engine_data["grades"] = {"overall": "A"}
+            # P1b: 填充 Binance K线（VWAP/EMA/FVG 引擎依赖）
+            try:
+                _collect_binance_data(engine_data, symbol)
+            except Exception:
+                pass
             basis = f" 期现差{(futures_price/spot_price-1)*100:+.3f}%" if futures_price and spot_price else ""
             print(f"  ✅ 期货: ${primary_price:,.0f} (Binance Perp) | CMC现货: ${spot_price:,.0f}{basis} | 市占{cmc.get('dominance',0):.1f}%")
             
@@ -2957,7 +3006,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
     _vwap_ema_result = None
     try:
         from vwap_ema_cvd_engine import vwap_ema_cvd_summary
+        # P1b: 优先用 _raw_klines_multi 原始 Binance OHLCV（futures_klines 未填充时）
         _klines_raw_for_ve = engine_data.get("futures_klines", []) or []
+        if not _klines_raw_for_ve:
+            _raw_multi_ve = engine_data.get("_raw_klines_multi") or {}
+            _raw_15m_ve = _raw_multi_ve.get("15m") or []
+            if isinstance(_raw_15m_ve, list) and _raw_15m_ve:
+                _klines_raw_for_ve = [
+                    {"open": float(c[1]), "high": float(c[2]), "low": float(c[3]),
+                     "close": float(c[4]), "volume": float(c[5])}
+                    for c in _raw_15m_ve
+                    if isinstance(c, (list, tuple)) and len(c) >= 6
+                ]
         if isinstance(_klines_raw_for_ve, dict):
             # 有时是 {tf: {closes:[], ...}} 字典格式，尝试取最大数据集
             _biggest = max(_klines_raw_for_ve.values(), key=lambda v: len(v.get("closes", [])) if isinstance(v, dict) else 0, default={})

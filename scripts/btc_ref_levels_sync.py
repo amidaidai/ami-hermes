@@ -61,17 +61,25 @@ def age_minutes(path: Path) -> float:
 
 
 def refresh_tv_cache() -> str:
-    cp = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py")],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
-    msg = (cp.stdout or cp.stderr or "").strip()
-    if cp.returncode != 0:
-        raise RuntimeError((msg or "tv_live_dump failed")[:300])
-    return msg
+    """刷新 TV 缓存，瞬时失败自动重试 2 次（审计 P1：避免偶发 CDP 断连直接退出）。"""
+    last_msg = ""
+    for attempt in range(3):
+        try:
+            cp = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py")],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            msg = (cp.stdout or cp.stderr or "").strip()
+            if cp.returncode == 0:
+                return msg
+            last_msg = (msg or "tv_live_dump failed")[:300]
+        except Exception as exc:
+            last_msg = f"{type(exc).__name__}: {exc}"[:300]
+        time.sleep(3 * (attempt + 1))
+    raise RuntimeError(last_msg or "tv_live_dump failed after 3 attempts")
 
 
 def pick_cache() -> dict[str, Any]:
@@ -177,6 +185,15 @@ def main() -> int:
         return 0
     except Exception as exc:
         now = datetime.now(TZ)
+        # P1: 失败落盘诊断文件，供看门狗/审计读取
+        try:
+            (DATA / "btc_ref_levels_error.json").write_text(
+                json.dumps({"ts": now_iso(), "error": str(exc)[:300]},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         print(f"×同步失败 · BTC关键位 · {now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}")
         print("")
         print("| 项目 | 数据 | 状态 |")
