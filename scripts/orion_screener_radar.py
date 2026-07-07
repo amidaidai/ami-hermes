@@ -737,6 +737,22 @@ def main():
     if report:
         print(report)
     log(f"⏱ 总耗时 {elapsed():.1f}s")
+
+    # ─── v9.7 合并：采集完直接渲染分析卡推 TG（替代独立 Orion雷达分析 cron）───
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location(
+            "orion_radar_card", os.path.join(os.path.dirname(os.path.abspath(__file__)), "orion_radar_card.py")
+        )
+        if _spec is None or _spec.loader is None:
+            raise RuntimeError("orion_radar_card spec/loader 为 None")
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _mod.main()
+    except Exception as _e:
+        log(f"⚠ Orion分析卡渲染失败(不影响采集): {_e}")
+
     return 0
 
 
