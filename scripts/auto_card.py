@@ -3628,18 +3628,34 @@ def auto_card(symbol: str, push: bool = False) -> str:
         try:
             from topic_router import get_target
             target = get_target(symbol)
-            # 卡片走 telegram_reliable RichMarkdown 真表格（纯文字，不发截图）
+            # 卡片走 telegram_reliable RichMarkdown 真表格（纯文字）
             sys.path.insert(0, str(Path(__file__).parent))
-            from telegram_reliable import send_telegram_reliable
+            from telegram_reliable import send_telegram_reliable, send_telegram_photo
             ok, reason = send_telegram_reliable(
                 target, card[:3500],
                 parse_mode="RichMarkdown",
                 timeout=20, retries=3, persist_on_fail=True,
             )
             if ok:
-                print(f"  ✅ Telegram已推送 → {target} ({reason})")
+                print(f"  ✅ Telegram文字卡已推送 → {target} ({reason})")
             else:
-                print(f"  ⚠️ Push: {reason}")
+                print(f"  ⚠️ Push文字卡: {reason}")
+            # 主周期图表截图（若有）单独发图
+            main_tf_label = ""
+            try:
+                from pipeline_router import timeframe_info
+                main_tf_label = timeframe_info(symbol).get("main", "")
+            except Exception:
+                pass
+            if screenshot_path and Path(screenshot_path).exists():
+                pok, preason = send_telegram_photo(
+                    target, screenshot_path,
+                    caption=f"{symbol} 主周期图表（{main_tf_label}）",
+                    timeout=20, retries=3,
+                )
+                print(f"  {'✅' if pok else '⚠️'} Telegram主周期截图 → {target} ({preason})")
+            else:
+                print("  ⚠️ 主周期截图缺失，仅发文字卡")
         except Exception as e:
             print(f"  ⚠️ Push: {e}")
 

@@ -85,17 +85,39 @@ def refresh_tv_cache() -> str:
 
     async def _run():
         sp = StdioServerParameters(command="node", args=[str(server_script)])
-        async with stdio_client(sp) as (r, w):
-            async with ClientSession(r, w) as s:
-                await s.initialize()
-                await set_symbol(s, "BINANCE:BTCUSDT.P")
-                await asyncio.sleep(3)
-                # 读 SVP 决策表 + 关键位 + OHLCV
-                dmi_raw = await get_study_values(s)
-                lines_raw = await get_pine_lines(s)
-                ohlcv_raw = await get_ohlcv(s)
-                # 回切原图表（保住用户看盘品种）
-                return _parse_btc(dmi_raw, lines_raw, ohlcv_raw)
+        last_err = None
+        for attempt in range(2):  # 切品种读SVP偶发空，重试1次
+            try:
+                async with stdio_client(sp) as (r, w):
+                    async with ClientSession(r, w) as s:
+                        await s.initialize()
+                        # 记录原图表品种，采完 BTC 后切回（保住用户看盘）
+                        from fetch_tv_mcp import get_chart_state
+                        prev = await get_chart_state(s)
+                        prev_sym = ""
+                        try:
+                            prev_sym = str(prev).split('"symbol"', 1)[1].split('"', 2)[1]
+                        except Exception:
+                            prev_sym = ""
+                        await set_symbol(s, "BINANCE:BTCUSDT.P")
+                        await asyncio.sleep(4)
+                        # 读 SVP 决策表 + 关键位 + OHLCV
+                        dmi_raw = await get_study_values(s)
+                        lines_raw = await get_pine_lines(s)
+                        ohlcv_raw = await get_ohlcv(s)
+                        # 回切原图表（保住用户看盘品种）
+                        if prev_sym:
+                            try:
+                                await set_symbol(s, prev_sym)
+                            except Exception:
+                                pass
+                        parsed = _parse_btc(dmi_raw, lines_raw, ohlcv_raw)
+                        if parsed:
+                            return parsed
+                        last_err = "parsed empty (attempt %d)" % (attempt + 1)
+            except Exception as e:
+                last_err = str(e)
+        raise RuntimeError(f"TV MCP BTC 采集失败: {last_err}")
 
     try:
         data = asyncio.run(_run())
@@ -112,6 +134,22 @@ def refresh_tv_cache() -> str:
     live["stale"] = False
     live["source"] = "btc_ref_levels_sync_mcp"
     live["timestamp"] = now_iso()
+    # 顶层裸字段：供 main()/pick_cache 既有逻辑直接读取（与旧缓存结构兼容）
+    live["poc"] = data.get("poc")
+    live["vah"] = data.get("vah")
+    live["val"] = data.get("val")
+    live["vwap"] = data.get("vwap")
+    live["do"] = data.get("do")
+    live["w_vwap"] = data.get("w_vwap")
+    # indicators 里也放裸名(s_vwap 等)，兼容 main() 的两种取法
+    ind = live.setdefault("indicators", {})
+    ind["s_vwap"] = data.get("vwap")
+    ind["S VWAP"] = data.get("vwap")
+    ind["val_price"] = data.get("val")
+    ind["vah_price"] = data.get("vah")
+    ind["poc_price"] = data.get("poc")
+    ind["do_price"] = data.get("do")
+    ind["w_vwap_price"] = data.get("w_vwap")
     TV_LIVE.parent.mkdir(parents=True, exist_ok=True)
     TV_LIVE.write_text(json.dumps(live, ensure_ascii=False, indent=2), encoding="utf-8")
     # 同时更新 tv_dmi_cache 保持一致（避免 auto_card BTC 分支误读旧的）
@@ -124,10 +162,13 @@ def _parse_btc(dmi_raw, lines_raw, ohlcv_raw) -> dict | None:
 
     study_values 返回 {studies:[{name, values:{...}}]}，SVP 指标含 S VWAP/POC 等；
     pine_lines 返回 {studies:[{horizontal_levels:[...]}]}，按 VWAP 上下分 VAH/VAL/POC。
+    MCP 工具返回的是 CallToolResult，需先 parse_result 取 text 再 json.loads。
     """
+    from fetch_tv_mcp import parse_result
+
     def _j(raw):
         try:
-            return json.loads(str(raw))
+            return json.loads(parse_result(raw))
         except Exception:
             return {}
 
@@ -156,21 +197,21 @@ def _parse_btc(dmi_raw, lines_raw, ohlcv_raw) -> dict | None:
     levels_sorted = sorted(float(x) for x in levels if _is_num(x))
 
     # 从 SVP values 取 VWAP，POC 取最接近 VWAP 的水平线
-    vwap = _num(svp_values.get("S VWAP") or svp_values.get("S_VWAP"))
-    poc = _num(svp_values.get("POC")) or _nearest(levels_sorted, vwap)
-    # VAH/VAL = VWAP 上方/下方最近的 POC 带边界
-    vah = _num(svp_values.get("VAH"))
-    val = _num(svp_values.get("VAL"))
+    vwap = num(svp_values.get("S VWAP") or svp_values.get("S_VWAP"))
+    poc = num(svp_values.get("POC")) or num(svp_values.get("POC_PRICE")) or _nearest(levels_sorted, vwap)
+    # VAH/VAL 优先取 SVP 显式字段，否则从水平线按 VWAP 最近边界推算
+    vah = num(svp_values.get("VAH")) or num(svp_values.get("VAH_PRICE"))
+    val = num(svp_values.get("VAL")) or num(svp_values.get("VAL_PRICE"))
     if vwap and levels_sorted:
         if vah is None:
             above = [l for l in levels_sorted if l > (poc or vwap)]
-            vah = max(above) if above else None
+            vah = min(above) if above else None  # 最近上边界
         if val is None:
             below = [l for l in levels_sorted if l < (poc or vwap)]
-            val = min(below) if below else None
+            val = max(below) if below else None  # 最近下边界
 
-    do = _num(svp_values.get("DO Price") or svp_values.get("DO_PRICE"))
-    w_vwap = _num(svp_values.get("W VWAP Price") or svp_values.get("W_VWAP_PRICE"))
+    do = num(svp_values.get("DO Price") or svp_values.get("DO_PRICE"))
+    w_vwap = num(svp_values.get("W VWAP Price") or svp_values.get("W_VWAP_PRICE"))
 
     data = {
         "indicators": indicators,
