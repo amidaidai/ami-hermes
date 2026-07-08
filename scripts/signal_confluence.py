@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-棠溪 · 作战室融合报告 signal_confluence.py v1.0
+棠溪 · 作战室融合报告 signal_confluence.py v1.1
 
-目标：把已有 5 大源的"单源信号"融合成【单资产总评分】，解决 11 个 collector
-各自推送、无跨源融合的缺口（参照 signalsGURU 三阶段融合置信引擎）。
+目标：把已有 5 大源的"单源信号"融合成【单资产总评分】，并给出具体执行计划
+（方向/入场/止损/目标/风险%），解决"有方向无价位"的缺口。
+参照 signalsGURU 三阶段融合置信引擎 + Turnkey「执行即头等」。
 
 融合源 + 权重（满分 10）：
   - Orion      : 单品种置信(本就含 OI/费率/主动买卖/跨所确认) → 直接取 0-10 主权重
   - QLib 因子  : compute_factors SIGNAL(-5~+5) → 映射 0-5
   - Deribit    : C/P 比偏多空(+2 / -2 / 0)
-  - X情绪FOMO   : fomo_score(0-5) 过热反向减分(+2 / -2 / 0)
+  - X情绪FOMO   : 恐惧贪婪极端反向(+2 / -2 / 0)
   - 稳定币流向  : 边际增量(+1) / 减量(-1) / 持平(0)
-  - 恐惧贪婪    : 极端值(<25>75) 反向权重(+1 / -1 / 0)
 
-输出：RichMarkdown 真表（每源一行：信号·权重·符号）+ 融合总评分 + verdict +
-      supporting_sources 列表 + 简洁总体结论。推 846 情报群。
+执行计划：复用 BTC 结构位（tv_dmi_cache.json），给出具体价位+1R风险%。
 
+输出：RichMarkdown 真表（每源一行 + 融合总评分 + 执行计划表）+ 总体结论。推 846。
 不触发任何子 collector 的 TG 推送（只 import 纯数据函数）。
 """
 from __future__ import annotations
@@ -35,8 +35,9 @@ from pathlib import Path
 TZ = timezone(timedelta(hours=8))
 REPO = Path("D:/Hermes agent")
 SCRIPTS = REPO / "scripts"
-DATA_DIR = Path(os.path.expanduser("~/AppData/Local/hermes/data"))
+DATA_DIR = REPO / "data"  # D:/Hermes agent/data，TV缓存在此目录
 sys.path.insert(0, str(SCRIPTS))
+
 
 # ───────────────────────────── 轻量取数 ─────────────────────────────
 def _get(url, timeout=10, retries=2):
@@ -70,7 +71,6 @@ def fetch_stablecoin_flow() -> dict:
     prev_total = sum(c.get("now", 0) for c in prev.values() if isinstance(c, dict)) if isinstance(prev, dict) else 0
     total_delta = cur_total - prev_total
     delta_b = total_delta / 1e9
-    # 落盘当次为下次 prev
     try:
         prev_fp.write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
     except OSError:
@@ -79,13 +79,58 @@ def fetch_stablecoin_flow() -> dict:
             "note": "增量=潜在买盘" if total_delta > 0 else "减量=撤资信号" if total_delta < 0 else "持平"}
 
 
+def read_btc_levels() -> dict:
+    """读 TV 缓存结构位（tv_dmi_cache.json 最新鲜），零副作用。"""
+    candidates = [
+        DATA_DIR / "tv_dmi_cache.json",
+        DATA_DIR / "tv_live.json",
+        DATA_DIR / "btc_ref_levels.json",
+    ]
+    best = None
+    best_age = 1e9
+    best_src = "?"
+    for p in candidates:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not all(k in d for k in ("vwap", "val", "vah", "poc")):
+            continue
+        age = (time.time() - p.stat().st_mtime) / 60
+        if age < best_age:
+            best_age = age
+            best = d
+            best_src = p.name
+    if not best:
+        return {"error": "no valid TV cache"}
+    spot = None
+    try:
+        req = urllib.request.Request(
+            "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+            headers={"User-Agent": "Hermes/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            spot = float(json.loads(r.read()).get("price", 0))
+    except Exception:
+        spot = None
+    return {
+        "poc": float(best.get("poc")),
+        "vwap": float(best.get("vwap")),
+        "val": float(best.get("val")),
+        "vah": float(best.get("vah")),
+        "do": float(best.get("do")) if best.get("do") else None,
+        "w_vwap": float(best.get("w_vwap")) if best.get("w_vwap") else None,
+        "spot": spot,
+        "age_min": round(best_age, 1),
+        "source": best_src,
+    }
+
+
 # ───────────────────────────── 融合引擎 ─────────────────────────────
 def fuse() -> dict:
-    """返回 {symbol, score, verdict, sources:[{name,sig,w,emoji}], concl}。"""
-    sources = []  # {name, sig, w, emoji, detail}
+    sources = []
 
-    # Orion 主权重（取最高置信候选作动量贡献，主品种锚定 BTC）
-    orion_sym = "BTCUSDT"
+    # 1) Orion 主权重（最高置信候选作动量贡献，主品种锚定 BTC）
     orion_conf = 0.0
     orion_detail = "未扫描"
     try:
@@ -102,7 +147,6 @@ def fuse() -> dict:
                 orion_detail = f"{orion_top_sym} 信{orion_conf:.1f}"
     except Exception as e:  # noqa: BLE001
         orion_detail = f"扫描异常:{e}"
-    # Orion 已是 0-10 量级，直接作主评分基底
     sources.append({"name": "Orion雷达", "sig": orion_detail, "w": round(orion_conf, 1),
                     "emoji": "🟢" if orion_conf >= 6 else "🔸" if orion_conf >= 4 else "⚪",
                     "detail": "量价异动+跨所确认" if orion_conf >= 4 else "无异动"})
@@ -117,7 +161,7 @@ def fuse() -> dict:
         if "error" not in f:
             sig = f.get("SIGNAL", 0)
             qlib_bias = f.get("BIAS", "观望")
-            qlib_w = max(0.0, min(5.0, (sig + 5) / 2))  # -5~+5 → 0~5
+            qlib_w = max(0.0, min(5.0, (sig + 5) / 2))
     except Exception as e:  # noqa: BLE001
         qlib_bias = f"异常:{e}"
     sources.append({"name": "QLib因子", "sig": qlib_bias, "w": round(qlib_w, 1),
@@ -148,18 +192,12 @@ def fuse() -> dict:
         import x_sentiment_context as x
         fg = x.fetch_fear_greed()
         fv = int(fg.get("value", 50))
-        tr = x.fetch_trending()
-        fomo = sum(1 for c in tr.get("coins", []) if c.get("symbol") == "BTC")  # 简化：BTC在热搜则偏热
-        # fomo_score 近似：恐惧贪婪>75过热 / <25恐慌反向机会
         if fv > 75:
-            x_w = -2.0
-            x_sig = f"FNG={fv}过热"
+            x_w, x_sig = -2.0, f"FNG={fv}过热"
         elif fv < 25:
-            x_w = 2.0
-            x_sig = f"FNG={fv}恐慌"
+            x_w, x_sig = 2.0, f"FNG={fv}恐慌"
         else:
-            x_w = 0.0
-            x_sig = f"FNG={fv}中性"
+            x_w, x_sig = 0.0, f"FNG={fv}中性"
     except Exception as e:  # noqa: BLE001
         x_sig = f"异常:{e}"
     sources.append({"name": "X情绪FOMO", "sig": x_sig, "w": round(x_w, 1),
@@ -173,13 +211,12 @@ def fuse() -> dict:
                     "emoji": "🟢" if sc_w > 0 else "🔴" if sc_w < 0 else "⚪",
                     "detail": f"Δ{sc['delta_b']:+.1f}B"})
 
-    # 融合：Orion 作主基底(0-10) + 其余归一化加总(各 -2~+2 量级 → 上限 +5)
+    # 融合：Orion 作主基底(0-10) + 其余加权(限幅±3)
     base = orion_conf
-    adjust = sum(s["w"] for s in sources[1:])  # 上限约 +2+2-2+1=+3 左右
+    adjust = sum(s["w"] for s in sources[1:])
     score = max(0.0, min(10.0, base + max(-3.0, min(3.0, adjust))))
     score = round(score, 1)
 
-    # verdict + 符号
     if score >= 7.5:
         verdict, v_emoji = "高置信·可做多", "🟢"
     elif score >= 5.5:
@@ -189,17 +226,69 @@ def fuse() -> dict:
     else:
         verdict, v_emoji = "偏空·规避", "🔴"
 
+    plan = compute_plan(score)
     supporting = [s["name"] for s in sources if s["w"] > 0]
     contra = [s["name"] for s in sources if s["w"] < 0]
-
     concl = (f"{v_emoji}{verdict}；共振源[{','.join(supporting) or '无'}]"
              + (f"；逆风[{','.join(contra)}]" if contra else ""))
-    return {"symbol": orion_sym or "BTCUSDT", "score": score, "verdict": verdict,
+    return {"symbol": "BTCUSDT", "score": score, "verdict": verdict,
             "v_emoji": v_emoji, "sources": sources, "concl": concl,
-            "supporting": supporting, "contra": contra}
+            "supporting": supporting, "contra": contra, "plan": plan}
+
+
+def compute_plan(score: float) -> dict:
+    """根据融合评分给具体方向/入场/止损/目标/风险%。复用 BTC 结构位。"""
+    lv = read_btc_levels()
+    if "error" in lv or lv.get("vwap") is None:
+        return {"available": False, "reason": lv.get("error", "no levels")}
+
+    vwap = lv["vwap"]; val = lv["val"]; vah = lv["vah"]; poc = lv["poc"]
+    do = lv.get("do"); w_vwap = lv.get("w_vwap")
+
+    if score >= 5.5:
+        side = "🟢做多"
+        entry = vwap
+        entry2 = val
+        stop = round(val * 0.995)
+        targets = [vah] + ([do] if do else []) + ([w_vwap] if w_vwap else [])
+    elif score < 4.0:
+        side = "🔴做空"
+        entry = vah
+        entry2 = vwap
+        stop = round(vah * 1.005)
+        targets = [val] + ([poc] if poc else [])
+    else:
+        side = "⚪观望"
+        entry = entry2 = stop = None
+        targets = []
+
+    risk_pct = 1.0
+    if score >= 7.5:
+        risk_pct = 1.5
+    elif score < 4.0:
+        risk_pct = 0.5
+
+    r_ratio = None
+    if entry and stop and targets:
+        r = abs(entry - stop)
+        if r > 0:
+            best_t = max(targets, key=lambda t: abs(t - entry))
+            r_ratio = round(abs(best_t - entry) / r, 1)
+
+    return {
+        "available": True, "side": side, "entry": entry, "entry2": entry2,
+        "stop": stop, "targets": targets, "risk_pct": risk_pct, "r_ratio": r_ratio,
+        "spot": lv.get("spot"), "age": lv.get("age_min"),
+    }
 
 
 # ───────────────────────────── 渲染 ─────────────────────────────
+def _fmt(v) -> str:
+    if v is None:
+        return "—"
+    return f"`{v:,.0f}`"
+
+
 def build_report(f: dict, ts: str) -> str:
     lines = [f"🎯 作战室融合 · {ts}", ""]
     lines.append("| 源 | 信号 | 权重 | 状态 |")
@@ -207,9 +296,36 @@ def build_report(f: dict, ts: str) -> str:
     for s in f["sources"]:
         lines.append(f"| {s['name']} | {s['sig']} | {s['w']:+} | {s['emoji']} |")
     lines.append("")
+
     lvl = "⭐" if f["score"] >= 7.5 else "🔸" if f["score"] >= 5.5 else "⚪"
     lines.append(f"**融合总评分**: {lvl}`{f['score']}`/10 · {f['v_emoji']}**{f['verdict']}**")
     lines.append("")
+
+    # 执行计划表
+    p = f.get("plan", {})
+    lines.append("| 执行计划 | 价位/参数 |")
+    lines.append("|:----|:----:|")
+    if p.get("available"):
+        lines.append(f"| 方向 | {p['side']} |")
+        if p["entry"]:
+            lines.append(f"| 入场① | {_fmt(p['entry'])} (VWAP) |")
+            lines.append(f"| 入场② | {_fmt(p['entry2'])} (VAL加仓) |")
+            lines.append(f"| **止损** | {_fmt(p['stop'])} |")
+            tgt = " / ".join(_fmt(t) for t in p["targets"])
+            lines.append(f"| 目标 | {tgt} |")
+            lines.append(f"| 风险% | **{p['risk_pct']}%** (1R) |")
+            if p["r_ratio"]:
+                lines.append(f"| 盈亏比 | {p['r_ratio']}R |")
+        else:
+            lines.append("| 状态 | 观望不进场 |")
+        if p.get("spot"):
+            lines.append(f"| 现价 | {_fmt(p['spot'])} |")
+        if p.get("age") is not None:
+            lines.append(f"| 结构位新鲜度 | {p['age']}min |")
+    else:
+        lines.append(f"| 结构位 | ⚠️ 不可用({p.get('reason','?')}) |")
+    lines.append("")
+
     lines.append(f"**总体结论**: {f['concl']}。")
     return "\n".join(lines)
 
