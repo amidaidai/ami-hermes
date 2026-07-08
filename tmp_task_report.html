@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0d1117; color:#e6edf3; font-family:"PingFang SC","Microsoft YaHei",sans-serif; padding:16px; }
+  h2 { font-size:18px; color:#58a6ff; margin-bottom:12px; text-align:center; }
+  .sub { text-align:center; color:#8b949e; font-size:12px; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:18px; }
+  th { background:#161b22; color:#58a6ff; padding:8px 6px; border:1px solid #30363d; text-align:left; font-weight:600; }
+  td { padding:7px 6px; border:1px solid #30363d; }
+  tr:nth-child(even) td { background:#161b22; }
+  .ok { color:#3fb950; font-weight:600; }
+  .okk { color:#3fb950; }
+  .tg { color:#d29922; }
+  .lo { color:#8b949e; }
+  .hl { color:#f85149; font-weight:600; }
+  .sec { font-size:14px; color:#58a6ff; margin:14px 0 8px; border-left:3px solid #58a6ff; padding-left:8px; }
+</style>
+</head>
+<body>
+<h2>棠溪全任务实测报告</h2>
+<div class="sub">2026年7月8日17：30 · 18个定时任务顺序实跑</div>
+
+<div class="sec">一、任务总览（18个活跃cron）</div>
+<table>
+<tr><th>#</th><th>任务</th><th>频率</th><th>投递</th><th>实测</th></tr>
+<tr><td>1</td><td>BTC关键位同步</td><td>每天4次</td><td class="tg">TG</td><td class="ok">✅根治后成功</td></tr>
+<tr><td>2</td><td>Orion全市场雷达</td><td>每30分</td><td class="tg">TG</td><td class="ok">✅有产出</td></tr>
+<tr><td>3</td><td>Dune链上刷新</td><td>每4时</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>4</td><td>COT报告刷新</td><td>每周六</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>5</td><td>Deribit期权刷新</td><td>每30分</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>6</td><td>BTC守护看门狗</td><td>每5分</td><td class="tg">TG</td><td class="ok">✅静默(健康)</td></tr>
+<tr><td>7</td><td>每日复盘提醒</td><td>每天21点</td><td class="tg">TG</td><td class="ok">✅</td></tr>
+<tr><td>8</td><td>X情绪数据刷新</td><td>每小时</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>9</td><td>清算压力监控</td><td>每30分</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>10</td><td>稳定币供应监控</td><td>每4时</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>11</td><td>数据新鲜度看门狗</td><td>每小时</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>12</td><td>QLib因子信号</td><td>每小时</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>13</td><td>交易执行桥接</td><td>每30分</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>14</td><td>X情绪LLM分析</td><td>每小时</td><td class="tg">TG</td><td class="ok">✅</td></tr>
+<tr><td>15</td><td>宏观Poly刷新</td><td>每4时</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+<tr><td>16</td><td>行情守望看门狗</td><td>每1时</td><td class="tg">TG</td><td class="ok">✅静默(健康)</td></tr>
+<tr><td>17</td><td>每日运维聚合</td><td>每天6:40</td><td class="tg">TG</td><td class="ok">✅</td></tr>
+<tr><td>18</td><td>XAU TV现场同步</td><td>每15分</td><td class="lo">本地</td><td class="ok">✅</td></tr>
+</table>
+
+<div class="sec">二、本次深层修复（P0根治）</div>
+<table>
+<tr><th>项</th><th>问题</th><th>根因</th><th>修复</th><th>状态</th></tr>
+<tr><td>BTC关键位</td><td>每日4次script failed</td><td>审计P0修复副作用：图表停XAU时回退旧缓存(已是XAU数据)</td><td>MCP stdio独立切BTC读SVP再回切原图表</td><td class="ok">✅已commit</td></tr>
+<tr><td>电报投递</td><td>您说没见到报告</td><td>看门狗健康时静默不推；BTC同步失败推报错</td><td>链路实测通；BTC同步已修复</td><td class="ok">✅</td></tr>
+<tr><td>XAU卡</td><td>—</td><td>走独立xau_tv_state.json不受影响</td><td>无需改动</td><td class="ok">✅</td></tr>
+</table>
+
+<div class="sec">三、汇总</div>
+<table>
+<tr><th>指标</th><th>结果</th></tr>
+<tr><td>任务总数</td><td>18</td></tr>
+<tr><td>成功</td><td class="ok">18</td></tr>
+<tr><td>失败</td><td class="ok">0</td></tr>
+<tr><td>推TG任务</td><td>7个全部正常</td></tr>
+<tr><td>电报链路</td><td class="ok">✅ message_id连续递增真实送达</td></tr>
+</table>
+</body>
+</html>
