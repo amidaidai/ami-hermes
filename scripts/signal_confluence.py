@@ -226,9 +226,12 @@ def fuse() -> dict:
     else:
         verdict, v_emoji = "偏空·规避", "🔴"
 
-    plan = compute_plan(score)
     supporting = [s["name"] for s in sources if s["w"] > 0]
     contra = [s["name"] for s in sources if s["w"] < 0]
+    # 供 compute_plan 的 analysis 引用共振源名
+    global _SUPPORTING_CACHE
+    _SUPPORTING_CACHE = supporting
+    plan = compute_plan(score)
     concl = (f"{v_emoji}{verdict}；共振源[{','.join(supporting) or '无'}]"
              + (f"；逆风[{','.join(contra)}]" if contra else ""))
     return {"symbol": "BTCUSDT", "score": score, "verdict": verdict,
@@ -236,31 +239,42 @@ def fuse() -> dict:
             "supporting": supporting, "contra": contra, "plan": plan}
 
 
+# 模块级缓存：供 compute_plan 的 analysis 引用共振源名（避免循环依赖）
+_SUPPORTING_CACHE: list = []
+def _supporting_names() -> list:
+    return _SUPPORTING_CACHE
+
+
 def compute_plan(score: float) -> dict:
-    """根据融合评分给具体方向/入场/止损/目标/风险%。复用 BTC 结构位。"""
+    """根据融合评分给具体方向/入场/止损/目标/风险%。复用 BTC 结构位。
+    规则：止损紧贴入场(0.5%夹层)，主目标取结构位上方，盈亏比必须≥2R才发方案。"""
     lv = read_btc_levels()
     if "error" in lv or lv.get("vwap") is None:
         return {"available": False, "reason": lv.get("error", "no levels")}
 
     vwap = lv["vwap"]; val = lv["val"]; vah = lv["vah"]; poc = lv["poc"]
-    do = lv.get("do"); w_vwap = lv.get("w_vwap")
+    do = lv.get("do"); w_vwap = lv.get("w_vwap"); spot = lv.get("spot")
 
     if score >= 5.5:
         side = "🟢做多"
         entry = vwap
         entry2 = val
-        stop = round(val * 0.995)
+        stop = round(entry * 0.995)          # 入场下方0.5%紧贴止损
         targets = [vah] + ([do] if do else []) + ([w_vwap] if w_vwap else [])
+        stop_logic = "VWAP下方0.5%（夹层止损，破位即结构失效）"
+        entry_logic = "回踩VWAP接多，VAL加仓；现价在VAH上方属突破区，等回踩确认再进"
     elif score < 4.0:
         side = "🔴做空"
         entry = vah
         entry2 = vwap
-        stop = round(vah * 1.005)
+        stop = round(entry * 1.005)          # 入场上方0.5%紧贴止损
         targets = [val] + ([poc] if poc else [])
+        stop_logic = "VAH上方0.5%（夹层止损，突破即结构失效）"
+        entry_logic = "反弹VAH承压做空，VWAP加仓"
     else:
-        side = "⚪观望"
-        entry = entry2 = stop = None
-        targets = []
+        return {"available": True, "qualified": False, "side": "⚪观望",
+                "spot": spot, "age": lv.get("age_min"),
+                "reason": "融合评分中间区(4-5.5)，方向不清，不发方案"}
 
     risk_pct = 1.0
     if score >= 7.5:
@@ -275,10 +289,23 @@ def compute_plan(score: float) -> dict:
             best_t = max(targets, key=lambda t: abs(t - entry))
             r_ratio = round(abs(best_t - entry) / r, 1)
 
+    # 盈亏比门槛：必须≥2R才发执行计划
+    qualified = (r_ratio is not None and r_ratio >= 2.0)
+
+    if qualified:
+        analysis = (f"方向逻辑：{side}（融合{score}/10，共振源[{','.join(_supporting_names()) or '无'}]）。"
+                    f"入场逻辑：{entry_logic}。"
+                    f"风控逻辑：{stop_logic}，风险{risk_pct}%/1R，盈亏比{r_ratio}R。")
+    else:
+        analysis = (f"结构位不支持≥2R（当前测算{r_ratio}R），暂不发执行计划，"
+                    f"等结构收敛/回踩确认后再评估。")
+
     return {
-        "available": True, "side": side, "entry": entry, "entry2": entry2,
-        "stop": stop, "targets": targets, "risk_pct": risk_pct, "r_ratio": r_ratio,
-        "spot": lv.get("spot"), "age": lv.get("age_min"),
+        "available": True, "qualified": qualified, "side": side,
+        "entry": entry, "entry2": entry2, "stop": stop, "targets": targets,
+        "risk_pct": risk_pct, "r_ratio": r_ratio, "analysis": analysis,
+        "stop_logic": stop_logic, "entry_logic": entry_logic,
+        "spot": spot, "age": lv.get("age_min"),
     }
 
 
@@ -301,11 +328,11 @@ def build_report(f: dict, ts: str) -> str:
     lines.append(f"**融合总评分**: {lvl}`{f['score']}`/10 · {f['v_emoji']}**{f['verdict']}**")
     lines.append("")
 
-    # 执行计划表
+    # 执行计划：仅当盈亏比≥2R才发具体价位方案；否则只给分析
     p = f.get("plan", {})
-    lines.append("| 执行计划 | 价位/参数 |")
-    lines.append("|:----|:----:|")
-    if p.get("available"):
+    if p.get("qualified"):
+        lines.append("| 执行计划 | 价位/参数 |")
+        lines.append("|:----|:----:|")
         lines.append(f"| 方向 | {p['side']} |")
         if p["entry"]:
             lines.append(f"| 入场① | {_fmt(p['entry'])} (VWAP) |")
@@ -314,16 +341,17 @@ def build_report(f: dict, ts: str) -> str:
             tgt = " / ".join(_fmt(t) for t in p["targets"])
             lines.append(f"| 目标 | {tgt} |")
             lines.append(f"| 风险% | **{p['risk_pct']}%** (1R) |")
-            if p["r_ratio"]:
-                lines.append(f"| 盈亏比 | {p['r_ratio']}R |")
-        else:
-            lines.append("| 状态 | 观望不进场 |")
+            lines.append(f"| 盈亏比 | **{p['r_ratio']}R** |")
         if p.get("spot"):
             lines.append(f"| 现价 | {_fmt(p['spot'])} |")
         if p.get("age") is not None:
             lines.append(f"| 结构位新鲜度 | {p['age']}min |")
+        lines.append("")
+        lines.append(f"**分析**: {p['analysis']}")
     else:
-        lines.append(f"| 结构位 | ⚠️ 不可用({p.get('reason','?')}) |")
+        # 未达标：不发方案段，只发分析说明
+        reason = p.get("reason") or (p.get("analysis") or "结构位不支持≥2R")
+        lines.append(f"**分析**: {reason}")
     lines.append("")
 
     lines.append(f"**总体结论**: {f['concl']}。")
