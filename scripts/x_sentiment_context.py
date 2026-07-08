@@ -206,7 +206,7 @@ def main() -> int:
 |:----|:----:|:----:|:----:|:----:|
 {orows}
 
-**总体结论**: {fg_icon}情绪{fgcls}（{fg_note}）· 恐惧贪婪{fgv} · {'🔥资金偏热FOMO' if (trending.get('fomo_score',0) or 0)>=4 else '❄️热度冷清' if (trending.get('fomo_score',0) or 0)<2 else '🌡️温和关注'}{' · 有Orion共振候选可跟' if orion else ''}。"""
+**总体结论**: {fg_icon}情绪**{fgcls}**（{fg_note}）· 恐惧贪婪{fgv} · **{'🔥资金偏热FOMO' if (trending.get('fomo_score',0) or 0)>=4 else '❄️热度冷清' if (trending.get('fomo_score',0) or 0)<2 else '🌡️温和关注'}**{' · 有Orion共振候选可跟' if orion else ''}。"""
         sys.path.insert(0, "D:/Hermes agent/scripts")
         from telegram_reliable import push_tg_rich
         push_tg_rich("telegram:-1003733144325:846", rich)

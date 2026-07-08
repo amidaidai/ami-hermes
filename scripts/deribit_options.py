@@ -189,7 +189,7 @@ def _print_table(data: dict):
     btc = data.get("BTC", {})
     if btc and "cp_ratio" in btc:
         cp = btc["cp_ratio"]
-        concl = f"BTC期权C/P={cp}，{'情绪偏多但防过热回踩' if cp>1.5 else '看跌保护重、偏空' if cp<0.7 else '多空均衡'}"
+        concl = f"BTC期权C/P={cp}，**{'情绪偏多但防过热回踩' if cp>1.5 else '看跌保护重、偏空' if cp<0.7 else '多空均衡'}**"
     else:
         concl = "期权数据不足"
     lines.append(f"**总体结论**: {concl}。")

@@ -121,9 +121,9 @@ def main():
     # 总体结论
     lines.append("")
     if abs(delta_b) >= 1.0:
-        flow_note = "稳定币大幅变动，资金面信号强烈"
+        flow_note = "**稳定币大幅变动**，资金面信号强烈"
     elif abs(delta_b) >= 0.1:
-        flow_note = "稳定币增量=潜在买盘" if total_delta > 0 else "稳定币减量=撤资信号"
+        flow_note = "**稳定币增量=潜在买盘**" if total_delta > 0 else "**稳定币减量=撤资信号**"
     else:
         flow_note = "资金面平静"
     lines.append(f"**总体结论**: {verdict}，{flow_note}。")

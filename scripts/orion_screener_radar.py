@@ -529,7 +529,7 @@ def build_report(candidates, ts):
         lines.append("| Orion | ✅已扫描 | 无通过候选 |")
         lines.append("| Binance/CG | ○待触发 | 无需深验 |")
         lines.append("")
-        lines.append("**总体结论**: 市场平静，无中高置信异动，不追单。")
+        lines.append("**总体结论**: 市场平静，无中高置信异动，**不追单**。")
         return "\n".join(lines)
 
     lines.append(f"⚡ Orion雷达 · 候选{len(candidates)}个 · {ts}")
@@ -605,13 +605,13 @@ def build_report(candidates, ts):
     best_oi = best.get("oi_chg") or 0
     best_chg = best.get("chg_1h") or 0
     if best_oi > 0 and best_chg > 0 and best.get("funding", 0) < -0.001:
-        concl = f"最优 {best_sym}(信{best_conf:.1f}) 真突破+负费率，回踩可做多"
+        concl = f"最优 **{best_sym}**（信{best_conf:.1f}）**真突破+负费率**，回踩**可做多**"
     elif best_oi > 0 and best_chg > 0:
-        concl = f"最优 {best_sym}(信{best_conf:.1f}) 量价齐升，有机会短多"
+        concl = f"最优 **{best_sym}**（信{best_conf:.1f}）**量价齐升**，有机会**短多**"
     elif best_oi < 0 and best_chg < 0:
-        concl = f"最优 {best_sym}(信{best_conf:.1f}) 去杠杆下跌，规避"
+        concl = f"最优 **{best_sym}**（信{best_conf:.1f}）**去杠杆下跌**，规避"
     else:
-        concl = f"最优 {best_sym}(信{best_conf:.1f}) 中性，观察为主"
+        concl = f"最优 **{best_sym}**（信{best_conf:.1f}）**中性**，观察为主"
     lines.append("")
     lines.append(f"**总体结论**: {len(candidates)}个候选，{concl}。")
 

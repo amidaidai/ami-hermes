@@ -157,7 +157,7 @@ if __name__ == "__main__":
                 lines.append("")
                 # 决策总结
                 verdict = "🟢交易所净流出(积累)" if nf < 0 else "🔴交易所净流入(抛压)"
-                lines.append(f"**链上结论**: {verdict}")
+                lines.append(f"**链上结论**: **{verdict}**")
 
         output = "\n".join(lines)
         print(output)

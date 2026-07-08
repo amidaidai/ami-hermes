@@ -208,7 +208,7 @@ def _build_detail(data: dict) -> list:
         # 总体结论：统计各品种机构净向
         bull = [l for l, e in mkts.items() if (e.get("positions", {}).get("杠杆基金") or e.get("positions", {}).get("投机") or {}).get("net", 0) > 0]
         bear = [l for l, e in mkts.items() if (e.get("positions", {}).get("杠杆基金") or e.get("positions", {}).get("投机") or {}).get("net", 0) < 0]
-        concl = f"机构净多主导: {','.join(bull) or '无'}；净空主导: {','.join(bear) or '无'}"
+        concl = f"机构**净多主导**: {','.join(bull) or '无'}；**净空主导**: {','.join(bear) or '无'}"
         lines.append(f"**总体结论**: {concl}。")
         return lines
 
