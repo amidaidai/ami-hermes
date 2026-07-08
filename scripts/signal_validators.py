@@ -88,34 +88,39 @@ def _tf_direction(symbol: str, interval: str) -> int:
 
 
 def tf_alignment(symbol: str = "BTCUSDT") -> dict:
-    """周期一致性：4h/1h/15m 方向 → 相邻冲突硬门。
+    """周期一致性：4h/1h/15m/5m 方向 → 相邻冲突硬门。
 
-    返回 {available, d4, d1, d15, conflict, aligned, note}
-    conflict=True → 相邻周期明确反向（4h≠1h 或 1h≠15m），应否决交易。
+    返回 {available, d4, d1, d15, d5m, conflict, aligned, note}
+    conflict=True → 相邻周期明确反向（4h≠1h 或 1h≠15m 或 15m≠5m），应否决交易。
     """
     d4 = _tf_direction(symbol, "4h")
     d1 = _tf_direction(symbol, "1h")
     d15 = _tf_direction(symbol, "15m")
-    if d4 == 0 and d1 == 0 and d15 == 0:
-        return {"available": False, "d4": d4, "d1": d1, "d15": d15,
+    d5m = _tf_direction(symbol, "5m")
+    if d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
+        return {"available": False, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
                 "conflict": False, "aligned": False, "note": "周期方向数据不足"}
-    conflict = (d4 != 0 and d1 != 0 and d4 * d1 == -1) or \
-               (d1 != 0 and d15 != 0 and d1 * d15 == -1)
-    aligned = (d4 != 0 and d4 == d1 == d15)
+    # 相邻冲突：4h≠1h 或 1h≠15m 或 15m≠5m
+    conflict = ((d4 != 0 and d1 != 0 and d4 * d1 == -1) or
+                (d1 != 0 and d15 != 0 and d1 * d15 == -1) or
+                (d15 != 0 and d5m != 0 and d15 * d5m == -1))
+    aligned = (d4 != 0 and d4 == d1 == d15 == d5m)
     names = {1: "多", -1: "空", 0: "中性"}
-    note = f"4h{names[d4]}/1h{names[d1]}/15m{names[d15]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
-    return {"available": True, "d4": d4, "d1": d1, "d15": d15,
+    note = f"4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
+    return {"available": True, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
             "conflict": conflict, "aligned": aligned, "note": note}
 
 
 def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
-    """TV MCP 多周期方向（4h/1h/15m）。
+    """TV MCP 多周期方向（4h/1h/15m/5m）。
 
     严格按你的要求：每个周期 set_timeframe 后等 wait 秒让指标完全加载，
     再读 OHLCV summary 判方向。
 
     关键修复：TV Desktop CDP 在单会话里连续切周期会断连（Connection closed），
     改为【每周期独立 MCP 会话】（开→切品种→切周期→等加载→读→关）。
+
+    symbol：BINANCE:BTCUSDT.P（加密）或 OANDA:XAUUSD（贵金属）等。
 
     降级：TV Desktop 调试端口(9222)未开放时直接返回 available=False，
     由调用方回落 Binance REST（环境无 TV 时不卡死）。
@@ -146,7 +151,7 @@ def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
             async with stdio_client(sp) as (r, w):
                 async with ClientSession(r, w) as s:
                     await s.initialize()
-                    await tv.set_symbol(s, "BINANCE:BTCUSDT.P")
+                    await tv.set_symbol(s, symbol)
                     await asyncio.sleep(wait)
                     await tv.set_timeframe(s, res)
                     await asyncio.sleep(wait)  # 等指标完全加载
@@ -156,7 +161,7 @@ def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
 
         async def _run():
             dirs = {}
-            for res in ("240", "60", "15"):  # 4h / 1h / 15m
+            for res in ("240", "60", "15", "5"):  # 4h / 1h / 15m / 5m
                 try:
                     dirs[res] = await _one_tf(res)
                 except Exception:  # noqa: BLE001
@@ -164,25 +169,54 @@ def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
             return dirs
 
         dirs = asyncio.run(_run())
-        d4 = dirs.get("240", 0); d1 = dirs.get("60", 0); d15 = dirs.get("15", 0)
-        if d4 == 0 and d1 == 0 and d15 == 0:
+        d4 = dirs.get("240", 0); d1 = dirs.get("60", 0); d15 = dirs.get("15", 0); d5m = dirs.get("5", 0)
+        if d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
             return {"available": False, "conflict": False, "note": "TV多周期方向全空"}
-        conflict = (d4 != 0 and d1 != 0 and d4 * d1 == -1) or \
-                   (d1 != 0 and d15 != 0 and d1 * d15 == -1)
-        aligned = (d4 != 0 and d4 == d1 == d15)
+        # 相邻冲突：4h≠1h 或 1h≠15m 或 15m≠5m
+        conflict = ((d4 != 0 and d1 != 0 and d4 * d1 == -1) or
+                    (d1 != 0 and d15 != 0 and d1 * d15 == -1) or
+                    (d15 != 0 and d5m != 0 and d15 * d5m == -1))
+        aligned = (d4 != 0 and d4 == d1 == d15 == d5m)
         names = {1: "多", -1: "空", 0: "中性"}
-        note = f"TV 4h{names[d4]}/1h{names[d1]}/15m{names[d15]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
-        return {"available": True, "d4": d4, "d1": d1, "d15": d15,
+        note = f"TV 4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
+        return {"available": True, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
                 "conflict": conflict, "aligned": aligned, "note": note, "source": "TV"}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "conflict": False, "note": f"TV多周期异常:{e}"}
 
 
 def _dir_from_ohlcv_summary(txt: str) -> int:
-    """从 OHLCV summary 文本判方向：取 change% 或 last bar 开收。1多/-1空/0中性。"""
-    import re
-    # 尝试 change%
-    m = re.search(r"change[%\s]*[:=]?\s*([+-]?\d+(?:\.\d+)?)\s*%", txt, re.IGNORECASE)
+    """从 OHLCV summary 文本判方向：TV 返回的是 JSON，含 change_pct 字段。1多/-1空/0中性。
+
+    真实结构示例：
+      {"success":true,"bar_count":100,"open":63309.2,"close":61984,
+       "high":64234.1,"low":61615,"change":-1325.2,"change_pct":"-2.09%",...}
+    """
+    import re, json
+    # 优先：JSON 解析取 change_pct（TV 实际返回格式）
+    try:
+        # 可能包裹在 MCP content 文本里，先找第一个 { 起的 JSON
+        s = txt.strip()
+        if s.startswith("{"):
+            obj = json.loads(s)
+        else:
+            # 文本里嵌 JSON，找 success 开头对象
+            m = re.search(r'\{[^{}]*"change_pct"[^{}]*\}', s)
+            if m:
+                obj = json.loads(m.group(0))
+            else:
+                obj = None
+        if obj and "change_pct" in obj:
+            ch = float(str(obj["change_pct"]).replace("%", "").strip())
+            if ch > 0.05:
+                return 1
+            if ch < -0.05:
+                return -1
+            return 0
+    except Exception:
+        pass
+    # 退化：正则匹配 change%
+    m = re.search(r"change[_%]?pct?[:\s]*[\"']?([+-]?\d+(?:\.\d+)?)\s*%", txt, re.IGNORECASE)
     if m:
         ch = float(m.group(1))
         if ch > 0.05:
@@ -190,7 +224,6 @@ def _dir_from_ohlcv_summary(txt: str) -> int:
         if ch < -0.05:
             return -1
         return 0
-    # 退化：找最后一根 K 的 OHLC（summary 末尾）
     return 0
 
 

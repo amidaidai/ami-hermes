@@ -230,7 +230,7 @@ def fuse() -> dict:
                         "detail": "散户拥挤反向"})
         sources.append({"name": "🔍周期一致性", "sig": tf_sig, "w": 0.0,
                         "emoji": "🔴" if tf.get("conflict") else ("🟢" if tf.get("aligned") else "⚪"),
-                        "detail": "4h/1h/15m方向"})
+                        "detail": "4h/1h/15m/5m方向"})
     except Exception as e:  # noqa: BLE001
         sources.append({"name": "🔍验证闸门", "sig": f"异常:{e}", "w": 0.0,
                         "emoji": "⚪", "detail": "auto_card逻辑"})
