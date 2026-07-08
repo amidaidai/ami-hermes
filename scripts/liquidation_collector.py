@@ -111,6 +111,17 @@ def main():
         for r in results:
             if "爆仓" in r.get("squeeze", ""): lines.append(f"⚠ {r['symbol']}: {r['detail']} → {r.get('action','')}")
 
+    # 总体结论
+    squeeze_types = [r.get("verdict", "○") for r in results if r.get("status") not in ("api_error", "no_data")]
+    if has_squeeze:
+        concl = "检测到爆仓，顺势跟随方向、不接刀"
+    elif any("杠杆拥挤" in v for v in squeeze_types):
+        concl = "OI拥挤，警惕插针清算"
+    else:
+        concl = "无爆仓信号，市场常态"
+    lines.append("")
+    lines.append(f"**总体结论**: {concl}。")
+
     output = "\n".join(lines)
     if has_squeeze:
         print(output)

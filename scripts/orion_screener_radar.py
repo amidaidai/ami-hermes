@@ -512,7 +512,7 @@ def build_report(candidates, ts):
     """Build Telegram-mobile report: 首行结论 + 3张≤3列Markdown管道表."""
     lines = []
 
-    # Sort by confidence, then |OI%|, matching the Telegram LLM prompt rule.
+    # 排序：置信度倒序（有机会的天然排前），其次 |OI%|。置信度前置。
     candidates.sort(key=lambda x: (x.get("confidence", 0), abs(x.get("oi_chg") or 0)), reverse=True)
     top = candidates[:MAX_OUTPUT]
     hl_ok = any(c.get("hl_confirmed") for c in candidates)
@@ -529,13 +529,7 @@ def build_report(candidates, ts):
         lines.append("| Orion | ✅已扫描 | 无通过候选 |")
         lines.append("| Binance/CG | ○待触发 | 无需深验 |")
         lines.append("")
-        lines.append("| 品种 | 数据 | 信号 |")
-        lines.append("|:----|:----|:----|")
-        lines.append("| — | confidence≥4无通过 | ○等待 |")
-        lines.append("")
-        lines.append("| 方向 | 条件 | 动作 |")
-        lines.append("|:---:|:----|:----|")
-        lines.append("| ○等待 | 无中高置信异动 | 不追单 |")
+        lines.append("**总体结论**: 市场平静，无中高置信异动，不追单。")
         return "\n".join(lines)
 
     lines.append(f"⚡ Orion雷达 · 候选{len(candidates)}个 · {ts}")
@@ -548,8 +542,8 @@ def build_report(candidates, ts):
     lines.append(f"| Binance/CG | {'✅' + str(bn_count) + '深验' if HAS_KEYS else '⏳无Key'} | CG{cg_count}确认 |")
     lines.append("")
 
-    lines.append("| 品种 | 数据 | 信号 |")
-    lines.append("|:----|:----|:----|")
+    lines.append("| 品种 | 置信 | 数据 | 信号 |")
+    lines.append("|:----|:----:|:----|:----|")
     for c in top:
         symbol = c.get("symbol", "?")
         price_str = fmt_price(c.get("price"))
@@ -563,8 +557,8 @@ def build_report(candidates, ts):
         if bn.get("taker_ratio"):
             taker = f"主动{bn.get('taker_dir', '中性')}{float(bn.get('taker_ratio', 1)):.2f}"
         data = f"价`{price_str}`·1h`{chg_str}`·24h`{fmt_pct(c.get('chg_24h') or 0)}`·OI`{oi_str}`"
-        signal = f"OI`{oi_chg_str}`·费`{fund_str}`·信`{conf_str}`·{taker}"
-        lines.append(f"| {symbol} | {data} | {signal} |")
+        signal = f"OI`{oi_chg_str}`·费`{fund_str}`·{taker}"
+        lines.append(f"| {symbol} | `{conf_str}` | {data} | {signal} |")
     lines.append("")
 
     lines.append("| 品种 | 判断 | 动作 | 仓位系数 |")
@@ -595,6 +589,23 @@ def build_report(candidates, ts):
         if abs(chg24) > 8:
             verdict += f"·24h{chg24:+.0f}%"
         lines.append(f"| {symbol} | {verdict} | {action} | {size} |")
+
+    # 总体结论：首行置信度最高的候选方向 + 一句话
+    best = top[0]
+    best_sym = best.get("symbol", "?")
+    best_conf = best.get("confidence", 0)
+    best_oi = best.get("oi_chg") or 0
+    best_chg = best.get("chg_1h") or 0
+    if best_oi > 0 and best_chg > 0 and best.get("funding", 0) < -0.001:
+        concl = f"最优 {best_sym}(信{best_conf:.1f}) 真突破+负费率，回踩可做多"
+    elif best_oi > 0 and best_chg > 0:
+        concl = f"最优 {best_sym}(信{best_conf:.1f}) 量价齐升，有机会短多"
+    elif best_oi < 0 and best_chg < 0:
+        concl = f"最优 {best_sym}(信{best_conf:.1f}) 去杠杆下跌，规避"
+    else:
+        concl = f"最优 {best_sym}(信{best_conf:.1f}) 中性，观察为主"
+    lines.append("")
+    lines.append(f"**总体结论**: {len(candidates)}个候选，{concl}。")
 
     return "\n".join(lines)
 

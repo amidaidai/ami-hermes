@@ -118,6 +118,16 @@ def main():
         arrow = "↑" if c.get("delta", 0) > 0 else "↓" if c.get("delta", 0) < 0 else "→"
         lines.append(f"| {sym} | ${val_b:.1f}B | {arrow}{delta_m:+.0f}M({pct:+.1f}%) | {share:.1f}% |")
 
+    # 总体结论
+    lines.append("")
+    if abs(delta_b) >= 1.0:
+        flow_note = "稳定币大幅变动，资金面信号强烈"
+    elif abs(delta_b) >= 0.1:
+        flow_note = "稳定币增量=潜在买盘" if total_delta > 0 else "稳定币减量=撤资信号"
+    else:
+        flow_note = "资金面平静"
+    lines.append(f"**总体结论**: {verdict}，{flow_note}。")
+
     output = "\n".join(lines)
 
     # 推送：显著变化(>100M)始终发送；常态每4h兜底推一次(避免完全静默)

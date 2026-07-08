@@ -86,6 +86,8 @@ def main():
         lines.append(f"| {fname} | {_fmt_hours(age)} | {_fmt_hours(threshold)} | 💀 +{over_pct}% |")
     lines.append("")
     lines.append(f"正常文件: {len(fresh)} 个 · 过期文件: {len(stale)} 个")
+    lines.append("")
+    lines.append(f"**总体结论**: {len(stale)}个数据源过期（最严重 +{max(round((a-t)/t*100) for a,t,_,_ in stale)}%），需检查对应采集脚本/接口。")
 
     output = "\n".join(lines)
     try:

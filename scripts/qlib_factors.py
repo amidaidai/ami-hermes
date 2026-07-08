@@ -201,6 +201,12 @@ def main():
     lines.append(f"| 趋势 | {trend_lbl} | {trend:+d} |")
     lines.append(f"| 量能 | {vol_lbl} | {vol:+d} |")
 
+    # 总体结论
+    lines.append("")
+    overall = f"{direction_arrow} {bias}(评分{score}/5)"
+    concl = "多因子共振偏多，可逢低布局" if score >= 3 else "多因子共振偏空，规避为主" if score <= -3 else "因子分歧，按结构短线"
+    lines.append(f"**总体结论**: {overall} · {concl}。")
+
     output = "\n".join(lines)
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -445,7 +445,9 @@ def main() -> int:
 
 | 方向 | 位置 | 动作 |
 |:---:|:----|:----|
-| {verdict} | 现价{cur_disp} | {action} |"""
+| {verdict} | 现价{cur_disp} | {action} |
+
+**总体结论**: {verdict}（现价{cur_disp}），{action}。"""
             print(report)
             sys.path.insert(0, str(ROOT / "scripts"))
             from telegram_reliable import push_tg_rich

@@ -93,6 +93,11 @@ async def _run():
                         zone = "高位" if pos > 66 else "低位" if pos < 33 else "中位"
                         lines.append("")
                         lines.append(f"4h位置: 区间{zone}({pos:.0f}%) → {'偏多但防回落' if pos>66 else '偏空但防反弹' if pos<33 else '方向待选'}")
+                        lines.append("")
+                        lines.append(f"**总体结论**: XAU五层区间{zone}，{'偏多但防回落' if pos>66 else '偏空但防反弹' if pos<33 else '方向待选'}。")
+                    else:
+                        lines.append("")
+                        lines.append("**总体结论**: XAU五层数据不足，方向待选。")
                     output = "\n".join(lines)
                     print(output)
                     sys.path.insert(0, str(Path(__file__).resolve().parent))
