@@ -211,6 +211,23 @@ def fuse() -> dict:
                     "emoji": "🟢" if sc_w > 0 else "🔴" if sc_w < 0 else "⚪",
                     "detail": f"Δ{sc['delta_b']:+.1f}B"})
 
+    # 6) 独立验证闸门（融合 auto_card 逻辑，仅作展示；硬门在 compute_plan）
+    try:
+        from signal_validators import long_short_contra, tf_alignment
+        ls = long_short_contra("BTCUSDT")
+        tf = tf_alignment("BTCUSDT")
+        ls_sig = ls.get("contra") or f"正常({ls.get('ratio')})" if ls.get("available") else "API不可用"
+        tf_sig = tf.get("note", "—") if tf.get("available") else "数据不足"
+        sources.append({"name": "🔍多空比反指", "sig": ls_sig, "w": 0.0,
+                        "emoji": "🟢" if ls.get("signal") == "neutral" else "🔴",
+                        "detail": "散户拥挤反向"})
+        sources.append({"name": "🔍周期一致性", "sig": tf_sig, "w": 0.0,
+                        "emoji": "🔴" if tf.get("conflict") else ("🟢" if tf.get("aligned") else "⚪"),
+                        "detail": "4h/1h/15m方向"})
+    except Exception as e:  # noqa: BLE001
+        sources.append({"name": "🔍验证闸门", "sig": f"异常:{e}", "w": 0.0,
+                        "emoji": "⚪", "detail": "auto_card逻辑"})
+
     # 融合：Orion 作主基底(0-10) + 其余加权(限幅±3)
     base = orion_conf
     adjust = sum(s["w"] for s in sources[1:])
@@ -292,12 +309,30 @@ def compute_plan(score: float) -> dict:
     # 盈亏比门槛：必须≥2R才发执行计划
     qualified = (r_ratio is not None and r_ratio >= 2.0)
 
+    # ── 独立验证闸门（融合 auto_card 逻辑：多空比反指 + 周期一致性）──
+    blockers = []
+    val_notes = []
+    if qualified:
+        try:
+            from signal_validators import validate_plan
+            vres = validate_plan("BTCUSDT", side)
+            val_notes = vres.get("notes", [])
+            if not vres.get("pass"):
+                blockers = vres.get("blockers", [])
+                qualified = False
+        except Exception as e:  # noqa: BLE001
+            val_notes.append(f"验证器异常:{e}")
+
     if qualified:
         analysis = (f"方向逻辑：{side}（融合{score}/10，共振源[{','.join(_supporting_names()) or '无'}]）。"
                     f"入场逻辑：{entry_logic}。"
-                    f"风控逻辑：{stop_logic}，风险{risk_pct}%/1R，盈亏比{r_ratio}R。")
+                    f"风控逻辑：{stop_logic}，风险{risk_pct}%/1R，盈亏比{r_ratio}R。"
+                    f"独立验证：{'；'.join(val_notes) or '通过'}。")
     else:
-        analysis = (f"结构位不支持≥2R（当前测算{r_ratio}R），暂不发执行计划，"
+        reason = (f"结构位不支持≥2R（当前测算{r_ratio}R）" if (r_ratio or 0) < 2.0
+                  else "；".join(blockers) or "未达标")
+        analysis = (f"暂不发执行计划：{reason}。"
+                    f"{('独立验证：' + '；'.join(val_notes) + '。') if val_notes else ''}"
                     f"等结构收敛/回踩确认后再评估。")
 
     return {
@@ -305,6 +340,7 @@ def compute_plan(score: float) -> dict:
         "entry": entry, "entry2": entry2, "stop": stop, "targets": targets,
         "risk_pct": risk_pct, "r_ratio": r_ratio, "analysis": analysis,
         "stop_logic": stop_logic, "entry_logic": entry_logic,
+        "validators": val_notes, "blockers": blockers,
         "spot": spot, "age": lv.get("age_min"),
     }
 
