@@ -228,6 +228,94 @@ def send_telegram_reliable(
     return False, last_reason
 
 
+def send_telegram_photo(
+    target: str,
+    photo_path: str,
+    caption: str | None = None,
+    parse_mode: str | None = None,
+    timeout: int = 20,
+    retries: int = 3,
+) -> tuple[bool, str]:
+    """直连 Bot API sendPhoto 发送图片（如主周期 TradingView 截图）。
+
+    返回 (成功, 原因)。失败落盘到 pending（含 caption），供后续补发。
+    caption 走 RichMarkdown 时 Telegram 会尝试渲染，但图片 caption 对
+    RichMarkdown 表格支持不稳定，建议 caption 留空或纯文字。
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or token_from_env_file()
+    if not token:
+        reason = "missing TELEGRAM_BOT_TOKEN"
+        if caption:
+            append_pending(target, caption, reason, parse_mode)
+        return False, reason
+    if not photo_path or not Path(photo_path).exists():
+        reason = f"photo not found: {photo_path}"
+        if caption:
+            append_pending(target, caption, reason, parse_mode)
+        return False, reason
+
+    chat_id, thread_id = parse_telegram_target(target)
+    last_reason = "not attempted"
+    import urllib.request as _urllib_request
+    import urllib.error as _urllib_error
+    for attempt in range(max(1, retries)):
+        try:
+            boundary = f"----tangxi{int(time.time()*1000)}"
+            parts: list[bytes] = []
+            # chat_id
+            parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            parts.append(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
+            parts.append(f"{chat_id}\r\n".encode("utf-8"))
+            if thread_id is not None:
+                parts.append(f"--{boundary}\r\n".encode("utf-8"))
+                parts.append(b'Content-Disposition: form-data; name="message_thread_id"\r\n\r\n')
+                parts.append(f"{thread_id}\r\n".encode("utf-8"))
+            if caption:
+                parts.append(f"--{boundary}\r\n".encode("utf-8"))
+                parts.append(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
+                parts.append(f"{caption}\r\n".encode("utf-8"))
+            if parse_mode:
+                parts.append(f"--{boundary}\r\n".encode("utf-8"))
+                parts.append(b'Content-Disposition: form-data; name="parse_mode"\r\n\r\n')
+                parts.append(f"{parse_mode}\r\n".encode("utf-8"))
+            # photo file
+            parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            parts.append(
+                f'Content-Disposition: form-data; name="photo"; filename="{Path(photo_path).name}"\r\n'.encode("utf-8")
+            )
+            parts.append(b"Content-Type: image/png\r\n\r\n")
+            with open(photo_path, "rb") as fp:
+                parts.append(fp.read())
+            parts.append(b"\r\n")
+            parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+            body = b"".join(parts)
+            req = _urllib_request.Request(
+                f"{API_BASE}/bot{token}/sendPhoto",
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+            with _urllib_request.urlopen(req, timeout=timeout) as resp:
+                rb = json.loads(resp.read().decode("utf-8", errors="replace"))
+            if rb.get("ok"):
+                return True, "photo_sent"
+            last_reason = f"api: {rb.get('description', 'unknown')}"
+        except _urllib_error.HTTPError as exc:
+            try:
+                desc = json.loads(exc.read().decode("utf-8", errors="replace")).get("description", str(exc))
+            except Exception:
+                desc = str(exc)
+            last_reason = f"http {exc.code}: {desc}"
+            if 400 <= exc.code < 500:
+                break
+        except (OSError, ValueError, TimeoutError) as exc:
+            last_reason = f"network: {exc}"
+        if attempt < retries - 1:
+            time.sleep(min(2 ** attempt, 8))
+    if caption:
+        append_pending(target, caption, last_reason, parse_mode)
+    return False, last_reason
+
+
 def flush_pending(limit: int = 20) -> tuple[int, int]:
     if not PENDING_FILE.exists():
         return 0, 0

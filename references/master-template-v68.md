@@ -9,7 +9,7 @@
 3. 首屏先给结论，但结论必须带结构上下文：价格前面要有 `🔴VAH/VWAP/POC/VAL/FVG/阻` 与 `⚖现价` 的夹层结构。
 4. 裁决必须是唯一主推：第一行 `⭐主推` 只有一个；`🔁备选` 只作为主推失效后的路径；禁止 A/B/X 菜单式平铺。
 5. 完整卡必须显式使用双指标：`SVP主驾驶` + `HALDRO副驾驶` + `订单流/多源`。不能只写“多源验证一句话”。
-6. 加密卡必须显式五周期，按棠溪看盘顺序 **5m → 15m → 1h → 4h → D**（从执行层往上确认）；贵金属主周期 5m、加密主周期 15m。快速卡也要一行五周期体温（同顺序），完整卡用表格，主周期行标 `⭐主`。
+6. 加密卡必须显式五周期，按棠溪看盘顺序 **D → 4h → 1h → 15m → 5m**（自上而下，背景→执行层）；贵金属主周期 5m、加密主周期 15m。快速卡也要一行五周期体温（同顺序），完整卡用表格，主周期行标 `⭐主`。
 7. 结构位表必须包含：VAH/VWAP/POC/VAL/FVG/nPOC/阻支中能读到的最近6个；列为 `结构位 | 价格 | 用法 | 距现价`。
 8. Telegram 真表格必须走 Bot API 10.1 `sendRichMessage` + `RichMarkdown`；普通 `hermes send` 不算。
 9. 状态只允许：`A可执行` / `B等确认` / `C轻仓试探` / `X禁做观察`。
@@ -27,15 +27,15 @@
 【主推】{DIR_OR_WAIT} · {TRIGGER} · {RR_OR_WAIT}
 【依据】SVP {SVP_STATE}｜HALDRO {HALDRO_STATE}｜{DUAL_VERDICT}
 
-① 周期体温 / 多周期定位（5m→15m→1h→4h→D）
+① 周期体温 / 多周期定位（D→4h→1h→15m→5m）
 | 周期 | SVP主指标 | HALDRO副指标 | 位置 |
 |:---:|:---|:---|:---|
-| 5m ⭐主 | {5M_SVP} | {5M_HALDRO} | {5M_VWAP_POS} |
-| 15m | {15M_SVP} | {15M_HALDRO} | {15M_VWAP_POS} |
-| 1h | {1H_SVP} | {1H_HALDRO} | {1H_VWAP_POS} |
-| 4h | {4H_SVP} | {4H_HALDRO} | {4H_VWAP_POS} |
 | D | {D_SVP} | {D_HALDRO} | {D_VWAP_POS} |
-→ 主执行{MAIN_TF} · 先看5m向上确认
+| 4h | {4H_SVP} | {4H_HALDRO} | {4H_VWAP_POS} |
+| 1h | {1H_SVP} | {1H_HALDRO} | {1H_VWAP_POS} |
+| 15m ⭐主 | {15M_SVP} | {15M_HALDRO} | {15M_VWAP_POS} |
+| 5m | {5M_SVP} | {5M_HALDRO} | {5M_VWAP_POS} |
+→ 主执行{MAIN_TF} · 自上而下确认（D背景→{MAIN_TF}执行）
 
 ② 关键位 / 结构关键位
 

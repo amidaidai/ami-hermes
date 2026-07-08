@@ -3558,12 +3558,16 @@ def auto_card(symbol: str, push: bool = False) -> str:
         meta["protections_status"] = f"未启用({e})"
     
     # ═══ Step 5: 双卡渲染 ═══
-    # Screenshot (async, non-blocking)
+    # 主周期图表截图（BTC→15m / XAU→5m），失败降级为纯文字卡
     screenshot_path = None
     try:
-        screenshot_path = _tv_screenshot(symbol, direction)
-    except Exception:
-        pass
+        screenshot_path = _tv_screenshot(symbol)
+        if screenshot_path:
+            print(f"  📸 主周期截图: {screenshot_path}")
+        else:
+            print("  ⚠️ 主周期截图返回空（TV MCP 可能不可用）")
+    except Exception as _se:
+        print(f"  ⚠️ 主周期截图异常: {_se}")
     
     # Card A: 完整分析卡（始终输出）
     full_card = render_card_locked(

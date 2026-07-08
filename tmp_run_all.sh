@@ -31,19 +31,20 @@ for entry in "${jobs[@]}"; do
   name="${entry##*|}"
   echo ""
   echo "--- [$n/18] $name ($id) ---"
+  before=$(ls -t "$OUT_BASE/$id/" 2>/dev/null | head -1)
   hermes cron run "$id" >/dev/null 2>&1
-  # 轮询输出文件直到出现 Status 行(最多120s)
+  # 轮询直到出现比 before 更新的输出文件
   waited=0
   st=""
-  while [ $waited -lt 120 ]; do
+  while [ $waited -lt 100 ]; do
     f=$(ls -t "$OUT_BASE/$id/" 2>/dev/null | head -1)
-    if [ -n "$f" ]; then
+    if [ -n "$f" ] && [ "$f" != "$before" ]; then
       st=$(grep -m1 -E "Status:|script failed|succeeded|silent|error" "$OUT_BASE/$id/$f" 2>/dev/null | head -1)
       if [ -n "$st" ]; then break; fi
     fi
     sleep 5; waited=$((waited+5))
   done
-  if [ -n "$st" ]; then echo "状态: $st"; else echo "状态: 超时未出(可能仍在跑)"; fi
+  if [ -n "$st" ]; then echo "状态: $st"; else echo "状态: 超时未出"; fi
 done
 echo ""
 echo "===== 全部跑完 $(date '+%H:%M:%S') ====="

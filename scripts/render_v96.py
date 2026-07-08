@@ -4,7 +4,7 @@
 
 v9.9 目标：手机端好看，但不牺牲棠溪双指标/多周期能力。
 - 结构位前置：价格前必须带 POC/VWAP/VAH/VAL/FVG/阻支标签。
-- 多周期必须显式：5m/15m/1h/4h/D 全部出现，按看盘顺序 5m→15m→1h→4h→D。
+- 多周期必须显式：D/4h/1h/15m/5m 全部出现，按看盘顺序 D→4h→1h→15m→5m（自上而下，背景→执行层）。
 - 双指标必须显式：SVP 主驾驶 + HALDRO 副驾驶，不再压成一句散文。
 - 裁决唯一主推：⭐主推只给一个，🔁备选只是失效路径。
 """
@@ -14,8 +14,8 @@ import re
 import sys
 from datetime import datetime, timezone, timedelta
 
-# 棠溪看盘顺序：从执行层往上确认（5m主执行 → 15m → 1h → 4h → D背景）
-TF_ORDER = ("5m", "15m", "1h", "4h", "D")
+# 棠溪看盘顺序：从上往下（D背景 → 4h → 1h → 15m → 5m主执行层）
+TF_ORDER = ("D", "4h", "1h", "15m", "5m")
 
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -404,7 +404,7 @@ def render_v96_card(
     lines.append(f"【依据】SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict}")
     lines.append("")
 
-    lines.append("① 周期体温 / 多周期定位（5m→15m→1h→4h→D）")
+    lines.append("① 周期体温 / 多周期定位（D→4h→1h→15m→5m）")
     lines.append("| 周期 | SVP主指标 | HALDRO副指标 | 位置 |")
     lines.append("|:---:|:---|:---|:---|")
     main_tf = _main_tf(symbol)
@@ -412,7 +412,7 @@ def render_v96_card(
         k = klines.get(tf, {}) if isinstance(klines, dict) else {}
         mark = " ⭐主" if tf == main_tf else ""
         lines.append(f"| {tf}{mark} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text(k)} | {_vwap_pos(k, price)} |")
-    lines.append(f"→ 主执行{main_tf} · 先看{TF_ORDER[0]}向上确认")
+    lines.append(f"→ 主执行{main_tf} · 自上而下确认（D背景→{main_tf}执行）")
     lines.append("")
 
     lines.append("② 关键位 / 结构关键位")

@@ -13,8 +13,8 @@ import re
 import sys
 from datetime import datetime, timezone, timedelta
 
-# 棠溪看盘顺序：从执行层往上确认（5m主执行 → 15m → 1h → 4h → D背景）
-TF_ORDER = ("5m", "15m", "1h", "4h", "D")
+# 棠溪看盘顺序：从上往下（D背景 → 4h → 1h → 15m → 5m主执行层）
+TF_ORDER = ("D", "4h", "1h", "15m", "5m")
 
 try:
     if hasattr(sys.stdout, "reconfigure"):
