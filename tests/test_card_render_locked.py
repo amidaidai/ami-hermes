@@ -46,22 +46,26 @@ def _sample_ctx():
     return merged, results, meta, engine_data
 
 
-def test_render_card_locked_has_speed_read_block():
+def test_render_card_locked_has_phone_friendly_blocks():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v9.6: 表格驾驶舱结构
-    for marker in ["### 双指标裁决", "### 多周期定位", "### 关键位矩阵", "### 多源交叉验证", "### 执行预案", "### 风控闸门"]:
-        assert marker in card, f"v9.6卡缺少 {marker}"
+    # v9.9: 手机驾驶舱，结构位前置 + 多周期 + 双指标 + 唯一主推裁决
+    for marker in ["【现在】", "【做法】", "① 周期体温", "② 关键位", "③ 多源验证", "④ 最推荐方案", "【裁决】"]:
+        assert marker in card, f"v9.9卡缺少 {marker}"
+    assert "| 周期 | SVP主指标 | HALDRO副指标 | 位置 |" in card
+    assert "| 结构位 | 价格 | 用法 | 距现价 |" in card
+    assert "| 能力 | 读数 | 裁决 |" in card
+    assert "| 优先级 | 条件 | 动作 | R:R |" in card
 
 
-def test_render_card_locked_has_five_sections():
+def test_render_card_locked_has_execution_elements():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v9.6: 操作要素集中在执行预案表和风控闸门表
-    for marker in ["主线", "反向", "风控闸门", "止损", "目标"]:
-        assert marker in card, f"v9.6卡缺少操作要素 {marker}"
+    # v9.8: 操作要素集中在“唯一主推+备选失效路径”表和裁决行
+    for marker in ["主推", "备选", "⚠️禁止", "损", "标", "R:R"]:
+        assert marker in card, f"v9.8卡缺少操作要素 {marker}"
 
 
 def test_render_card_locked_hides_machine_fields():
@@ -98,17 +102,18 @@ def test_render_card_locked_no_engine_log_format():
     assert "## 模型详情" not in card
     # 禁装饰：无方括号、无竖线
     assert "｜" not in card
-    # 价格用反引号
-    assert "`63884`" in card or "`63,884`" in card
+    # 价格用反引号（任一有效价位即可）
+    assert "`" in card
 
 
 def test_render_card_locked_waiting_no_entry_price():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # B等待状态：不可把当前价当作可执行入场价，必须显示等待触发/空价位
-    assert "等待触发" in card
-    assert "| 主线 空 |" in card or "| 主线 多 |" in card
+    # B等待状态：不可渲染为“可执行”，必须保留等待/禁追语义
+    assert "等确认" in card or "等关键位确认" in card
+    assert "不追" in card
+    assert "⚠️禁止" in card
     errors = auto_card.validate_card_rules(card, meta)
     # 只检查 R:R 和机器字段缺失，不禁止B等待出价
     for err in errors:

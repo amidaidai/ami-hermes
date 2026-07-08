@@ -17,7 +17,7 @@ def _load(path: Path, name: str):
     return mod
 
 
-def test_push_card_uses_action_panel_trade_fields_without_emoji():
+def test_push_card_uses_phone_friendly_one_table_format():
     render = _load(RENDER, "render_tv_card_under_test")
     card = render.render_tv_card(
         {
@@ -43,13 +43,14 @@ def test_push_card_uses_action_panel_trade_fields_without_emoji():
         62500,
         mode="push",
     )
-    assert "↑做多 A多" in card
-    assert "进 扫低收回 62,480" in card
-    assert "损 61,950 (1.8ATR)" in card
-    assert "标 POC 63,820 R:R 2.5R" in card
-    assert "磁吸 上 前高 64,120" in card
-    assert "🔥" not in card and "🟢" not in card and "✅" not in card
-    assert "**" not in card and "|" not in card
+    assert card.startswith("📊 BTC · ")
+    assert "🟢做多 · 🟢A多" in card
+    assert "| 优先级 | 触发价 | 操作 |" in card
+    assert "| ⭐主推 多 | 扫低收回 62,480 | 多 损61,950 (1.8ATR) 标POC 63,820 R:R 2.5R |" in card
+    assert "| 🔁备选 空 | 前高 64,120" in card
+    assert "持仓▲新多进场" in card and "CVD▲买盘占优" in card
+    assert "**" not in card
+    assert card.count("| 优先级 |") == 1
 
 
 def test_auto_card_builds_v2_action_panel_fields_for_renderer():

@@ -527,21 +527,53 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     engine_data["_dual_indicator_verdict"] = dual
     return dual
 
+def _unknown_tv_text(value) -> bool:
+    s = str(value or "").strip()
+    return s in ("", "?", "—", "--", "None", "nan")
+
+
+def _grade_from_mcp_values(tv_vals: dict | None) -> str:
+    """用 MCP Data Window 的 Side/Grade Code 兜底恢复 SVP 等级。"""
+    if not isinstance(tv_vals, dict):
+        return ""
+    if "MCP Side Code" not in tv_vals or "MCP Grade Code" not in tv_vals:
+        return ""
+    try:
+        side = int(float(str(tv_vals.get("MCP Side Code", 0)).replace("−", "-")))
+        grade_code = int(float(str(tv_vals.get("MCP Grade Code", 0)).replace("−", "-")))
+        if side == 9 or grade_code < 0:
+            return "X"
+        if side == 1:
+            return "A多" if grade_code == 3 else "B多" if grade_code == 2 else "C反多" if grade_code == 1 else "C等待"
+        if side == -1:
+            return "A空" if grade_code == 3 else "B空" if grade_code == 2 else "C反空" if grade_code == 1 else "C等待"
+        return "C等待"
+    except (TypeError, ValueError):
+        return ""
+
+
 def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict:
     """从TV DMI表+study values构建主指标完整数据字典，供render_tv_card使用。"""
     main = {}
+    dmi_rows = dmi_rows or {}
+    tv_vals = tv_vals or {}
+
     if dmi_rows:
-        # v2 行动格：grade 从"等级"行取，无则从"结论"行前缀提取（A多/A空/B多/B空/C反多/C反空）
+        # v2 行动格：grade 从"等级"行取，无则从"结论"行前缀提取（A多/A空/B多/B空/C反多/C反空）。
+        # 注意：缓存偶发 grade='?'，这不是有效等级，必须允许 MCP Data Window 兜底。
         grade_raw = dmi_rows.get("等级", "")
-        if not grade_raw:
-            # 从"结论"行提取 grade 前缀
+        if _unknown_tv_text(grade_raw):
             conc = dmi_rows.get("结论", "")
+            grade_raw = ""
             for prefix in ("A多", "A空", "B多", "B空", "C反多", "C反空", "C等待", "X"):
-                if conc.startswith(prefix):
+                if str(conc).startswith(prefix):
                     grade_raw = prefix
                     break
-        main["grade"] = grade_raw or "C等待"
-        main["treatment"] = dmi_rows.get("处理", dmi_rows.get("结论", ""))
+        main["grade"] = grade_raw or ""
+        treatment = dmi_rows.get("处理")
+        if _unknown_tv_text(treatment):
+            treatment = dmi_rows.get("结论", "")
+        main["treatment"] = treatment or ""
         main["background"] = dmi_rows.get("背景", "")
         main["position"] = dmi_rows.get("位置", "")
         main["cvd_state"] = dmi_rows.get("CVD", "")
@@ -549,7 +581,6 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
         main["execution"] = dmi_rows.get("执行", "")
         main["risk"] = dmi_rows.get("风控", "")
         # 行动格 v2 字段：结论/方向/进场/止损/目标/核对/磁吸↑/磁吸↓。
-        # 2026年7月2日生产版已恢复 MCP Data Window；进出场仍优先采用行动格原文，
         # MCP Side/Grade/Entry/Stop/Target/Quality 只作稳定读取兜底与交叉校验。
         for src_key, dst_key in [
             ("方向", "direction_text"), ("进场", "entry"), ("止损", "stop"),
@@ -558,6 +589,7 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
         ]:
             if dmi_rows.get(src_key):
                 main[dst_key] = dmi_rows[src_key]
+
     if tv_vals:
         for tv_key, dict_key in [
             ("S VWAP", "vwap"), ("VAH Price", "vah"), ("VAL Price", "val"),
@@ -580,20 +612,12 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
         ]:
             if tv_key in tv_vals:
                 main[dict_key] = tv_vals[tv_key]
-        if not main.get("grade") and "MCP Side Code" in tv_vals and "MCP Grade Code" in tv_vals:
-            try:
-                side = int(float(tv_vals.get("MCP Side Code", 0)))
-                grade_code = int(float(tv_vals.get("MCP Grade Code", 0)))
-                if side == 9 or grade_code < 0:
-                    main["grade"] = "X"
-                elif side == 1:
-                    main["grade"] = "A多" if grade_code == 3 else "B多" if grade_code == 2 else "C反多" if grade_code == 1 else "C等待"
-                elif side == -1:
-                    main["grade"] = "A空" if grade_code == 3 else "B空" if grade_code == 2 else "C反空" if grade_code == 1 else "C等待"
-                else:
-                    main["grade"] = "C等待"
-            except (TypeError, ValueError):
-                pass
+        if _unknown_tv_text(main.get("grade")):
+            mcp_grade = _grade_from_mcp_values(tv_vals)
+            if mcp_grade:
+                main["grade"] = mcp_grade
+    if _unknown_tv_text(main.get("grade")):
+        main["grade"] = "C等待"
     return main
 
 
@@ -603,14 +627,19 @@ def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
     if not dmi_rows:
         return {"tv_active": False}
     grade = dmi_rows.get("等级", "")
-    if not grade:
+    if _unknown_tv_text(grade):
         conc = dmi_rows.get("结论", "")
+        grade = ""
         for prefix in ("A多", "A空", "B多", "B空", "C反多", "C反空", "C等待", "X"):
-            if conc.startswith(prefix):
+            if str(conc).startswith(prefix):
                 grade = prefix
                 break
-    grade = grade or "C等待"
-    changes = {"tv_active": True, "tv_grade": grade, "tv_treatment": dmi_rows.get("处理", "?"),
+    if _unknown_tv_text(grade):
+        grade = _grade_from_mcp_values(tv_vals) or "C等待"
+    treatment = dmi_rows.get("处理", "?")
+    if _unknown_tv_text(treatment):
+        treatment = dmi_rows.get("结论", "?")
+    changes = {"tv_active": True, "tv_grade": grade, "tv_treatment": treatment,
                "tv_background": dmi_rows.get("背景", "?"), "tv_position": dmi_rows.get("位置", "?"),
                "tv_volume": dmi_rows.get("量能", "?"), "tv_cvd_state": dmi_rows.get("CVD", "?"),
                "tv_execution": dmi_rows.get("执行", "?"), "tv_risk": dmi_rows.get("风控", "?")}
@@ -1010,6 +1039,11 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
             import sys as _tv_sys
             _tv_sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
             from render_tv_card import render_tv_card as _render_tv
+            # v9.9: 快速卡也必须带五周期和双指标裁决，不能只消费单周期TV表。
+            if isinstance(tv_main, dict):
+                tv_main = dict(tv_main)
+                tv_main.setdefault("_klines", klines)
+                tv_main.setdefault("_dual", dual_indicator)
             tv_card = _render_tv(tv_main, tv_sub, symbol, price or 0, mode="push")
             if tv_card:
                 return tv_card
@@ -3573,19 +3607,31 @@ def auto_card(symbol: str, push: bool = False) -> str:
         try:
             from topic_router import get_target
             target = get_target(symbol)
-            msg = card[:3000]
+            # 截图先发（MEDIA 走 gateway 上传需要时间）
             if screenshot_path:
-                msg += f"\nMEDIA:{screenshot_path}"
-            import subprocess
-            subprocess.run([
-                sys.executable, "-m", "hermes_cli.main", "send",
-                "-t", target,
-                "-q", msg
-            ], timeout=15, capture_output=True)
-            print(f"  ✅ Telegram已推送 → {target}")
+                try:
+                    import subprocess as _sp
+                    _sp.run([
+                        sys.executable, "-m", "hermes_cli.main", "send",
+                        "-t", target, "-q", f"MEDIA:{screenshot_path}"
+                    ], timeout=15, capture_output=True)
+                except Exception:
+                    pass
+            # 卡片走 telegram_reliable RichMarkdown 真表格
+            sys.path.insert(0, str(Path(__file__).parent))
+            from telegram_reliable import send_telegram_reliable
+            ok, reason = send_telegram_reliable(
+                target, card[:3500],
+                parse_mode="RichMarkdown",
+                timeout=20, retries=3, persist_on_fail=True,
+            )
+            if ok:
+                print(f"  ✅ Telegram已推送 → {target} ({reason})")
+            else:
+                print(f"  ⚠️ Push: {reason}")
         except Exception as e:
             print(f"  ⚠️ Push: {e}")
-    
+
     # 管线完成度审计表
     if pipeline_steps:
         print(f"\n{'='*50}")

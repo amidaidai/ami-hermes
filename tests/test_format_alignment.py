@@ -10,12 +10,13 @@ def _text(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8", errors="replace")
 
 
-def test_master_template_contains_dual_indicator_section_and_five_timeframes():
+def test_master_template_contains_phone_friendly_sections_and_five_timeframes():
     text = _text("references/master-template-v68.md")
-    assert "### 双指标裁决" in text
-    assert "HALDRO副驾驶" in text
-    for tf in ["| D |", "| 4h |", "| 1h |", "| 15m |", "| 5m |"]:
+    for marker in ["唯一主推裁决", "① 周期体温", "② 关键位", "③ 多源验证", "④ 最推荐方案", "【裁决】"]:
+        assert marker in text
+    for tf in ["D_EMOJI", "4H_EMOJI", "1H_EMOJI", "15M_EMOJI", "5M_EMOJI"]:
         assert tf in text
+    assert "send_telegram_reliable(parse_mode='RichMarkdown')" in text
 
 
 def test_key_user_facing_scripts_do_not_emit_bjt_suffix():
@@ -81,7 +82,7 @@ def test_cross_asset_sentiment_does_not_bleed_into_non_crypto_cards():
 
 
 def test_renderer_stdout_reconfigure_is_pipe_safe():
-    render = _text("scripts/render_v8.py")
+    render = _text("scripts/render_v96.py")
     assert "def _safe_reconfigure" in render
     assert "except (OSError, ValueError):" in render
     assert "_safe_reconfigure(sys.stdout)" in render

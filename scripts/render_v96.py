@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""棠溪 v9.6 表格驾驶舱渲染器（原 render_v8.py 重命名，函数 render_v96_card）。
+"""棠溪 v9.9 Telegram 驾驶舱渲染器。
 
-输出 v9.6 表格格式：多周期定位、关键位矩阵、多源交叉验证、执行预案、风控闸门。
+v9.9 目标：手机端好看，但不牺牲棠溪双指标/多周期能力。
+- 结构位前置：价格前必须带 POC/VWAP/VAH/VAL/FVG/阻支标签。
+- 多周期必须显式：D/4h/1h/15m/5m 全部出现。
+- 双指标必须显式：SVP 主驾驶 + HALDRO 副驾驶，不再压成一句散文。
+- 裁决唯一主推：⭐主推只给一个，🔁备选只是失效路径。
 """
 from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone, timedelta
 
+
 def _safe_reconfigure(stream):
-    """Windows/MSYS cron/pipe handles can reject reconfigure(); never break rendering."""
     try:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -37,12 +41,17 @@ def _num(v, digits=0):
 
 
 def _price(v):
-    return f"`{_num(v)}`" if _num(v) != "—" else "`—`"
+    n = _num(v)
+    return f"`{n}`" if n != "—" else "`—`"
+
+
+def _raw_price(v):
+    return _num(v).replace(",", "") if _num(v) != "—" else "—"
 
 
 def _cell(v) -> str:
-    text = "—" if v is None else str(v)
-    return text.replace("|", "／").replace(chr(13), " ").replace(chr(10), " ")
+    text = "—" if v is None or v == "" else str(v)
+    return text.replace("|", "／").replace(chr(13), " ").replace(chr(10), " ").strip()
 
 
 def _asset_cn(symbol: str) -> str:
@@ -81,93 +90,11 @@ def _display_symbol(symbol: str) -> str:
 
 
 def _main_tf(symbol: str) -> str:
-    ac = _asset_cn(symbol)
-    return {"加密": "15m", "贵金属": "5m", "外汇": "15m", "股票": "1h", "期货": "15m", "期权": "跟底层"}.get(ac, "15m")
+    return {"加密": "15m", "贵金属": "5m", "外汇": "15m", "股票": "1h", "期货": "15m", "期权": "跟底层"}.get(_asset_cn(symbol), "15m")
 
-
-def _dual_indicator_rows(dual: dict | None, asset_cn: str) -> list[str]:
-    """渲染主副指标裁决表。
-
-    SVP 是全市场主驾驶；HALDRO 只在加密市场启用。非加密市场明确降权，
-    避免把加密订单流误套到黄金/外汇/股票。
-    """
-    d = dual if isinstance(dual, dict) else {}
-    if asset_cn != "加密":
-        return [
-            f"| 方向 | {_cell(d.get('svp_direction') or 'SVP主结构')} | HALDRO不适用 | 非加密只用SVP+对应市场数据 |",
-            f"| 订单流 | {_cell(d.get('svp_flow') or 'CVD/VWAP/EMA降权参考')} | 已隐藏 | 不因副指标缺失降级 |",
-            f"| 执行 | {_cell(d.get('svp_state') or '按A/B/C/X状态机')} | — | {_cell(d.get('state') or '按资产路由裁决')} |",
-        ]
-    return [
-        f"| 方向 | {_cell(d.get('svp_direction') or d.get('svp_state') or '待刷新')} | {_cell(d.get('haldro_direction') or '待刷新')} | {_cell(d.get('direction_verdict') or d.get('state') or '等待共振')} |",
-        f"| 位置/结构 | {_cell(d.get('svp_position') or 'VAL/POC/VWAP待判')} | {_cell(d.get('haldro_position') or '现货/合约待判')} | {_cell(d.get('structure_verdict') or '等关键位确认')} |",
-        f"| 动能/订单流 | {_cell(d.get('svp_flow') or 'CVD/位移待判')} | {_cell(d.get('haldro_flow') or 'CVD/OI/量能待判')} | {_cell(d.get('flow_verdict') or 'CVD不配不追')} |",
-        f"| 覆盖/质量 | {_cell(d.get('svp_quality') or 'TV质量待判')} | {_cell(d.get('haldro_quality') or '覆盖率待判')} | {_cell(d.get('quality_verdict') or '质量不足降级')} |",
-        f"| 执行 | {_cell(d.get('svp_execution') or 'Entry/Stop/Target待判')} | {_cell(d.get('haldro_confirm') or 'Confirm待判')} | {_cell(d.get('state') or 'B等确认')} |",
-    ]
-
-
-def _tf_row(tf: str, k: dict, fallback: str = "") -> str:
-    if not isinstance(k, dict) or not k:
-        return f"| {tf} | 待刷新 | 待刷新 | — | 待刷新 |"
-    desc = k.get("description") or fallback or k.get("direction") or k.get("svp") or "待判"
-    sub = k.get("sub_indicator") or k.get("sub") or k.get("volume_agg") or k.get("oi") or k.get("orderflow") or "待刷新"
-    composite = k.get("composite") or k.get("Composite") or k.get("sub_composite") or k.get("confirm_score") or "—"
-    vwap = k.get("vwap") or k.get("S VWAP")
-    px = k.get("close") or k.get("price") or k.get("last_price")
-    if vwap not in (None, "", 0) and px not in (None, "", 0):
-        try:
-            diff = (float(px) - float(vwap)) / float(vwap) * 100
-            vwap_txt = f"{'上方' if diff > 0 else '下方' if diff < 0 else '贴合'} {diff:+.2f}%"
-        except Exception:
-            vwap_txt = f"VWAP {_price(vwap)}"
-    elif vwap not in (None, "", 0):
-        vwap_txt = f"VWAP {_price(vwap)}"
-    else:
-        vwap_txt = "待刷新"
-    return f"| {_cell(tf)} | {_cell(desc)} | {_cell(sub)} | {_cell(composite)} | {_cell(vwap_txt)} |"
-
-
-def _level_rows(levels: list[dict], price: float | None, klines: dict | None = None) -> list[str]:
-    rows: list[str] = []
-    clean = []
-    for item in levels or []:
-        try:
-            lvl = float(item.get("level"))
-        except (TypeError, ValueError):
-            continue
-        if not lvl:
-            continue
-        side = item.get("side") or "level"
-        name = item.get("display_name") or item.get("name") or side
-        clean.append({"level": lvl, "side": side, "name": name})
-    if not clean and klines:
-        for tf in ("4h", "1h", "15m", "5m"):
-            k = klines.get(tf, {}) if isinstance(klines, dict) else {}
-            for key, typ in (("vah", "上沿/阻力"), ("poc", "POC"), ("val", "下沿/支撑"), ("high", "高点"), ("low", "低点")):
-                if k.get(key):
-                    try:
-                        clean.append({"level": float(k.get(key)), "side": typ, "name": f"{tf}{typ}"})
-                    except Exception:
-                        pass
-    clean = sorted(clean, key=lambda x: abs((x["level"] or 0) - float(price or 0)))[:5]
-    for item in clean:
-        lvl = item["level"]
-        if price:
-            direction = "上方阻力/目标" if lvl > price else "下方支撑/失效" if lvl < price else "当前价"
-            dist = abs(lvl - price) / price * 100
-            dist_txt = f"{dist:.2f}%"
-        else:
-            direction = item.get("side") or "关键位"
-            dist_txt = "待现价"
-        nature = f"{item.get('side','level')} · {item.get('name','')}"
-        rows.append(f"| {_cell(direction)} | {_price(lvl)} | {_cell(nature)} | {_cell(dist_txt)} |")
-    if not rows:
-        rows.append("| 待刷新 | `—` | TV/数据桥 | 无关键位则禁追 |")
-    return rows
 
 def _bias_label(direction: str, status: str) -> str:
-    if status.startswith("X"):
+    if str(status).startswith("X"):
         return "禁做观察"
     if direction == "short":
         return "偏空"
@@ -176,155 +103,371 @@ def _bias_label(direction: str, status: str) -> str:
     return "观望"
 
 
-def render_v96_card(symbol: str, status: str, direction: str, price: float,
-                   high, low, chg, tf_lines: str, cvd_dir: str, cvd_quality: str,
-                   taker_dir: str, taker_ratio, funding_rate, kill_zone: str,
-                   vwap_ema: dict, fg_v: str, levels: list[dict],
-                   bearish: bool, st_a: dict, st_b: dict, rr_a: float, rr_b: float,
-                   rr_a_note: str, rr_b_note: str, risk_amt: float,
-                   leverage_text: str, inv_line, prot_status: str,
-                   data_grade: str, sweep_state: str, displacement: str,
-                   one_reason: str, model_id: str, n5, eng_conf,
-                   klines: dict = None, tv_dmi: dict = None,
-                   dual_indicator: dict | None = None) -> str:
-    """v9.6 完整分析卡 · 表格驾驶舱。"""
+def _status_emoji(status: str) -> str:
+    s = str(status or "")
+    if s.startswith("A"):
+        return "🟢"
+    if s.startswith("B"):
+        return "🔵"
+    if s.startswith("X"):
+        return "⚠️"
+    if s.startswith("C"):
+        return "🟡"
+    return "⚪"
+
+
+def _dir_emoji(direction: str) -> str:
+    if direction == "long":
+        return "🟢"
+    if direction == "short":
+        return "🔴"
+    return "🔵"
+
+
+def _tf_emoji(tf_data: dict) -> str:
+    if not isinstance(tf_data, dict) or not tf_data:
+        return "⚪"
+    desc = str(tf_data.get("description") or tf_data.get("direction") or tf_data.get("svp") or "")
+    if any(w in desc for w in ("禁", "X")):
+        return "⚠️"
+    if any(w in desc for w in ("多", "long", "涨")):
+        return "🟢"
+    if any(w in desc for w in ("空", "short", "跌")):
+        return "🔴"
+    return "🔵"
+
+
+def _short_tf_text(tf_data: dict) -> str:
+    if not isinstance(tf_data, dict) or not tf_data:
+        return "待刷新"
+    for key in ("description", "svp", "direction", "grade", "action"):
+        v = tf_data.get(key)
+        if v:
+            return _cell(v)[:18]
+    return "待判"
+
+
+def _sub_tf_text(tf_data: dict) -> str:
+    if not isinstance(tf_data, dict) or not tf_data:
+        return "待刷新"
+    for key in ("sub_indicator", "sub", "volume_agg", "oi", "sub_composite", "composite"):
+        v = tf_data.get(key)
+        if v:
+            return _cell(v)[:22]
+    return "待刷新"
+
+
+def _vwap_pos(tf_data: dict, price: float | None) -> str:
+    if not isinstance(tf_data, dict):
+        return "—"
+    vwap = tf_data.get("vwap") or tf_data.get("S VWAP") or tf_data.get("s_vwap")
+    px = tf_data.get("close") or tf_data.get("price") or price
+    try:
+        if vwap and px:
+            diff = (float(px) - float(vwap)) / float(vwap) * 100
+            side = "上方" if diff > 0 else "下方" if diff < 0 else "贴合"
+            return f"VWAP{side}{diff:+.2f}%"
+    except Exception:
+        pass
+    return "—"
+
+
+def _level_kind(name: str, side: str, level: float, price: float | None) -> tuple[str, str]:
+    raw = f"{side} {name}".lower()
+    cn = f"{side} {name}"
+    if "fvg" in raw:
+        label = "FVG"
+    elif "vwap" in raw:
+        label = "VWAP"
+    elif "vah" in raw or "上沿" in cn:
+        label = "VAH"
+    elif "val" in raw or "下沿" in cn:
+        label = "VAL"
+    elif "poc" in raw:
+        label = "POC"
+    elif "npoc" in raw:
+        label = "nPOC"
+    elif "高" in cn or "res" in raw or "阻" in cn:
+        label = "阻"
+    elif "低" in cn or "sup" in raw or "支" in cn:
+        label = "支"
+    else:
+        label = "位"
+    if price is None:
+        icon = "⚖"
+    elif level > float(price):
+        icon = "🔴"
+    elif level < float(price):
+        icon = "🟢"
+    else:
+        icon = "⚖"
+    return label, icon
+
+
+def _klines_to_levels(klines: dict, price: float | None) -> list[dict]:
+    clean = []
+    if not isinstance(klines, dict):
+        return clean
+    for tf in ("D", "4h", "1h", "15m", "5m"):
+        k = klines.get(tf, {}) if isinstance(klines, dict) else {}
+        if not isinstance(k, dict):
+            continue
+        for key, typ in (
+            ("vah", "VAH"), ("poc", "POC"), ("val", "VAL"),
+            ("high", "高点"), ("low", "低点"), ("vwap", "VWAP"),
+            ("bull_fvg_ce", "FVG多CE"), ("bear_fvg_ce", "FVG空CE"),
+        ):
+            v = k.get(key)
+            if v:
+                try:
+                    clean.append({"level": float(v), "side": typ, "name": f"{tf}{typ}"})
+                except Exception:
+                    pass
+    return clean
+
+
+def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> list[dict]:
+    all_levels = list(levels or []) + _klines_to_levels(klines or {}, price)
+    seen = set()
+    clean = []
+    for item in all_levels:
+        try:
+            lvl = float(item.get("level"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not lvl:
+            continue
+        bucket = round(lvl, 2)
+        if bucket in seen:
+            continue
+        seen.add(bucket)
+        side = item.get("side", "level")
+        name = item.get("display_name") or item.get("name") or side
+        kind, icon = _level_kind(str(name), str(side), lvl, price)
+        if price:
+            dist = (lvl - float(price)) / float(price) * 100
+            dist_txt = f"{dist:+.2f}%"
+        else:
+            dist_txt = "—"
+        clean.append({"level": lvl, "side": side, "name": name, "kind": kind, "icon": icon, "dist": dist_txt})
+    clean.sort(key=lambda x: abs(x["level"] - float(price or 0)))
+    return clean[:7]
+
+
+def _structure_strip(levels: list[dict], price: float | None) -> str:
+    """结构位前置：把当前价格夹在最近上/下结构之间。"""
+    if not price:
+        return "⚖现价待采集"
+    above = [x for x in levels if x["level"] > float(price)]
+    below = [x for x in levels if x["level"] < float(price)]
+    mid = [x for x in levels if x["level"] == float(price)]
+    a = above[0] if above else None
+    b = below[0] if below else None
+    parts = []
+    if a:
+        parts.append(f"{a['icon']}{a['kind']}{_num(a['level'])}")
+    parts.append(f"⚖现{_num(price)}")
+    if b:
+        parts.append(f"{b['icon']}{b['kind']}{_num(b['level'])}")
+    if mid:
+        parts.insert(0, f"⚖{mid[0]['kind']}")
+    return "｜".join(parts)
+
+
+def _dual_short(dual: dict | None, ac: str) -> tuple[str, str, str]:
+    if not isinstance(dual, dict):
+        if ac == "加密":
+            return "SVP待读", "HALDRO待读", "双指标未注入"
+        return "SVP/市场数据", "副驾驶不适用", "按本市场源验证"
+    svp = dual.get("svp_state") or dual.get("svp_direction") or "SVP待判"
+    hal = dual.get("haldro_direction") or "HALDRO待判"
+    verdict = dual.get("direction_verdict") or dual.get("flow_verdict") or "待裁决"
+    return _cell(svp)[:28], _cell(hal)[:34], _cell(verdict)[:18]
+
+
+def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual: dict | None) -> str:
+    parts = []
+    if cvd_dir:
+        cvd_emoji = "🟢" if cvd_dir in ("买", "buy", "多", "long") else "🔴" if cvd_dir in ("卖", "sell", "空", "short") else "🔵"
+        parts.append(f"CVD{cvd_emoji}{cvd_dir}{cvd_quality or ''}")
+    if taker_dir:
+        parts.append(f"主动买卖{taker_dir} {taker_ratio or ''}")
+    if funding_rate:
+        parts.append(f"Funding {funding_rate}")
+    if isinstance(dual, dict) and dual.get("haldro_confirm"):
+        parts.append(str(dual.get("haldro_confirm"))[:18])
+    if fg_v:
+        parts.append(f"恐贪{fg_v}")
+    if kill_zone:
+        parts.append(f"时段{kill_zone}")
+    return " · ".join(parts) if parts else "待采集"
+
+
+def render_v96_card(
+    symbol: str,
+    status: str,
+    direction: str,
+    price: float,
+    high,
+    low,
+    chg,
+    tf_lines: str,
+    cvd_dir: str,
+    cvd_quality: str,
+    taker_dir: str,
+    taker_ratio,
+    funding_rate,
+    kill_zone: str,
+    vwap_ema: dict,
+    fg_v: str,
+    levels: list[dict],
+    bearish: bool,
+    st_a: dict,
+    st_b: dict,
+    rr_a: float,
+    rr_b: float,
+    rr_a_note: str,
+    rr_b_note: str,
+    risk_amt: float,
+    leverage_text: str,
+    inv_line,
+    prot_status: str,
+    data_grade: str,
+    sweep_state: str,
+    displacement: str,
+    one_reason: str,
+    model_id: str,
+    n5,
+    eng_conf,
+    klines: dict = None,
+    tv_dmi: dict = None,
+    dual_indicator: dict | None = None,
+) -> str:
     klines = klines or {}
+    st_a = st_a or {"stop": None, "target": None}
+    st_b = st_b or {"stop": None, "target": None}
     now = datetime.now(TZ).strftime("%Y年%m月%d日%H：%M")
     ac = _asset_cn(symbol)
     bias = _bias_label(direction, status)
-    main_tf = _main_tf(symbol)
     display = _display_symbol(symbol)
-
-    tv_summary = "待现场读取"
-    tv_bias = "观望"
-    tv_action = "主驾驶"
-    if ac == "贵金属":
-        tv_summary = "XAU走gold-api+金十；TV SVP加密字段限制"
-        tv_action = "已知降级"
-    if tv_dmi:
-        tv_action_text = tv_dmi.get("action") or tv_dmi.get("treatment") or tv_dmi.get("conclusion") or ""
-        tv_pos_text = tv_dmi.get("position") or tv_dmi.get("background") or ""
-        tv_summary = " · ".join(str(x) for x in (tv_dmi.get("grade"), tv_action_text, tv_pos_text) if x) or "已读行动格"
-        tv_bias = tv_dmi.get("bias_4h") or tv_dmi.get("direction_text") or tv_dmi.get("cvd") or tv_dmi.get("cvd_state") or bias
-    elif ac != "贵金属" and vwap_ema.get("available"):
-        v = vwap_ema.get("vwap", {}) or {}
-        tv_summary = f"本地VWAP {v.get('vwap', '—')} · {v.get('price_vs_vwap', '待判')}"
-
-    flow_summary = f"CVD {cvd_dir or '待确认'}{cvd_quality or ''} · 主动买卖 {taker_dir or '待采集'} {taker_ratio or ''} · Funding {funding_rate or '—'}"
-    macro_summary = f"恐惧贪婪 {fg_v} · {kill_zone or '非主窗口'}"
-    orderflow_action = "确认突破真假" if cvd_dir not in ("N/A", "?", "") else "等待订单流"
+    levels_prepared = _prepare_levels(levels or [], klines, price)
+    structure = _structure_strip(levels_prepared, price)
+    svp_short, haldro_short, dual_verdict = _dual_short(dual_indicator, ac)
 
     dir_a = "空" if bearish else "多"
     dir_b = "多" if bearish else "空"
-    rr_a_state = "可执行" if rr_a >= 2 else "观察"
-    rr_b_state = "可执行" if rr_b >= 2 else "观察"
-    if status.startswith("X"):
-        rr_a_state = rr_b_state = "禁做"
+    s_emoji = _status_emoji(status)
+    dir_emoji = _dir_emoji(direction)
 
-    st_a = st_a or {"stop": None, "target": None}
-    st_b = st_b or {"stop": None, "target": None}
-    a_exec = rr_a_state == "可执行" and status.startswith("A")
-    b_exec = rr_b_state == "可执行" and status.startswith("A")
-    a_entry = _price(price) if a_exec else "等待触发"
-    a_stop = _price(st_a.get("stop")) if a_exec else "`—`"
-    a_target = _price(st_a.get("target")) if a_exec else "`—`"
-    b_entry = _price(price) if b_exec else "等待触发"
-    b_stop = _price(st_b.get("stop")) if b_exec else "`—`"
-    b_target = _price(st_b.get("target")) if b_exec else "`—`"
-
-    bull_evidence = []
-    bear_evidence = []
-    if direction == "long":
-        bull_evidence.append(f"主方向{bias}")
-    elif direction == "short":
-        bear_evidence.append(f"主方向{bias}")
-    if cvd_dir in ("买", "buy", "多", "long"):
-        bull_evidence.append(f"CVD{cvd_dir}{cvd_quality or ''}")
-    elif cvd_dir in ("卖", "sell", "空", "short"):
-        bear_evidence.append(f"CVD{cvd_dir}{cvd_quality or ''}")
-    if rr_a >= 2:
-        bull_evidence.append(f"主线R:R 1:{rr_a:.1f}")
+    if str(status).startswith("X") or rr_a < 2:
+        action_summary = "⚠禁做 — 主线无优势或R:R不足"
+        recommend_name = "⚠️主推 禁做"
+        recommend_trigger = "现价无优势"
+        recommend_exec = "不下单；等R:R≥1:2且主副指标重新共振"
+        recommend_rr = "—"
+        backup_name = f"🔵观察 {dir_a}"
+        backup_trigger = "重新站回/跌破结构位后再算"
+        backup_exec = "只做提醒，不做执行"
+        backup_rr = "重算"
+    elif str(status).startswith("A"):
+        action_summary = f"{dir_emoji} {bias}可执行 — 只做最推荐方案"
+        recommend_name = f"⭐主推 {dir_a}"
+        recommend_trigger = f"{_price(price)}确认"
+        recommend_exec = f"{dir_a} {_price(price)} 损{_price(st_a.get('stop'))} 标{_price(st_a.get('target'))}"
+        recommend_rr = f"1:{rr_a:.1f}"
+        backup_name = f"🔁备选 {dir_b}"
+        backup_trigger = "主推失效后反向确认"
+        backup_exec = f"{dir_b}失效路径；不与主推平权"
+        backup_rr = f"1:{rr_b:.1f}" if rr_b >= 2 else "观察"
     else:
-        bear_evidence.append(f"主线R:R不足 1:{rr_a:.1f}")
-    if "通过" in str(prot_status):
-        bull_evidence.append("Protections通过")
-    else:
-        bear_evidence.append(f"风控{prot_status}")
-    if tv_bias and tv_bias not in ("观望", bias):
-        bear_evidence.append(f"TV偏向{tv_bias}")
-    verdict = "主线可等触发" if rr_a >= 2 and "通过" in str(prot_status) and not status.startswith("X") else "先观察，等关键位+CVD共振"
-    bull_text = " · ".join(bull_evidence) if bull_evidence else "无强多头证据"
-    bear_text = " · ".join(bear_evidence) if bear_evidence else "无强空头证据"
+        action_summary = f"🔵 {bias}等确认 — 先等结构位触发"
+        recommend_name = "🔵主推 等确认"
+        recommend_trigger = "未到最优触发"
+        recommend_exec = f"等待{dir_a}触发；不追现价；损/标触发后计算"
+        recommend_rr = "待确认"
+        backup_name = f"🔁备选 {dir_b}"
+        backup_trigger = "反向破位后"
+        backup_exec = f"{dir_b}方案仅作失效预案"
+        backup_rr = f"1:{rr_b:.1f}" if rr_b >= 2 else "观察"
 
-    lines = [
-        f"{display} · {ac} · {status} · {bias} · {now}",
-        f"现价 {_price(price)} · 主周期 `{main_tf}` · 数据质量 `{data_grade}`",
-        f"结论：{one_reason or bias}。R:R不足或风控过期时只观察，不追单。",
-        "",
-        "### 双指标裁决",
-        "",
-        "| 裁决项 | SVP v10主驾驶 | HALDRO副驾驶 | 结论 |",
-        "|---|---|---|---|",
-    ]
-    lines.extend(_dual_indicator_rows(dual_indicator, ac))
-    lines.extend([
-        "",
-        "### 多周期定位",
-        "",
-        "| 周期 | SVP | 副指标 | Composite | 价 vs VWAP |",
-        "|---|---|---|---:|---|",
-        _tf_row("D", klines.get("D", {}), "日线背景"),
-        _tf_row("4h", klines.get("4h", {})),
-        _tf_row("1h", klines.get("1h", {})),
-        _tf_row("15m", klines.get("15m", {})),
-        _tf_row("5m", klines.get("5m", {})),
-        "",
-        "### 关键位矩阵",
-        "",
-        "| 方向 | 价位 | 性质 | 距现价 |",
-        "|---|---:|---|---:|",
-    ])
-    lines.extend(_level_rows(levels, price, klines))
-    lines.extend([
-        "",
-        "### 多源交叉验证",
-        "",
-        "| 维度 | 数值 | 方向 |",
-        "|---|---|---|",
-        f"| TV SVP v10 | {tv_summary} | {tv_bias} · {tv_action} |",
-        f"| 订单流/CVD | {flow_summary} | {cvd_dir or '待判'} · {orderflow_action} |",
-        f"| 量价健康度 | 吸收{'待判' if not vwap_ema else '正常'} · 扫荡{sweep_state or '待判'} · 位移{displacement or '待判'} | CVD不配不追 |",
-        f"| 宏观/事件 | {macro_summary} | 事件窗口降级 |",
+    tf_emojis = []
+    for tf in ("D", "4h", "1h", "15m", "5m"):
+        tf_emojis.append(f"{tf}{_tf_emoji(klines.get(tf, {}))}")
+    mtf_summary = " · ".join(tf_emojis)
+    multi_src_line = _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual_indicator)
 
-        f"| 风控/Protections | {prot_status} | {'通过' if '通过' in str(prot_status) else '降级/禁做'} |",
+    lines: list[str] = []
+    lines.append(f"📊 {display} · {now} · {s_emoji}{status} · {bias}")
+    lines.append(f"【现在】{structure}")
+    lines.append(f"【做法】只执行{recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')} · {recommend_trigger} · {recommend_rr}")
+    lines.append(f"【依据】SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict}")
+    lines.append("")
 
-        "### 矛盾点",
-        "",
-        "| 矛盾 | 多头 | 空头 | 裁决 |",
-        "|---|---|---|---|",
-        f"| 多空证据 | {bull_text} | {bear_text} | {verdict} |",
-        f"| 风控状态 | {'Protections通过' if '通过' in str(prot_status) else '—'} | {'风控' + str(prot_status) if '通过' not in str(prot_status) else '—'} | {status} |",
-        f"| R:R | {'主线1:' + format(rr_a, '.1f') if rr_a >= 2 else '—'} | {'主线R:R不足1:' + format(rr_a, '.1f') if rr_a < 2 else '—'} | {'可等触发' if rr_a >= 2 else '不追'} |",
+    lines.append("① 周期体温 / 多周期定位")
+    lines.append("| 周期 | SVP主指标 | HALDRO副指标 | 位置 |")
+    lines.append("|:---:|:---|:---|:---|")
+    for tf in ("D", "4h", "1h", "15m", "5m"):
+        k = klines.get(tf, {}) if isinstance(klines, dict) else {}
+        lines.append(f"| {tf} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text(k)} | {_vwap_pos(k, price)} |")
+    lines.append(f"→ {mtf_summary} · 主执行{_main_tf(symbol)}")
+    lines.append("")
 
-        "### 执行预案",
-        "",
-        "| 方案 | 条件 | 入场 | 止损 | 目标 | R:R | 仓位 |",
-        "|---|---|---:|---:|---:|---:|---|",
-        f"| 主线 {dir_a} | {one_reason or '等关键位确认'} | {a_entry} | {a_stop} | {a_target} | 1:{rr_a:.1f} | {rr_a_state} · {_num(risk_amt, 2)}U |",
-        f"| 反向 {dir_b} | 反向突破/回收确认 | {b_entry} | {b_stop} | {b_target} | 1:{rr_b:.1f} | {rr_b_state} · {_num(risk_amt, 2)}U |",
-        f"| 等待/禁做 | 数据过期、SVP冲突、R:R<1:2 | - | - | - | - | {status} |",
-        "",
-        "### 风控闸门",
-        "",
-        "| 闸门 | 状态 | 处理 |",
-        "|---|---|---|",
-        f"| 数据新鲜度 | {data_grade} | 低于B级降级观察 |",
-        f"| R:R | 主线1:{rr_a:.1f} / 反向1:{rr_b:.1f} | <1:2不执行 |",
-        f"| 单笔风险 | {_num(risk_amt, 2)}U · {leverage_text} | 单笔≤1%，硬上限10U |",
-        f"| 事件窗口 | {kill_zone or '非主窗口'} | 重大数据前后降级 |",
-        f"| 订单流确认 | 扫荡{sweep_state or '待判'} · 位移{displacement or '待判'} | CVD不配不追 |",
-        f"| 保护状态 | {prot_status} | 拦截则禁做 |",
-        "",
-        f"总结：{bias}但以关键位确认执行；不到位不追，失效线 { _price(inv_line) if inv_line else '`—`'}。",
-    ])
+    lines.append("② 关键位 / 结构关键位")
+    lines.append("| 结构位 | 价格 | 用法 | 距现价 |")
+    lines.append("|:---|:---:|:---|---:|")
+    for item in levels_prepared[:6]:
+        use = item.get("name") or item.get("side") or "关键位"
+        lines.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)[:26]} | {item['dist']} |")
+    if not levels_prepared:
+        lines.append("| 待刷新 | `—` | TV结构位未注入，禁追 | — |")
+    lines.append("")
+
+    lines.append("③ 多源验证 / 双指标")
+    lines.append("| 能力 | 读数 | 裁决 |")
+    lines.append("|:---|:---|:---|")
+    lines.append(f"| SVP主驾驶 | {_cell(svp_short)} | 结构/入场/止损/目标优先 |")
+    lines.append(f"| HALDRO副驾驶 | {_cell(haldro_short)} | {_cell(dual_verdict)} |")
+    lines.append(f"| 订单流 | {_cell(multi_src_line)} | CVD/OI不配则降级 |")
+    if isinstance(dual_indicator, dict) and dual_indicator.get("haldro_quality"):
+        lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:34]} | 覆盖不足不追 |")
+    lines.append("")
+
+    lines.append("④ 最推荐方案")
+    lines.append("| 优先级 | 条件 | 动作 | R:R |")
+    lines.append("|:---|:---|---|---:|")
+    lines.append(f"| {recommend_name} | {_cell(recommend_trigger)} | {_cell(recommend_exec)} | {recommend_rr} |")
+    lines.append(f"| {backup_name} | {_cell(backup_trigger)} | {_cell(backup_exec)} | {backup_rr} |")
+    lines.append("| ⚠️禁止 | 追单/数据过期/主副冲突 | 夹击+去杠杆+R:R不足 | — |")
+    lines.append("")
+
+    lines.append(f"【裁决】{action_summary} · 风控{_num(risk_amt, 2)}U · {leverage_text or ''}")
+    lines.append(f"失效 {_price(inv_line) if inv_line else '`—`'} · 数据{data_grade} · 主副指标已纳入")
     return "\n".join(lines) + "\n"
+
+
+render_v8_card = render_v96_card
+
+
+def _dual_indicator_rows(dual: dict | None, asset_cn: str) -> list[str]:
+    if not isinstance(dual, dict):
+        return []
+    return [
+        f"| SVP | {_cell(dual.get('svp_state'))} | {_cell(dual.get('svp_execution'))} |",
+        f"| HALDRO | {_cell(dual.get('haldro_direction'))} | {_cell(dual.get('direction_verdict'))} |",
+    ]
+
+
+def _tf_row(tf: str, k: dict, fallback: str = "") -> str:
+    if not isinstance(k, dict) or not k:
+        return f"| {tf} | 待刷新 | 待刷新 | — | 待刷新 |"
+    return f"| {_cell(tf)} | {_cell(_short_tf_text(k))} | {_cell(_sub_tf_text(k))} | {_cell(k.get('sub_composite') or k.get('composite') or '—')} | {_cell(_vwap_pos(k, k.get('close') or k.get('price')))} |"
+
+
+def _level_rows(levels: list[dict], price: float | None, klines: dict | None = None) -> list[str]:
+    rows: list[str] = []
+    for item in _prepare_levels(levels or [], klines or {}, price)[:6]:
+        use = item.get("name") or item.get("side") or "关键位"
+        rows.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)} | {_cell(item['dist'])} |")
+    if not rows:
+        rows.append("| 待刷新 | `—` | TV/数据桥 | 无关键位则禁追 |")
+    return rows
