@@ -356,6 +356,15 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
     return send_telegram_reliable(target, text, token=token, parse_mode=parse_mode, timeout=timeout, retries=3)
 
 
+def push_tg_rich(target: str, text: str, token: str | None = None) -> tuple[bool, str]:
+    """棠溪统一推送：纯 Markdown 管道表 → Telegram RichMarkdown 真表格。
+
+    不走 hermes send / cron 的 MarkdownV2 退化通道，直接 sendRichMessage
+    渲染真表格。供所有推 TG 的 no_agent 脚本调用。失败落盘 pending。
+    """
+    return send_telegram_reliable(target, text, token=token, parse_mode="RichMarkdown", retries=3)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("target", nargs="?", default="telegram:-1003733144325:416")

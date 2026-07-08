@@ -736,6 +736,13 @@ def main():
     
     if report:
         print(report)
+        # v9.7: 统一走 RichMarkdown 真表格通道推 TG（替代 cron MarkdownV2 退化）
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", report)
+        except Exception as _te:
+            log(f"⚠ Orion报告RichMarkdown推送失败: {_te}")
     log(f"⏱ 总耗时 {elapsed():.1f}s")
 
     # ─── v9.7 合并：采集完直接渲染分析卡推 TG（替代独立 Orion雷达分析 cron）───

@@ -386,25 +386,35 @@ def main() -> int:
             )
         except Exception:
             pass
-        print(f"×同步失败 · BTC关键位 · {now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}")
-        print("")
-        print("| 项目 | 数据 | 状态 |")
-        print("|:----|:----|:----|")
-        print("| 任务 | BTC关键位同步 | 失败 |")
-        print("| 来源 | TradingView MCP | 异常 |")
-        print("| 输出 | btc_ref_levels.json | 未更新 |")
-        print("")
-        print("| 模块 | 数据 | 状态 |")
-        print("|:----|:----|:----|")
-        print(f"| 异常 | `{str(exc)[:160]}` | 需处理 |")
-        print("| 缓存 | tv_live/tv_dmi | 检查新鲜度 |")
-        print("| Binance | recent hilo | 重测接口 |")
-        print("")
-        print("| 方向 | 触发 | 动作 |")
-        print("|:---:|:----|:----|")
-        print("| ×修复 | TV字段缺失/过期 | 先修复TV MCP |")
-        print("| ○降级 | Binance可用 | 只保留高低点不下结论 |")
-        print("| ↑恢复 | 缓存30分钟内更新 | 重跑同步脚本 |")
+        now = datetime.now(TZ)
+        ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
+        report = f"""×同步失败 · BTC关键位 · {ts}
+
+| 项目 | 数据 | 状态 |
+|:----|:----|:----|
+| 任务 | BTC关键位同步 | 失败 |
+| 来源 | TradingView MCP | 异常 |
+| 输出 | btc_ref_levels.json | 未更新 |
+
+| 模块 | 数据 | 状态 |
+|:----|:----|:----|
+| 异常 | `{str(exc)[:160]}` | 需处理 |
+| 缓存 | tv_live/tv_dmi | 检查新鲜度 |
+| Binance | recent hilo | 重测接口 |
+
+| 方向 | 触发 | 动作 |
+|:---:|:----|:----|
+| ×修复 | TV字段缺失/过期 | 先修复TV MCP |
+| ○降级 | Binance可用 | 只保留高低点不下结论 |
+| ↑恢复 | 缓存30分钟内更新 | 重跑同步脚本 |"""
+        print(report)
+        # v9.7: 统一走 RichMarkdown 真表格通道推 TG
+        try:
+            sys.path.insert(0, str(ROOT / "scripts"))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", report)
+        except Exception as _te:
+            print(f"⚠ BTC关键位失败告警RichMarkdown推送失败: {_te}", file=sys.stderr)
         return 1
 
 

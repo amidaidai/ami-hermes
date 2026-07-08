@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -148,6 +149,36 @@ def main() -> int:
     append_history(snapshot)
 
     print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+
+    # v9.7: 额外生成结构化情绪快照表，走 RichMarkdown 真表格通道推 TG
+    # （LLM 解读卡经 agent 通道走 MarkdownV2 退化，此表保证真表格渲染）
+    try:
+        fg = snapshot.get("fear_greed", {})
+        glob = snapshot.get("global_market", {})
+        market = snapshot.get("market_snapshot", [])
+        mrows = "\n".join(
+            f"| {m.get('symbol','?')} | `{m.get('price',0):.2f}` | `{m.get('chg_24h_pct',0):+.2f}%` | `{m.get('quote_volume',0)/1e9:.2f}B` |"
+            for m in market
+        )
+        ts = snapshot.get("time_cn", "")
+        rich = f"""📊 X情绪/市场快照 · {ts}
+
+| 指标 | 数值 |
+|:----|:----:|
+| 恐惧贪婪 | {fg.get('value','?')} · {fg.get('classification','?')} |
+| BTC占比 | {glob.get('btc_dominance','?')}% |
+| ETH占比 | {glob.get('eth_dominance','?')}% |
+| 24h市值变化 | {glob.get('market_cap_change_24h_pct','?')}% |
+
+| 品种 | 现价 | 24h | 成交量 |
+|:----|:----:|:----:|:----:|
+{mrows}"""
+        sys.path.insert(0, "D:/Hermes agent/scripts")
+        from telegram_reliable import push_tg_rich
+        push_tg_rich("telegram:-1003733144325:846", rich)
+    except Exception as _te:
+        print(f"⚠ X情绪快照RichMarkdown推送失败: {_te}", file=sys.stderr)
+
     return 0
 
 

@@ -76,25 +76,33 @@ def main() -> int:
     models = Counter(p.get("model_id") or p.get("model") or "未知" for p in pending)
     first = pending[0]
     direction = "○复盘"
-    print(f"{direction} 待复盘{len(pending)}笔 · {fmt_time(now)}")
-    print("")
-    print("| 项目 | 数据 | 状态 |")
-    print("|:----|:----|:----|")
-    print(f"| 计划 | `{len(today_plans)}`笔 | 今日生成 |")
-    print(f"| 待复盘 | `{len(pending)}`笔 | 需要处理 |")
-    print(f"| 首笔 | `{first.get('symbol','?')}`·`{first.get('status','?')}` | {first.get('model_id') or first.get('model') or '未知'} |")
-    print("")
-    print("| 来源 | 方向 | 证据 |")
-    print("|:----|:---:|:----|")
-    print(f"| 品种分布 | ⚡异动 | " + " · ".join(f"{k}`{v}`" for k, v in symbols.most_common(4)) + " |")
-    print(f"| 模型分布 | ⚖中性 | " + " · ".join(f"{k}`{v}`" for k, v in models.most_common(4)) + " |")
-    print(f"| 复盘缺口 | 🐻偏空 | `trade_reviews.jsonl` 未匹配 `{len(pending)}` 个setup |")
-    print("")
-    print("| 方向 | 触发 | 动作 |")
-    print("|:---:|:----|:----|")
-    print(f"| ○复盘 | 今日待复盘`{len(pending)}`笔 | 打开最近计划逐笔确认 |")
-    print("| ×禁拖 | 超过当日22：30未处理 | 先标记过期/取消 |")
-    print("| ↑改进 | 同模型连续等待 | 检查入场条件是否过窄 |")
+    report = f"""{direction} 待复盘{len(pending)}笔 · {fmt_time(now)}
+
+| 项目 | 数据 | 状态 |
+|:----|:----|:----|
+| 计划 | `{len(today_plans)}`笔 | 今日生成 |
+| 待复盘 | `{len(pending)}`笔 | 需要处理 |
+| 首笔 | `{first.get('symbol','?')}`·`{first.get('status','?')}` | {first.get('model_id') or first.get('model') or '未知'} |
+
+| 来源 | 方向 | 证据 |
+|:----|:---:|:----|
+| 品种分布 | ⚡异动 | {" · ".join(f"{k}`{v}`" for k, v in symbols.most_common(4))} |
+| 模型分布 | ⚖中性 | {" · ".join(f"{k}`{v}`" for k, v in models.most_common(4))} |
+| 复盘缺口 | 🐻偏空 | `trade_reviews.jsonl` 未匹配 `{len(pending)}` 个setup |
+
+| 方向 | 触发 | 动作 |
+|:---:|:----|:----|
+| ○复盘 | 今日待复盘`{len(pending)}`笔 | 打开最近计划逐笔确认 |
+| ×禁拖 | 超过当日22：30未处理 | 先标记过期/取消 |
+| ↑改进 | 同模型连续等待 | 检查入场条件是否过窄 |"""
+    print(report)
+    # v9.7: 统一走 RichMarkdown 真表格通道推 TG
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from telegram_reliable import push_tg_rich
+        push_tg_rich("telegram:-1003733144325:846", report)
+    except Exception as _te:
+        print(f"⚠ 复盘提醒RichMarkdown推送失败: {_te}", file=sys.stderr)
     return 0
 
 

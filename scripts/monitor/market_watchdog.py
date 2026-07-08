@@ -109,21 +109,30 @@ subprocess.Popen(
 )
 
 now_cn = time.strftime("%Y年%m月%d日%H：%M")
-print(f"⚠ 行情守望重启 · {now_cn} · 原因: {reason}")
-print("")
-print("| 项目 | 数据 | 状态 |")
-print("|:----|:----|:----|")
-print("| 守护 | 行情守望.py | 已重启 |")
-print(f"| 心跳 | {reason} | 失联 |")
-print("| 目标 | TG846 多品种监控 | 恢复中 |")
-print("")
-print("| 模块 | 数据 | 状态 |")
-print("|:----|:----|:----|")
-print(f"| 旧进程 | `{killed}` | 已清理 |")
-print("| 新进程 | start/B python | 已拉起 |")
-print("| 日志 | stdout静默 | 防刷屏 |")
-print("")
-print("| 方向 | 触发 | 动作 |")
-print("|:---:|:----|:----|")
-print("| ○观察 | 5分钟后心跳running | 无需操作 |")
-print("| ×修复 | 继续失联 | 查守护日志 |")
+report = f"""⚠ 行情守望重启 · {now_cn} · 原因: {reason}
+
+| 项目 | 数据 | 状态 |
+|:----|:----|:----|
+| 守护 | 行情守望.py | 已重启 |
+| 心跳 | {reason} | 失联 |
+| 目标 | TG846 多品种监控 | 恢复中 |
+
+| 模块 | 数据 | 状态 |
+|:----|:----|:----|
+| 旧进程 | `{killed}` | 已清理 |
+| 新进程 | start/B python | 已拉起 |
+| 日志 | stdout静默 | 防刷屏 |
+
+| 方向 | 触发 | 动作 |
+|:---:|:----|:----|
+| ○观察 | 5分钟后心跳running | 无需操作 |
+| ×修复 | 继续失联 | 查守护日志 |"""
+print(report)
+# v9.7: 统一走 RichMarkdown 真表格通道推 TG
+try:
+    import sys
+    sys.path.insert(0, "D:/Hermes agent/scripts")
+    from telegram_reliable import push_tg_rich
+    push_tg_rich("telegram:-1003733144325:846", report)
+except Exception as _te:
+    print(f"⚠ 行情守望告警RichMarkdown推送失败: {_te}", file=sys.stderr)
