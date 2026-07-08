@@ -88,31 +88,33 @@ def _tf_direction(symbol: str, interval: str) -> int:
 
 
 def tf_alignment(symbol: str = "BTCUSDT") -> dict:
-    """周期一致性：4h/1h/15m/5m 方向 → 相邻冲突硬门。
+    """周期一致性：1D/4h/1h/15m/5m 方向 → 相邻冲突硬门。
 
-    返回 {available, d4, d1, d15, d5m, conflict, aligned, note}
-    conflict=True → 相邻周期明确反向（4h≠1h 或 1h≠15m 或 15m≠5m），应否决交易。
+    返回 {available, d1d, d4, d1, d15, d5m, conflict, aligned, note}
+    conflict=True → 相邻周期明确反向（1D≠4h 或 4h≠1h 或 1h≠15m 或 15m≠5m），应否决交易。
     """
+    d1d = _tf_direction(symbol, "1d")
     d4 = _tf_direction(symbol, "4h")
     d1 = _tf_direction(symbol, "1h")
     d15 = _tf_direction(symbol, "15m")
     d5m = _tf_direction(symbol, "5m")
-    if d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
-        return {"available": False, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
+    if d1d == 0 and d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
+        return {"available": False, "d1d": d1d, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
                 "conflict": False, "aligned": False, "note": "周期方向数据不足"}
-    # 相邻冲突：4h≠1h 或 1h≠15m 或 15m≠5m
-    conflict = ((d4 != 0 and d1 != 0 and d4 * d1 == -1) or
+    # 相邻冲突：1D≠4h 或 4h≠1h 或 1h≠15m 或 15m≠5m
+    conflict = ((d1d != 0 and d4 != 0 and d1d * d4 == -1) or
+                (d4 != 0 and d1 != 0 and d4 * d1 == -1) or
                 (d1 != 0 and d15 != 0 and d1 * d15 == -1) or
                 (d15 != 0 and d5m != 0 and d15 * d5m == -1))
-    aligned = (d4 != 0 and d4 == d1 == d15 == d5m)
+    aligned = (d1d != 0 and d1d == d4 == d1 == d15 == d5m)
     names = {1: "多", -1: "空", 0: "中性"}
-    note = f"4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
-    return {"available": True, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
+    note = f"1D{names[d1d]}/4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
+    return {"available": True, "d1d": d1d, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
             "conflict": conflict, "aligned": aligned, "note": note}
 
 
 def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
-    """TV MCP 多周期方向（4h/1h/15m/5m）。
+    """TV MCP 多周期方向（1D/4h/1h/15m/5m）。
 
     严格按你的要求：每个周期 set_timeframe 后等 wait 秒让指标完全加载，
     再读 OHLCV summary 判方向。
@@ -161,7 +163,7 @@ def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
 
         async def _run():
             dirs = {}
-            for res in ("240", "60", "15", "5"):  # 4h / 1h / 15m / 5m
+            for res in ("1D", "240", "60", "15", "5"):  # 1D / 4h / 1h / 15m / 5m
                 try:
                     dirs[res] = await _one_tf(res)
                 except Exception:  # noqa: BLE001
@@ -169,17 +171,18 @@ def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
             return dirs
 
         dirs = asyncio.run(_run())
-        d4 = dirs.get("240", 0); d1 = dirs.get("60", 0); d15 = dirs.get("15", 0); d5m = dirs.get("5", 0)
-        if d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
+        d1d = dirs.get("1D", 0); d4 = dirs.get("240", 0); d1 = dirs.get("60", 0); d15 = dirs.get("15", 0); d5m = dirs.get("5", 0)
+        if d1d == 0 and d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
             return {"available": False, "conflict": False, "note": "TV多周期方向全空"}
-        # 相邻冲突：4h≠1h 或 1h≠15m 或 15m≠5m
-        conflict = ((d4 != 0 and d1 != 0 and d4 * d1 == -1) or
+        # 相邻冲突：1D≠4h 或 4h≠1h 或 1h≠15m 或 15m≠5m
+        conflict = ((d1d != 0 and d4 != 0 and d1d * d4 == -1) or
+                    (d4 != 0 and d1 != 0 and d4 * d1 == -1) or
                     (d1 != 0 and d15 != 0 and d1 * d15 == -1) or
                     (d15 != 0 and d5m != 0 and d15 * d5m == -1))
-        aligned = (d4 != 0 and d4 == d1 == d15 == d5m)
+        aligned = (d1d != 0 and d1d == d4 == d1 == d15 == d5m)
         names = {1: "多", -1: "空", 0: "中性"}
-        note = f"TV 4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
-        return {"available": True, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
+        note = f"TV 1D{names[d1d]}/4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
+        return {"available": True, "d1d": d1d, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
                 "conflict": conflict, "aligned": aligned, "note": note, "source": "TV"}
     except Exception as e:  # noqa: BLE001
         return {"available": False, "conflict": False, "note": f"TV多周期异常:{e}"}
