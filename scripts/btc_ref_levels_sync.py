@@ -310,6 +310,28 @@ def recent_hilo() -> tuple[float | None, float | None]:
     raise RuntimeError(f"Binance recent hilo unavailable: {last_exc}")
 
 
+def spot_price() -> float | None:
+    """取 Binance 现货 BTCUSDT 最新成交价（多URL兜底），用于关键位偏离计算。"""
+    urls = [
+        "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+        "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
+        "https://api.binance.us/api/v3/ticker/price?symbol=BTCUSDT",
+    ]
+    last_exc: Exception | None = None
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "TangXi/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                d = json.loads(resp.read().decode("utf-8"))
+            p = float(d.get("price") or d.get("lastPrice"))
+            if p > 0:
+                return p
+        except Exception as exc:
+            last_exc = exc
+            continue
+    return None
+
+
 def main() -> int:
     try:
         # P0修复：TV缓存刷新失败不再直接退出，转warning继续（Binance直取兜底）
@@ -374,6 +396,62 @@ def main() -> int:
             "tv_symbol": cache.get("symbol"),
         }
         OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # v9.8: 成功路径也推 TG（之前完全静默=决策信息缺口）。含现价+关键位偏离%+波动区间+决策。
+        try:
+            from datetime import datetime as _dt
+            now = _dt.now(TZ)
+            ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
+            spot = spot_price()
+            def _dev(ref, base):
+                if ref is None or base is None or base == 0:
+                    return "—"
+                return f"{(ref-base)/base*100:+.2f}%"
+            # 现价优先现货，否则用区间中值近似
+            cur = spot if spot else (None)
+            # 决策：现价相对关键位位置
+            verdict = "○观察"
+            action = "等待突破/回踩确认"
+            if cur and vwap and poc and val and vah:
+                if cur > vah:
+                    verdict = "↑偏强"; action = "回踩VAH不破做多，破位反手"
+                elif cur > vwap:
+                    verdict = "↗多头区"; action = "回踩VWAP/VAL支撑做多"
+                elif cur > val:
+                    verdict = "↘空头区"; action = "反弹VWAP/VAH承压做空"
+                else:
+                    verdict = "↓偏弱"; action = "反抽VAL不过做空"
+            rng = ""
+            if recent_high and recent_low:
+                rng = f"{recent_low:,.0f}–{recent_high:,.0f}"
+            cur_disp = f"{cur:,.0f}" if cur else (f"{(val+vah)/2:,.0f}(估)" if val and vah else "—")
+            report = f"""✅ BTC关键位 · {ts}
+
+| 关键位 | 价位 | 偏离现价 |
+|:----|:----:|:----:|
+| POC | `{poc:,.0f}` | {_dev(poc, cur)} |
+| VWAP | `{vwap:,.0f}` | {_dev(vwap, cur)} |
+| VAH | `{vah:,.0f}` | {_dev(vah, cur)} |
+| VAL | `{val:,.0f}` | {_dev(val, cur)} |
+| DO | `{do:,.0f}` | {_dev(do, cur)} |
+| W-VWAP | `{w_vwap:,.0f}` | {_dev(w_vwap, cur)} |
+
+| 维度 | 数据 |
+|:----|:----|
+| 现价 | `{cur_disp}` |
+| 15m波动区间 | `{rng}` |
+| 区间振幅 | {f'{(recent_high-recent_low)/recent_low*100:.2f}%' if recent_high and recent_low else '—'} |
+| TV缓存 | {cache.get('_picked_cache','?')} |
+
+| 方向 | 位置 | 动作 |
+|:---:|:----|:----|
+| {verdict} | 现价{cur_disp} | {action} |"""
+            print(report)
+            sys.path.insert(0, str(ROOT / "scripts"))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", report)
+        except Exception as _te:
+            print(f"⚠ BTC关键位成功推送失败(已落盘): {_te}", file=sys.stderr)
         return 0
     except Exception as exc:
         now = datetime.now(TZ)

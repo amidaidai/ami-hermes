@@ -160,19 +160,43 @@ def main() -> int:
             f"| {m.get('symbol','?')} | `{m.get('price',0):.2f}` | `{m.get('chg_24h_pct',0):+.2f}%` | `{m.get('quote_volume',0)/1e9:.2f}B` |"
             for m in market
         )
+        # Orion共振候选（联动交易信号）
+        orion = snapshot.get("orion_candidates", []) or []
+        orows = "\n".join(
+            f"| {o.get('symbol','?')} | `{o.get('confidence',0):.1f}` | `{o.get('chg_1h',0):+.2f}%` | `{o.get('oi_chg',0):+.1f}%` | `{o.get('funding',0)*100:.3f}%` |"
+            for o in orion[:6]
+        ) or "| — | — | — | — | — |"
         ts = snapshot.get("time_cn", "")
+        fgv = fg.get("value", "?")
+        fgcls = fg.get("classification", "?")
+        # 恐惧贪婪分层解读
+        fg_note = "中性"
+        try:
+            fgi = int(fgv)
+            if fgi <= 25: fg_note = "极度恐惧·潜在抄底区"
+            elif fgi <= 45: fg_note = "恐惧·偏谨慎"
+            elif fgi <= 55: fg_note = "中性·观望"
+            elif fgi <= 75: fg_note = "贪婪·防回调"
+            else: fg_note = "极度贪婪·高风区"
+        except Exception:
+            pass
         rich = f"""📊 X情绪/市场快照 · {ts}
 
 | 指标 | 数值 |
 |:----|:----:|
-| 恐惧贪婪 | {fg.get('value','?')} · {fg.get('classification','?')} |
+| 恐惧贪婪 | {fgv} · {fgcls}（{fg_note}） |
 | BTC占比 | {glob.get('btc_dominance','?')}% |
 | ETH占比 | {glob.get('eth_dominance','?')}% |
 | 24h市值变化 | {glob.get('market_cap_change_24h_pct','?')}% |
+| 活跃币种 | {glob.get('active_cryptocurrencies','?')} |
 
 | 品种 | 现价 | 24h | 成交量 |
 |:----|:----:|:----:|:----:|
-{mrows}"""
+{mrows}
+
+| 共振候选 | 置信 | 1h | OI | 费率 |
+|:----|:----:|:----:|:----:|:----:|
+{orows}"""
         sys.path.insert(0, "D:/Hermes agent/scripts")
         from telegram_reliable import push_tg_rich
         push_tg_rich("telegram:-1003733144325:846", rich)

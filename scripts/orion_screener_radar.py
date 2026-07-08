@@ -562,33 +562,39 @@ def build_report(candidates, ts):
         taker = "—"
         if bn.get("taker_ratio"):
             taker = f"主动{bn.get('taker_dir', '中性')}{float(bn.get('taker_ratio', 1)):.2f}"
-        data = f"价`{price_str}`·1h`{chg_str}`·OI`{oi_str}`"
+        data = f"价`{price_str}`·1h`{chg_str}`·24h`{fmt_pct(c.get('chg_24h') or 0)}`·OI`{oi_str}`"
         signal = f"OI`{oi_chg_str}`·费`{fund_str}`·信`{conf_str}`·{taker}"
         lines.append(f"| {symbol} | {data} | {signal} |")
     lines.append("")
 
-    lines.append("| 品种 | 判断 | 动作 |")
-    lines.append("|:----|:----|:----|")
+    lines.append("| 品种 | 判断 | 动作 | 仓位系数 |")
+    lines.append("|:----|:----|:----|:----:|")
     for c in top:
         symbol = c.get("symbol", "?")
         oi_chg = c.get("oi_chg") or 0
         chg = c.get("chg_1h") or 0
+        chg24 = c.get("chg_24h") or 0
         funding = c.get("funding") or 0
-        if oi_chg > 0 and chg > 0 and funding < -0.001:
-            verdict, action = "⚡真突破+负费率", "等回踩做多"
-        elif oi_chg > 0 and chg < 0 and funding < -0.001:
-            verdict, action = "❌OI涨价跌", "禁抄底"
-        elif oi_chg > 5 and chg < -3:
-            verdict, action = "❌暴跌增仓", "等去杠杆"
+        conf = c.get("confidence", 0)
+        # 仓位系数：置信度+趋势质量综合（仅建议，非指令）
+        if conf >= 7 and oi_chg > 0 and chg > 0 and funding < -0.001:
+            verdict, action, size = "⚡真突破+负费率", "等回踩做多", "1.0×"
         elif oi_chg > 0 and chg > 0:
-            verdict, action = "🐂量价齐升", "有机会"
+            verdict, action, size = "🐂量价齐升", "有机会", "0.7×"
+        elif oi_chg > 0 and chg < 0 and funding < -0.001:
+            verdict, action, size = "❌OI涨价跌", "禁抄底", "0×"
+        elif oi_chg > 5 and chg < -3:
+            verdict, action, size = "❌暴跌增仓", "等去杠杆", "0×"
         elif oi_chg < 0 and chg > 0:
-            verdict, action = "⚠空平反弹", "只短打"
+            verdict, action, size = "⚠空平反弹", "只短打", "0.4×"
         elif oi_chg < 0 and chg < 0:
-            verdict, action = "🐻去杠杆下跌", "不接刀"
+            verdict, action, size = "🐻去杠杆下跌", "不接刀", "0×"
         else:
-            verdict, action = "⚖中性", "观察"
-        lines.append(f"| {symbol} | {verdict} | {action} |")
+            verdict, action, size = "⚖中性", "观察", "0.3×"
+        # 24h偏离加大提示
+        if abs(chg24) > 8:
+            verdict += f"·24h{chg24:+.0f}%"
+        lines.append(f"| {symbol} | {verdict} | {action} | {size} |")
 
     return "\n".join(lines)
 
