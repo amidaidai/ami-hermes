@@ -108,10 +108,98 @@ def tf_alignment(symbol: str = "BTCUSDT") -> dict:
             "conflict": conflict, "aligned": aligned, "note": note}
 
 
-def validate_plan(symbol: str, side: str) -> dict:
+def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
+    """TV MCP 多周期方向（4h/1h/15m）。
+
+    严格按你的要求：每个周期 set_timeframe 后等 wait 秒让指标完全加载，
+    再读 OHLCV summary 判方向。
+
+    关键修复：TV Desktop CDP 在单会话里连续切周期会断连（Connection closed），
+    改为【每周期独立 MCP 会话】（开→切品种→切周期→等加载→读→关）。
+
+    降级：TV Desktop 调试端口(9222)未开放时直接返回 available=False，
+    由调用方回落 Binance REST（环境无 TV 时不卡死）。
+    """
+    # 端口探测：TV Desktop CDP 未开则跳过（避免无谓的 node 启动+超时）
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", 9222)) != 0:
+                return {"available": False, "conflict": False,
+                        "note": "TV Desktop(9222)未运行→降级REST"}
+    except Exception:
+        return {"available": False, "conflict": False, "note": "TV端口探测失败→降级REST"}
+
+    try:
+        import asyncio
+        import fetch_tv_mcp as tv
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+        from mcp import ClientSession
+        from pathlib import Path as _P
+        server_script = _P("D:/Hermes agent/tools/tradingview-mcp/src/server.js")
+        if not server_script.exists():
+            return {"available": False, "conflict": False, "note": "TV MCP server 未找到"}
+
+        async def _one_tf(res: str) -> int:
+            """单个周期的独立会话：开→切品种→切周期→等→读→关。返回方向 1/-1/0。"""
+            sp = StdioServerParameters(command="node", args=[str(server_script)])
+            async with stdio_client(sp) as (r, w):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    await tv.set_symbol(s, "BINANCE:BTCUSDT.P")
+                    await asyncio.sleep(wait)
+                    await tv.set_timeframe(s, res)
+                    await asyncio.sleep(wait)  # 等指标完全加载
+                    raw = await tv.get_ohlcv(s, summary=True)
+                    txt = tv.parse_result(raw)
+                    return _dir_from_ohlcv_summary(txt)
+
+        async def _run():
+            dirs = {}
+            for res in ("240", "60", "15"):  # 4h / 1h / 15m
+                try:
+                    dirs[res] = await _one_tf(res)
+                except Exception:  # noqa: BLE001
+                    dirs[res] = 0
+            return dirs
+
+        dirs = asyncio.run(_run())
+        d4 = dirs.get("240", 0); d1 = dirs.get("60", 0); d15 = dirs.get("15", 0)
+        if d4 == 0 and d1 == 0 and d15 == 0:
+            return {"available": False, "conflict": False, "note": "TV多周期方向全空"}
+        conflict = (d4 != 0 and d1 != 0 and d4 * d1 == -1) or \
+                   (d1 != 0 and d15 != 0 and d1 * d15 == -1)
+        aligned = (d4 != 0 and d4 == d1 == d15)
+        names = {1: "多", -1: "空", 0: "中性"}
+        note = f"TV 4h{names[d4]}/1h{names[d1]}/15m{names[d15]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
+        return {"available": True, "d4": d4, "d1": d1, "d15": d15,
+                "conflict": conflict, "aligned": aligned, "note": note, "source": "TV"}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "conflict": False, "note": f"TV多周期异常:{e}"}
+
+
+def _dir_from_ohlcv_summary(txt: str) -> int:
+    """从 OHLCV summary 文本判方向：取 change% 或 last bar 开收。1多/-1空/0中性。"""
+    import re
+    # 尝试 change%
+    m = re.search(r"change[%\s]*[:=]?\s*([+-]?\d+(?:\.\d+)?)\s*%", txt, re.IGNORECASE)
+    if m:
+        ch = float(m.group(1))
+        if ch > 0.05:
+            return 1
+        if ch < -0.05:
+            return -1
+        return 0
+    # 退化：找最后一根 K 的 OHLC（summary 末尾）
+    return 0
+
+
+def validate_plan(symbol: str, side: str, tf_override: dict = None) -> dict:
     """综合两道闸门，返回是否通过。side: '🟢做多'/'🔴做空'/'⚪观望'。
 
-    返回 {pass: bool, blockers: [str], notes: [str]}
+    周期方向优先 TV MCP（等加载完再读），不可用降级 Binance REST。
+    tf_override: 传入已算好的周期方向（避免重复调用 Binance 导致数据漂移），
+    不传则自行获取（TV优先→REST降级）。
     """
     blockers = []
     notes = []
@@ -119,15 +207,22 @@ def validate_plan(symbol: str, side: str) -> dict:
     ls = long_short_contra(symbol)
     if ls.get("available"):
         notes.append(f"多空比{ls['ratio']}({ls['contra'] or '正常'})")
-        # 做多时散户极度拥挤多 = 顶风险；做空时散户极度拥挤空 = 底风险
         if ls["signal"] == "bear_trap" and side == "🟢做多":
             blockers.append(f"多空比{ls['ratio']}散户拥挤多→警惕做多顶部")
         elif ls["signal"] == "bull_trap" and side == "🔴做空":
             blockers.append(f"多空比{ls['ratio']}散户拥挤空→警惕做空底部")
 
-    tf = tf_alignment(symbol)
+    # 周期一致性：优先用传入快照（展示与闸门同源），否则 TV→REST
+    tf = tf_override if (tf_override and tf_override.get("available")) else None
+    tf_src = "快照" if tf else None
+    if tf is None:
+        tf = tf_alignment_tv(symbol)
+        tf_src = "TV"
+        if not tf.get("available"):
+            tf = tf_alignment(symbol)
+            tf_src = "REST"
     if tf.get("available"):
-        notes.append(tf["note"])
+        notes.append(f"{tf_src} {tf['note']}")
         if tf["conflict"]:
             blockers.append(f"周期冲突({tf['note']})→方向矛盾不交易")
 
@@ -136,5 +231,5 @@ def validate_plan(symbol: str, side: str) -> dict:
 
 if __name__ == "__main__":
     import pprint
-    pprint.pprint({"long_short": long_short_contra(), "tf": tf_alignment(),
+    pprint.pprint({"long_short": long_short_contra(), "tf_tv": tf_alignment_tv(),
                    "validate": validate_plan("BTCUSDT", "🟢做多")})

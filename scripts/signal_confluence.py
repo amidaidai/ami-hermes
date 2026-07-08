@@ -213,11 +213,18 @@ def fuse() -> dict:
 
     # 6) 独立验证闸门（融合 auto_card 逻辑，仅作展示；硬门在 compute_plan）
     try:
-        from signal_validators import long_short_contra, tf_alignment
+        from signal_validators import long_short_contra, tf_alignment, tf_alignment_tv
         ls = long_short_contra("BTCUSDT")
-        tf = tf_alignment("BTCUSDT")
+        # 周期方向优先 TV MCP（等加载完再读），降级 REST；存快照供验证闸门同源使用
+        tf = tf_alignment_tv("BTCUSDT")
+        tf_src = "TV"
+        if not tf.get("available"):
+            tf = tf_alignment("BTCUSDT")
+            tf_src = "REST"
+        global _TF_CACHE
+        _TF_CACHE = tf  # 同源快照：展示与 compute_plan 验证闸门用同一份
         ls_sig = ls.get("contra") or f"正常({ls.get('ratio')})" if ls.get("available") else "API不可用"
-        tf_sig = tf.get("note", "—") if tf.get("available") else "数据不足"
+        tf_sig = (tf.get("note", "—") + f" [{tf_src}]") if tf.get("available") else f"数据不足[{tf_src}]"
         sources.append({"name": "🔍多空比反指", "sig": ls_sig, "w": 0.0,
                         "emoji": "🟢" if ls.get("signal") == "neutral" else "🔴",
                         "detail": "散户拥挤反向"})
@@ -260,6 +267,12 @@ def fuse() -> dict:
 _SUPPORTING_CACHE: list = []
 def _supporting_names() -> list:
     return _SUPPORTING_CACHE
+
+
+# 模块级缓存：周期方向快照（fuse 算一次，展示+验证闸门同源，避免 Binance 数据漂移）
+_TF_CACHE: dict = {}
+def _tf_snapshot() -> dict:
+    return _TF_CACHE
 
 
 def compute_plan(score: float) -> dict:
@@ -315,7 +328,7 @@ def compute_plan(score: float) -> dict:
     if qualified:
         try:
             from signal_validators import validate_plan
-            vres = validate_plan("BTCUSDT", side)
+            vres = validate_plan("BTCUSDT", side, tf_override=_tf_snapshot())
             val_notes = vres.get("notes", [])
             if not vres.get("pass"):
                 blockers = vres.get("blockers", [])
