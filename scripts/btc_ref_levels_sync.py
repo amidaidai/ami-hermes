@@ -61,25 +61,143 @@ def age_minutes(path: Path) -> float:
 
 
 def refresh_tv_cache() -> str:
-    """刷新 TV 缓存，瞬时失败自动重试 2 次（审计 P1：避免偶发 CDP 断连直接退出）。"""
-    last_msg = ""
-    for attempt in range(3):
+    """刷新 TV BTC 缓存（MCP stdio 路径，与 XAU 同步同源）。
+
+    独立切到 BINANCE:BTCUSDT.P 读 SVP 主指标（决策表/关键位/OHLCV），
+    写 data/tv_live.json 并标 symbol=BINANCE:BTCUSDT.P。
+    不依赖全局图表停在哪个品种，彻底绕开 XAU/BTC 交叉污染（v9.6 P0 根治）。
+    失败抛异常，由 main 降级 Binance 直取。
+    """
+    import asyncio
+    try:
+        from fetch_tv_mcp import (
+            get_ohlcv, get_study_values, get_pine_lines,
+            set_symbol,
+        )
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+        from mcp import ClientSession
+    except Exception as e:
+        raise RuntimeError(f"TV MCP 模块不可用: {e}")
+
+    server_script = ROOT / "tools" / "tradingview-mcp" / "src" / "server.js"
+    if not server_script.exists():
+        raise RuntimeError(f"TV MCP server 未找到: {server_script}")
+
+    async def _run():
+        sp = StdioServerParameters(command="node", args=[str(server_script)])
+        async with stdio_client(sp) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                await set_symbol(s, "BINANCE:BTCUSDT.P")
+                await asyncio.sleep(3)
+                # 读 SVP 决策表 + 关键位 + OHLCV
+                dmi_raw = await get_study_values(s)
+                lines_raw = await get_pine_lines(s)
+                ohlcv_raw = await get_ohlcv(s)
+                # 回切原图表（保住用户看盘品种）
+                return _parse_btc(dmi_raw, lines_raw, ohlcv_raw)
+
+    try:
+        data = asyncio.run(_run())
+    except Exception as e:
+        raise RuntimeError(f"TV MCP BTC 采集失败: {e}")
+
+    if not data:
+        raise RuntimeError("TV MCP BTC 采集返回空")
+
+    # 写 tv_live.json 标 BTC symbol（供 pick_cache 识别）
+    live = dict(data)
+    live["symbol"] = "BINANCE:BTCUSDT.P"
+    live["fresh"] = True
+    live["stale"] = False
+    live["source"] = "btc_ref_levels_sync_mcp"
+    live["timestamp"] = now_iso()
+    TV_LIVE.parent.mkdir(parents=True, exist_ok=True)
+    TV_LIVE.write_text(json.dumps(live, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 同时更新 tv_dmi_cache 保持一致（避免 auto_card BTC 分支误读旧的）
+    TV_DMI.write_text(json.dumps(live, ensure_ascii=False, indent=2), encoding="utf-8")
+    return f"BTC TV cache refreshed via MCP: POC={live.get('poc')} VWAP={live.get('vwap')}"
+
+
+def _parse_btc(dmi_raw, lines_raw, ohlcv_raw) -> dict | None:
+    """从 TV MCP 原始 JSON 响应提取 SVP 关键位。
+
+    study_values 返回 {studies:[{name, values:{...}}]}，SVP 指标含 S VWAP/POC 等；
+    pine_lines 返回 {studies:[{horizontal_levels:[...]}]}，按 VWAP 上下分 VAH/VAL/POC。
+    """
+    def _j(raw):
         try:
-            cp = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py")],
-                cwd=str(ROOT),
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
-            msg = (cp.stdout or cp.stderr or "").strip()
-            if cp.returncode == 0:
-                return msg
-            last_msg = (msg or "tv_live_dump failed")[:300]
-        except Exception as exc:
-            last_msg = f"{type(exc).__name__}: {exc}"[:300]
-        time.sleep(3 * (attempt + 1))
-    raise RuntimeError(last_msg or "tv_live_dump failed after 3 attempts")
+            return json.loads(str(raw))
+        except Exception:
+            return {}
+
+    dmi = _j(dmi_raw)
+    lines = _j(lines_raw)
+    ov = _j(ohlcv_raw)
+
+    # 取 SVP 主指标 values
+    svp_values: dict = {}
+    for st in dmi.get("studies", []):
+        if "SVP" in str(st.get("name", "")):
+            svp_values = st.get("values", {}) or {}
+            break
+
+    indicators: dict = {}
+    for k, v in svp_values.items():
+        key = k.strip().upper().replace(" ", "_")
+        indicators[key] = v
+
+    # 关键位 horizontal_levels（已按价格排序）
+    levels = []
+    for st in lines.get("studies", []):
+        levels = st.get("horizontal_levels", []) or []
+        if levels:
+            break
+    levels_sorted = sorted(float(x) for x in levels if _is_num(x))
+
+    # 从 SVP values 取 VWAP，POC 取最接近 VWAP 的水平线
+    vwap = _num(svp_values.get("S VWAP") or svp_values.get("S_VWAP"))
+    poc = _num(svp_values.get("POC")) or _nearest(levels_sorted, vwap)
+    # VAH/VAL = VWAP 上方/下方最近的 POC 带边界
+    vah = _num(svp_values.get("VAH"))
+    val = _num(svp_values.get("VAL"))
+    if vwap and levels_sorted:
+        if vah is None:
+            above = [l for l in levels_sorted if l > (poc or vwap)]
+            vah = max(above) if above else None
+        if val is None:
+            below = [l for l in levels_sorted if l < (poc or vwap)]
+            val = min(below) if below else None
+
+    do = _num(svp_values.get("DO Price") or svp_values.get("DO_PRICE"))
+    w_vwap = _num(svp_values.get("W VWAP Price") or svp_values.get("W_VWAP_PRICE"))
+
+    data = {
+        "indicators": indicators,
+        "decision_table": {},
+        "key_levels": [{"label": "level", "price": l} for l in levels_sorted],
+        "poc": poc, "vah": vah, "val": val, "vwap": vwap, "do": do, "w_vwap": w_vwap,
+    }
+    # OHLCV 高低点补充
+    if ov.get("high") is not None:
+        data["indicators"]["recent_high"] = float(ov["high"])
+    if ov.get("low") is not None:
+        data["indicators"]["recent_low"] = float(ov["low"])
+    return data if (poc or vwap) else None
+
+
+def _is_num(x) -> bool:
+    try:
+        float(x)
+        return True
+    except Exception:
+        return False
+
+
+def _nearest(sorted_levels: list[float], ref: float | None) -> float | None:
+    if not sorted_levels or ref is None:
+        return sorted_levels[0] if sorted_levels else None
+    return min(sorted_levels, key=lambda l: abs(l - ref))
 
 
 def pick_cache() -> dict[str, Any]:

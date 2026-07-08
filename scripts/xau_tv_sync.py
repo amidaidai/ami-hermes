@@ -13,6 +13,7 @@ import sys
 import json
 import asyncio
 import os
+import time
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -98,4 +99,30 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(_run()))
+    # v9.6 三级降级：TV CDP 偶断不得直接 exit 1 让 cron 报错。
+    # 失败则保留旧 xau_tv_state.json（若 15min 内）或写降级标记，cron 仍 ok。
+    try:
+        rc = asyncio.run(_run())
+        raise SystemExit(rc if isinstance(rc, int) else 0)
+    except Exception as e:
+        import json as _json
+        import time as _t
+        # 若旧文件 15min 内，保留旧数据不覆盖
+        if OUT.exists():
+            try:
+                age = (time.time() - OUT.stat().st_mtime)
+                if age < 900:
+                    print(f"⚠ XAU TV同步失败({e})，保留 {age:.0f}s 前旧数据")
+                    raise SystemExit(0)
+            except Exception:
+                pass
+        # 无可用旧数据 → 写降级占位，标 stale
+        try:
+            _json.dump({"symbol": "OANDA:XAUUSD", "stale": True,
+                        "error": str(e)[:200],
+                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+08:00")},
+                       OUT.open("w", encoding="utf-8"), ensure_ascii=False, indent=2)
+            print(f"⚠ XAU TV同步失败({e})，写降级占位")
+        except Exception:
+            pass
+        raise SystemExit(0)

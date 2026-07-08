@@ -13,7 +13,9 @@ from tv_data_bridge import collect_and_cache  # noqa: E402
 
 
 if __name__ == "__main__":
-    result = collect_and_cache(alert_mode="--alert" in sys.argv)
+    # 明确期望 BTC 品种，避免图表停在 XAU 时污染 BTC 缓存（v9.6 P0 修复）
+    result = collect_and_cache(alert_mode="--alert" in sys.argv,
+                               expect_symbol="BINANCE:BTCUSDT.P")
     if result is None:
         print("tv cache refresh failed: TradingView CDP unavailable")
         sys.exit(1)
