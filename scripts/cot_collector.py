@@ -178,8 +178,31 @@ def line_summary(data: dict) -> str:
     return f"COT({date}): " + " · ".join(parts[:8]) if parts else f"COT({date}): N/A"
 
 
-def full_json(data: dict) -> str:
-    return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+def _build_detail(data: dict) -> list:
+    """构造 COT 详细表格（机构持仓洞察），返回行列表。"""
+    date = data.get("report_date", "?")
+    lines = [f"🏛️ CFTC COT机构持仓 · {date}"]
+    lines.append("")
+    mkts = data.get("markets", {})
+    priority = ["欧元", "日元", "英镑", "黄金", "白银", "标普迷你", "纳指迷你", "原油"]
+    ordered = [l for l in priority if l in mkts] + [l for l in mkts if l not in priority]
+    for label in ordered:
+        entry = mkts[label]
+        pos = entry.get("positions", {})
+        if not pos:
+            continue
+        oi = entry.get("oi", 0)
+        main = pos.get("杠杆基金") or pos.get("投机") or {}
+        net = main.get("net", 0)
+        bias = "机构偏多" if net > 0 else "机构偏空" if net < 0 else "机构中性"
+        lines.append(f"**{label}** [总OI {oi:,}] — {bias}")
+        lines.append("")
+        lines.append("| 参与方 | 多 | 空 | 净 |")
+        lines.append("|:----|----:|----:|----:|")
+        for trader, p in pos.items():
+            lines.append(f"| {trader} | {p.get('long',0):,} | {p.get('short',0):,} | {p.get('net',0):+} |")
+        lines.append("")
+    return lines
 
 
 def _load_cache():
@@ -212,10 +235,16 @@ if __name__ == "__main__":
     if not args.force:
         cached = _load_cache()
         if cached:
-            if args.full:
-                print(full_json(cached))
-            else:
-                print(line_summary(cached))
+            # v9.8: 缓存命中也走详细表格（原走 line_summary 单行退化）
+            lines = _build_detail(cached)
+            output = "\n".join(lines)
+            print(output)
+            try:
+                sys.path.insert(0, str(SCRIPT_DIR))
+                from telegram_reliable import push_tg_rich
+                push_tg_rich("telegram:-1003733144325:846", output)
+            except Exception as _te:
+                print(f"⚠ COT RichMarkdown推送失败: {_te}", file=sys.stderr)
             sys.exit(0)
 
     print("拉取 CFTC COT...", file=sys.stderr)
@@ -223,16 +252,17 @@ if __name__ == "__main__":
     _save_cache(data)
 
     if args.full:
-        print(full_json(data))
+        print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
     elif args.line:
         print(line_summary(data))
     else:
-        print(line_summary(data))
-        print()
-        for label, entry in data.get("markets", {}).items():
-            pos = entry.get("positions", {})
-            if pos:
-                oi = entry.get("oi", 0)
-                print(f"\n{label} [总OI: {oi:,}]:")
-                for trader, p in pos.items():
-                    print(f"  {trader}: 多{p['long']:,}  空{p['short']:,}  净{p['net']:+}")
+        # 详细表格输出（机构持仓洞察）
+        lines = _build_detail(data)
+        output = "\n".join(lines)
+        print(output)
+        try:
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", output)
+        except Exception as _te:
+            print(f"⚠ COT RichMarkdown推送失败: {_te}", file=sys.stderr)

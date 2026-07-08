@@ -115,7 +115,12 @@ def send_telegram_direct(target: str, text: str, token: str | None = None,
     """直连 Telegram Bot API 发送消息。
 
     返回 (成功, 原因)。任何网络/HTTP 异常都被吞掉返回 (False, reason)，绝不外抛。
+
+    v9.8：默认 parse_mode 改为 RichMarkdown（真表格渲染）。调用方未显式指定时，
+    表格类消息走 sendRichMessage 而非纯文本退化。
     """
+    if parse_mode is None:
+        parse_mode = "RichMarkdown"
     token = token or os.environ.get("TELEGRAM_BOT_TOKEN") or _token_from_env_file()
     if not token:
         return False, "missing TELEGRAM_BOT_TOKEN"

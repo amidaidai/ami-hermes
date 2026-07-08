@@ -120,29 +120,50 @@ if __name__ == "__main__":
         data = gather_onchain()
         now = datetime.now(TZ)
         ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
-        lines = [f"Dune链上 {ts}"]
+        lines = [f"⛓️ Dune链上情报 {ts}"]
         lines.append("")
-        
+
         btc = data.get("btc_flow", {})
         if btc.get("ok"):
-            lines.append("| BTC链上流 | 数值 |")
-            lines.append("|-----------|------|")
-            lines.append(f"| 月度流入 | {btc.get('inflow_btc', 0):.1f} BTC |")
-            lines.append(f"| 趋势 | {btc.get('trend', '?')} |")
+            inflow = btc.get("inflow_btc", 0) or 0
+            usd = btc.get("inflow_usd", 0) or 0
+            trend = btc.get("trend", "?")
+            # 决策：流入加速=潜在抛压累积；减速/流出=积累
+            note = "潜在抛压累积" if "加速" in trend else "流入放缓" if "减速" in trend else "稳定"
+            lines.append("| BTC链上流 | 数值 | 解读 |")
+            lines.append("|:----|:----:|:----|")
+            lines.append(f"| 月度流入 | {inflow:.1f} BTC | {note} |")
+            if usd:
+                lines.append(f"| 美元估值 | ${usd/1e9:.2f}B | — |")
+            lines.append(f"| 趋势 | {trend} | — |")
             lines.append("")
-        
+
         cex = data.get("cex_netflow", {})
         if cex.get("ok"):
             nf = cex.get("total_netflow", 0) or 0
-            lines.append("| CEX净流量 | " + f"{'${:+,.0f}'.format(nf)}" + " |")
-            lines.append("| 信号 | " + cex.get("signal", "") + " |")
+            signal = cex.get("signal", "")
+            lines.append("| CEX净流量 | 数值 |")
+            lines.append("|:----|:----:|")
+            lines.append(f"| 总净流 | {'${:+,.0f}'.format(nf)} | {signal} |")
             lines.append("")
-            ex_list = cex.get("exchanges", [])[:5]
+            ex_list = cex.get("exchanges", [])[:6]
             if ex_list:
-                lines.append("| 交易所 | 净流量 |")
-                lines.append("|--------|--------|")
+                lines.append("| 交易所 | 净流量 | 信号 |")
+                lines.append("|:----|:----:|:----|")
                 for ex in ex_list:
                     nf_ex = ex.get("netflow", 0) or 0
-                    lines.append("| " + ex.get("exchange", "?") + " | " + f"{'${:+,.0f}'.format(nf_ex)}" + " |")
-        
-        print("\n".join(lines))
+                    ex_sig = "流入·抛压" if nf_ex > 0 else "流出·积累"
+                    lines.append(f"| {ex.get('exchange', '?')} | {'${:+,.0f}'.format(nf_ex)} | {ex_sig} |")
+                lines.append("")
+            # 决策总结
+            verdict = "↑交易所净流出(积累)" if nf < 0 else "↓交易所净流入(抛压)"
+            lines.append(f"**链上结论**: {verdict}")
+
+        output = "\n".join(lines)
+        print(output)
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", output)
+        except Exception as _te:
+            print(f"⚠ Dune链上RichMarkdown推送失败: {_te}", file=sys.stderr)

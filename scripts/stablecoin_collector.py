@@ -91,31 +91,55 @@ def main():
     # 输出
     total_b = total_now / 1e9
     delta_b = total_delta / 1e9
-    
+
     direction = "↑流入" if total_delta > 0 else "↓流出" if total_delta < 0 else "→持平"
-    lines = [f"稳定币 {ts} | 总市值${total_b:.1f}B {direction}{delta_b:+.1f}B"]
-    
+    # 决策信号：稳定币增=潜在买盘；减=撤资
+    if abs(delta_b) >= 1.0:
+        verdict = f"{direction}·资金{'大举进场' if total_delta>0 else '撤离'}"
+    elif abs(delta_b) >= 0.1:
+        verdict = f"{direction}·边际{'增量' if total_delta>0 else '减量'}"
+    else:
+        verdict = "→资金面平静"
+    lines = [f"🪙 稳定币供应 {ts}"]
+    lines.append("")
+    lines.append("| 维度 | 数据 | 信号 |")
+    lines.append("|:----|:----:|:----|")
+    lines.append(f"| 总市值 | ${total_b:.1f}B | {verdict} |")
+    lines.append(f"| 较上次 | {delta_b:+.1f}B | {direction} |")
+    lines.append("")
+    lines.append("| 币种 | 供应 | 变化 | 占比 |")
+    lines.append("|:----|:----:|:----:|:----:|")
     for sym in WATCH:
         c = changes.get(sym, {})
         val_b = c.get("now", 0) / 1e9
         delta_m = c.get("delta", 0) / 1e6
         pct = c.get("pct", 0)
+        share = (c.get("now", 0) / total_now * 100) if total_now else 0
         arrow = "↑" if c.get("delta", 0) > 0 else "↓" if c.get("delta", 0) < 0 else "→"
-        lines.append(f"  {sym}: ${val_b:.1f}B {arrow}{delta_m:+.0f}M({pct:+.1f}%)")
-    
+        lines.append(f"| {sym} | ${val_b:.1f}B | {arrow}{delta_m:+.0f}M({pct:+.1f}%) | {share:.1f}% |")
+
     output = "\n".join(lines)
-    
-    # 去重：显著变化(>100M)始终发送，否则抑制
+
+    # 推送：显著变化(>100M)始终发送；常态每4h兜底推一次(避免完全静默)
     significant = abs(delta_b) > 0.1  # 100M
-    if significant:
-        print(output)
-    else:
-        try:
-            from alert_dedup import dedup_wrapper
-            dedup_wrapper("stablecoin", output, force_seconds=3600)
-        except ImportError:
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from telegram_reliable import push_tg_rich
+        if significant:
             print(output)
-    
+            push_tg_rich("telegram:-1003733144325:846", output)
+        else:
+            # 常态也推，但用 dedup 限频(4h)
+            try:
+                from alert_dedup import dedup_wrapper
+                dedup_wrapper("stablecoin", output, force_seconds=14400)
+            except ImportError:
+                print(output)
+                push_tg_rich("telegram:-1003733144325:846", output)
+    except Exception as _te:
+        print(output)
+        print(f"⚠ 稳定币RichMarkdown推送失败: {_te}", file=sys.stderr)
+
     # 保存快照
     save_snapshot({"total": total_now, "data": current, "ts": now.isoformat()})
     return 0

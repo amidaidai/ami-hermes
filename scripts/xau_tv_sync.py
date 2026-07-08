@@ -71,6 +71,35 @@ async def _run():
 
             OUT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"✅ XAU TV状态已写 {OUT}")
+            # v9.8: 推 TG 五层关键位表
+            try:
+                now = datetime.now(TZ)
+                ts = now.strftime("%Y年%m月%d日%H：%M")
+                tfs = result.get("timeframes", {})
+                if tfs:
+                    lines = [f"🥇 XAU TV五层现场 · {ts}"]
+                    lines.append("")
+                    lines.append("| 周期 | 高 | 低 | 收 | 振幅 |")
+                    lines.append("|:----|:----:|:----:|:----:|:----:|")
+                    for tf in ["5m", "15m", "1h", "4h"]:
+                        d = tfs.get(tf)
+                        if d:
+                            rng = (d["high"] - d["low"]) / d["low"] * 100 if d.get("low") else 0
+                            lines.append(f"| {tf} | `{d['high']:.1f}` | `{d['low']:.1f}` | `{d['close']:.1f}` | {rng:.2f}% |")
+                    # 决策：4h收盘相对区间位置
+                    h4 = tfs.get("4h")
+                    if h4:
+                        pos = (h4["close"] - h4["low"]) / (h4["high"] - h4["low"]) * 100 if h4["high"] != h4["low"] else 50
+                        zone = "高位" if pos > 66 else "低位" if pos < 33 else "中位"
+                        lines.append("")
+                        lines.append(f"4h位置: 区间{zone}({pos:.0f}%) → {'偏多但防回落' if pos>66 else '偏空但防反弹' if pos<33 else '方向待选'}")
+                    output = "\n".join(lines)
+                    print(output)
+                    sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from telegram_reliable import push_tg_rich
+                    push_tg_rich("telegram:-1003733144325:846", output)
+            except Exception as _te:
+                print(f"⚠ XAU TV RichMarkdown推送失败: {_te}", file=sys.stderr)
             return 0
 
 

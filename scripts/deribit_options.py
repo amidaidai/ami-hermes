@@ -162,18 +162,20 @@ def _print_table(data: dict):
         call_m = d['call_oi_usd'] / 1e6
         put_m = d['put_oi_usd'] / 1e6
         cp = d['cp_ratio']
-        signal = "偏多" if cp > 1.5 else "偏空" if cp < 0.7 else "中性"
+        signal = "偏多(看涨需求强)" if cp > 1.5 else "偏空(看跌保护重)" if cp < 0.7 else "中性"
         mp = d.get("max_pain", "?")
-        lines.append(f"Deribit期权 {coin}")
+        # 决策：MaxPain 通常价格磁吸；C/P高=情绪偏多但需防过热
+        verdict = f"γ区上方·偏{cp:.1f}" if cp > 1.1 else f"γ区下方·偏{cp:.1f}" if cp < 0.9 else "γ中性"
+        lines.append(f"📊 Deribit期权 {coin}")
         lines.append("")
-        lines.append("| 指标 | 数值 |")
-        lines.append("|------|------|")
-        lines.append(f"| 总OI | ${total_b:.2f}B |")
-        lines.append(f"| Call OI | ${call_m:.0f}M |")
-        lines.append(f"| Put OI | ${put_m:.0f}M |")
-        lines.append(f"| C/P比 | {cp} {signal} |")
-        lines.append(f"| MaxPain | ${mp} |")
-        lines.append(f"| 合约数 | {d['options_count']} |")
+        lines.append("| 指标 | 数值 | 信号 |")
+        lines.append("|:----|:----:|:----|")
+        lines.append(f"| 总OI | ${total_b:.2f}B | {signal} |")
+        lines.append(f"| Call OI | ${call_m:.0f}M | — |")
+        lines.append(f"| Put OI | ${put_m:.0f}M | — |")
+        lines.append(f"| C/P比 | {cp} | {verdict} |")
+        lines.append(f"| MaxPain | ${mp} | 价格磁吸位 |")
+        lines.append(f"| 合约数 | {d['options_count']} | — |")
         top = d.get("top_strikes", [])[:3]
         if top:
             lines.append("")
@@ -182,7 +184,14 @@ def _print_table(data: dict):
             for t in top:
                 lines.append(f"| {t['strike']} | {t['call_oi']} | {t['put_oi']} | {t['expiry']} |")
         lines.append("")
-    print("\n".join(lines))
+    output = "\n".join(lines)
+    print(output)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from telegram_reliable import push_tg_rich
+        push_tg_rich("telegram:-1003733144325:846", output)
+    except Exception as _te:
+        print(f"⚠ Deribit期权RichMarkdown推送失败: {_te}", file=sys.stderr)
 
 
 if __name__ == "__main__":

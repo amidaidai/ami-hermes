@@ -54,14 +54,24 @@ def analyze(symbol: str, current: dict, prev: dict) -> dict:
     if not oi_now: return {"symbol": symbol, "status": "no_data"}
     oi_delta_pct = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0
     price_delta_pct = (price_now - price_prev) / price_prev * 100 if price_prev else 0
-    
+
     if oi_delta_pct < -2 and price_delta_pct < -1: squeeze, detail = "多头爆仓", f"OI{oi_delta_pct:+.1f}% 价{price_delta_pct:+.1f}%→多杀多"
     elif oi_delta_pct < -2 and price_delta_pct > 1: squeeze, detail = "空头爆仓", f"OI{oi_delta_pct:+.1f}% 价{price_delta_pct:+.1f}%→轧空"
     elif oi_delta_pct < -1: squeeze, detail = "OI缩减", f"OI{oi_delta_pct:+.1f}%"
     elif oi_delta_pct > 5: squeeze, detail = "OI扩张", f"OI{oi_delta_pct:+.1f}%·拥挤"
     else: squeeze, detail = "正常", f"OI{oi_delta_pct:+.1f}%"
-    
-    return {"symbol": symbol, "oi": oi_now, "price": price_now, "oi_delta_pct": round(oi_delta_pct, 2), "price_delta_pct": round(price_delta_pct, 2), "squeeze": squeeze, "detail": detail}
+
+    # 决策：爆仓信号→提示方向；OI扩张→提示杠杆拥挤风险
+    if "多头爆仓" in squeeze:
+        verdict, action = "↓空方占优", "反弹不过前低做空/不接刀"
+    elif "空头爆仓" in squeeze:
+        verdict, action = "↑多方轧空", "回踩做多/追高慎"
+    elif oi_delta_pct > 5:
+        verdict, action = "⚠杠杆拥挤", "警惕插针清算"
+    else:
+        verdict, action = "○常态", "按结构交易"
+    return {"symbol": symbol, "oi": oi_now, "price": price_now, "oi_delta_pct": round(oi_delta_pct, 2), "price_delta_pct": round(price_delta_pct, 2), "squeeze": squeeze, "detail": detail, "verdict": verdict, "action": action}
+
 
 
 def main():
@@ -75,34 +85,48 @@ def main():
         results.append(analysis)
         save_snapshot(sym, {"oi": current["oi"], "price": current["price"], "ts": now.isoformat()})
     
-    lines = [f"清算压力 {ts}"]
+    lines = [f"💥 清算压力 {ts}"]
     lines.append("")
-    lines.append("| 品种 | 现价 | OI | OI变化 | 清算信号 |")
-    lines.append("|------|------|-----|--------|----------|")
-    
+    lines.append("| 品种 | 现价 | OI | OI变化 | 价格变化 | 清算信号 | 决策 |")
+    lines.append("|:----|:----:|:----:|:----:|:----:|:----|:----|")
+
     has_squeeze = False
     for r in results:
-        if r.get("status") == "api_error": lines.append(f"| {r['symbol']} | - | - | - | 获取失败 |"); continue
-        if r.get("status") == "no_data": lines.append(f"| {r['symbol']} | - | - | - | 等待数据 |"); continue
+        if r.get("status") == "api_error": lines.append(f"| {r['symbol']} | - | - | - | - | 获取失败 | - |"); continue
+        if r.get("status") == "no_data": lines.append(f"| {r['symbol']} | - | - | - | - | 等待数据 | - |"); continue
         oi_m = r["oi"] / 1e6
         squeeze_icon = "🟡" if "爆仓" in r.get("squeeze", "") else ""
-        lines.append(f"| {r['symbol']} | ${r['price']:,.1f} | ${oi_m:.1f}M | {r['oi_delta_pct']:+.1f}% | {squeeze_icon}{r['squeeze']} |")
+        lines.append(f"| {r['symbol']} | ${r['price']:,.1f} | ${oi_m:.1f}M | {r['oi_delta_pct']:+.1f}% | {r['price_delta_pct']:+.1f}% | {squeeze_icon}{r['squeeze']} | {r.get('verdict','○')} |")
         if "爆仓" in r.get("squeeze", ""): has_squeeze = True
-    
+
+    lines.append("")
+    lines.append("| 方向 | 触发条件 | 动作 |")
+    lines.append("|:---:|:----|:----|")
+    for r in results:
+        if r.get("status") in ("api_error", "no_data"): continue
+        lines.append(f"| {r.get('verdict','○')} | {r.get('detail','')} | {r.get('action','按结构交易')} |")
+
     if has_squeeze:
         lines.append("")
         for r in results:
-            if "爆仓" in r.get("squeeze", ""): lines.append(f"{r['symbol']}: {r['detail']}")
-    
+            if "爆仓" in r.get("squeeze", ""): lines.append(f"⚠ {r['symbol']}: {r['detail']} → {r.get('action','')}")
+
     output = "\n".join(lines)
-    if has_squeeze: print(output)
+    if has_squeeze:
+        print(output)
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", output)
+        except Exception as _te:
+            print(f"⚠ 清算压力RichMarkdown推送失败: {_te}", file=sys.stderr)
     else:
         try:
             from alert_dedup import dedup_wrapper
             dedup_wrapper("liquidation", output, force_seconds=1800)
         except ImportError:
             print(output)
-    
+
     # 保存 — 双落盘
     result_json = {"ts": now.isoformat(), "results": results}
     

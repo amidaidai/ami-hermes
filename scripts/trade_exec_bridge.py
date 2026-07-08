@@ -118,8 +118,30 @@ def main():
         # 静默：无信号/普通状态只落盘数据，不生成 cron 输出。
         return 0
     else:
-        print(f"执行桥 {ts} | {result['stage']} | 因子{result.get('factor_bias','?')} | 已记录trade_events.jsonl")
-    
+        now = datetime.now(TZ)
+        ts = now.strftime("%Y年%m月%d日%H：%M")
+        stage = result.get("stage", "?")
+        bias = result.get("factor_bias", "?")
+        # 结构化表
+        lines = [f"🔗 交易执行桥 · {ts}"]
+        lines.append("")
+        lines.append("| 项目 | 数据 |")
+        lines.append("|:----|:----|")
+        lines.append(f"| 阶段 | {stage} |")
+        lines.append(f"| 因子偏置 | {bias} |")
+        lines.append(f"| 价格 | `{result.get('price', 0):,.0f}` |")
+        lines.append("")
+        lines.append("✅ 已记录 trade_events.jsonl")
+        output = "\n".join(lines)
+        print(output)
+        # v9.8: 推 TG 真表格（原本只 print 退化文本）
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", output)
+        except Exception as _te:
+            print(f"⚠ 交易执行桥RichMarkdown推送失败: {_te}", file=sys.stderr)
+
     return 0
 
 

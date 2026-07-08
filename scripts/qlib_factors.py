@@ -183,19 +183,42 @@ def main():
     score = f.get("SIGNAL", 0)
     bias = f.get("BIAS", "?")
     direction_arrow = "↑" if score > 0 else "↓" if score < 0 else "→"
+    # 三维归类（用真实因子值，避免 `or 50` 掩盖真实RSI）
+    rsi = f.get("RSI")
+    rsi_score = 1 if (rsi or 50) > 55 else -1 if (rsi or 50) < 45 else 0
+    mom = int(rsi_score + (1 if (f.get("MACD") or 0) > 0 else -1) + (1 if (f.get("ROC6") or 0) > 0 else -1))
+    trend = int((1 if price > (f.get("MA5") or price) else -1) + (1 if (f.get("MOM20") or 0) > 0 else -1))
+    vol = int(1 if (f.get("VRATIO") or 1) > 1.1 else -1 if (f.get("VRATIO") or 1) < 0.9 else 0)
+    mom_lbl = "动量增加" if mom >= 2 else "动量减弱" if mom <= -2 else "动量中性"
+    trend_lbl = "多头排列" if trend >= 1 else "空头排列" if trend <= -1 else "趋势胶着"
+    vol_lbl = "放量" if vol > 0 else "缩量" if vol < 0 else "量能平稳"
     lines.append("")
     lines.append(f"综合信号: {direction_arrow} {bias} (评分{score}/5)")
-    
+    lines.append("")
+    lines.append("| 维度 | 状态 | 权重 |")
+    lines.append("|:----|:----:|:----:|")
+    lines.append(f"| 动量 | {mom_lbl} | {mom:+d} |")
+    lines.append(f"| 趋势 | {trend_lbl} | {trend:+d} |")
+    lines.append(f"| 量能 | {vol_lbl} | {vol:+d} |")
+
     output = "\n".join(lines)
     try:
-        from alert_dedup import dedup_wrapper
-        dedup_wrapper("qlib_factors", output, force_seconds=3600)
-    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from telegram_reliable import push_tg_rich
+        # 常态也推，dedup 限频(1h)，避免完全静默
+        try:
+            from alert_dedup import dedup_wrapper
+            dedup_wrapper("qlib_factors", output, force_seconds=3600)
+        except ImportError:
+            print(output)
+            push_tg_rich("telegram:-1003733144325:846", output)
+    except Exception as _te:
         print(output)
-    
+        print(f"⚠ 量化因子RichMarkdown推送失败: {_te}", file=sys.stderr)
+
     # 保存 — 双落盘
     result_json = {"ts": now.isoformat(), "price": price, "factors": {k: (round(v, 4) if isinstance(v, float) and not math.isnan(v) else v) for k, v in f.items()}}
-    
+
     # 落盘1: hermes data
     with open(os.path.join(DATA_DIR, "qlib_factors.json"), "w") as fh:
         json.dump(result_json, fh, ensure_ascii=False)

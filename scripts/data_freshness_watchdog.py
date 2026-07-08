@@ -93,6 +93,13 @@ def main():
         dedup_wrapper("data_freshness", output, force_seconds=14400)
     except ImportError:
         print(output)
+    # v9.8: 同时推 TG 真表格（原本漏发）
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from telegram_reliable import push_tg_rich
+        push_tg_rich("telegram:-1003733144325:846", output)
+    except Exception as _te:
+        print(f"⚠ 数据新鲜度RichMarkdown推送失败: {_te}", file=sys.stderr)
     # no_agent 语义：stdout 非空即推送，非零退出会被 cron 标记为脚本错误
     return 0
 

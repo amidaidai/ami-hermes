@@ -58,6 +58,8 @@ def main():
         if fg_val in r:
             mood = m
             break
+    # 恐惧贪婪分层决策
+    fg_note = "潜在抄底区" if fg_val <= 25 else "偏谨慎" if fg_val <= 45 else "观望" if fg_val <= 55 else "防回调" if fg_val <= 75 else "高风区"
     
     fomo = trending.get("fomo_score", 0)
     fomo_text = "FOMO高热" if fomo >= 4 else "温和关注" if fomo >= 2 else "冷清"
@@ -67,7 +69,7 @@ def main():
     lines.append("")
     lines.append("| 指标 | 数值 | 解读 |")
     lines.append("|------|------|------|")
-    lines.append(f"| 恐惧贪婪 | {fg_val} | {mood} |")
+    lines.append(f"| 恐惧贪婪 | {fg_val} | {mood}（{fg_note}） |")
     lines.append(f"| 搜索热度 | {fomo}/5 | {fomo_text} |")
     
     top = trending.get("top_coins", [])
@@ -81,12 +83,18 @@ def main():
     
     output = "\n".join(lines)
     # 降噪：去重时不要把时间戳纳入 hash；同一情绪结构最多 2 小时强制推一次。
-    # 否则每 30 分钟只因 ts 变化就会重复推送，造成告警疲劳。
     dedup_key = json.dumps({"fear_greed": fg_val, "mood": mood, "fomo_score": fomo, "trending": top}, ensure_ascii=False, sort_keys=True)
     try:
         from alert_dedup import should_send
         if should_send("x_sentiment", dedup_key, force_every_seconds=7200):
             print(output)
+            # v9.8: 同步推 TG 真表格（原本只落盘静默）
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from telegram_reliable import push_tg_rich
+                push_tg_rich("telegram:-1003733144325:846", output)
+            except Exception as _te:
+                print(f"⚠ X情绪RichMarkdown推送失败: {_te}", file=sys.stderr)
     except ImportError:
         print(output)
     
