@@ -83,6 +83,7 @@ def test_cross_asset_sentiment_does_not_bleed_into_non_crypto_cards():
 
 def test_renderer_stdout_reconfigure_is_pipe_safe():
     render = _text("scripts/render_v96.py")
-    assert "def _safe_reconfigure" in render
+    assert "sys.stdout.reconfigure" in render
     assert "except (OSError, ValueError):" in render
-    assert "_safe_reconfigure(sys.stdout)" in render
+    # 不再依赖独立 _safe_reconfigure 包装，内联 reconfigure 同样 pipe-safe
+    assert "reconfigure(encoding=\"utf-8\"" in render

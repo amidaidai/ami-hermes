@@ -13,6 +13,9 @@ import re
 import sys
 from datetime import datetime, timezone, timedelta
 
+# 棠溪看盘顺序：从执行层往上确认（5m主执行 → 15m → 1h → 4h → D背景）
+TF_ORDER = ("5m", "15m", "1h", "4h", "D")
+
 try:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -72,16 +75,24 @@ def _grade_icon(grade: str) -> str:
     return "⚪"
 
 
-def _tf_mini(main: dict) -> str:
+def _tf_mini(main: dict, symbol: str = "") -> str:
     kl = main.get("_klines") or main.get("klines") or {}
+    main_tf = ""
+    try:
+        from pipeline_router import timeframe_info
+        if symbol:
+            main_tf = timeframe_info(symbol).get("main", "")
+    except Exception:
+        pass
     if not isinstance(kl, dict) or not kl:
-        return "D⚪ · 4h⚪ · 1h⚪ · 15m⚪ · 5m⚪"
+        return "5m⚪ · 15m⚪ · 1h⚪ · 4h⚪ · D⚪"
     out = []
-    for tf in ("D", "4h", "1h", "15m", "5m"):
+    for tf in TF_ORDER:
         k = kl.get(tf, {}) if isinstance(kl, dict) else {}
         desc = str(k.get("description") or k.get("svp") or k.get("direction") or "") if isinstance(k, dict) else ""
         emo = "🟢" if any(x in desc for x in ("多", "涨", "long")) else "🔴" if any(x in desc for x in ("空", "跌", "short")) else "⚠️" if "禁" in desc else "🔵" if desc else "⚪"
-        out.append(f"{tf}{emo}")
+        mark = "⭐" if tf == main_tf else ""
+        out.append(f"{tf}{mark}{emo}")
     return " · ".join(out)
 
 
@@ -153,10 +164,11 @@ def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: st
 def _render_push(symbol, price, grade, direction, treatment, signal, conclusion, htf, oi_status, cvd_flow, vol_status, share_data, liq_data, vwap, vah, val, poc, operation, entry, stop, target, magnet_up, magnet_down, check, main, sub, dual) -> str:
     short_sym = symbol.replace("USDT", "").replace(".P", "")
     structure = _level_strip(vwap, vah, val, poc, price)
-    tf_line = _tf_mini(main)
+    tf_line = _tf_mini(main, symbol)
     conclusion_clean = _clean_text(conclusion or signal or treatment, 28) or "待确认"
     entry_clean = _clean_text(entry, 22) if entry else _fmt_num(price)
     stop_clean = _clean_text(stop, 18) if stop else "—"
+
     target_clean = _clean_text(target, 22) if target else "—"
     magnet_up_clean = _clean_text(magnet_up, 18) if magnet_up and magnet_up != "--" else "—"
     magnet_down_clean = _clean_text(magnet_down, 18) if magnet_down and magnet_down != "--" else "—"
@@ -204,9 +216,9 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         f"【结构】{structure}",
         f"【主推】{_dir_icon(direction)}{direction} · {_clean_text(treatment or operation or conclusion, 34)}",
         "",
-        "① 多周期定位",
-        _tf_mini(main),
-        "",
+        "① 多周期定位（5m→15m→1h→4h→D）",
+        _tf_mini(main, symbol),
+
         "② 双指标",
         "| 指标 | 读数 | 裁决 |",
         "|:---|:---|:---|",

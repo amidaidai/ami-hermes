@@ -4,26 +4,27 @@
 
 v9.9 目标：手机端好看，但不牺牲棠溪双指标/多周期能力。
 - 结构位前置：价格前必须带 POC/VWAP/VAH/VAL/FVG/阻支标签。
-- 多周期必须显式：D/4h/1h/15m/5m 全部出现。
+- 多周期必须显式：5m/15m/1h/4h/D 全部出现，按看盘顺序 5m→15m→1h→4h→D。
 - 双指标必须显式：SVP 主驾驶 + HALDRO 副驾驶，不再压成一句散文。
 - 裁决唯一主推：⭐主推只给一个，🔁备选只是失效路径。
 """
 from __future__ import annotations
 
+import re
 import sys
 from datetime import datetime, timezone, timedelta
 
+# 棠溪看盘顺序：从执行层往上确认（5m主执行 → 15m → 1h → 4h → D背景）
+TF_ORDER = ("5m", "15m", "1h", "4h", "D")
 
-def _safe_reconfigure(stream):
-    try:
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        pass
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (OSError, ValueError):
+    pass
 
-
-_safe_reconfigure(sys.stdout)
-_safe_reconfigure(sys.stderr)
 
 TZ = timezone(timedelta(hours=8))
 
@@ -391,7 +392,7 @@ def render_v96_card(
         backup_rr = f"1:{rr_b:.1f}" if rr_b >= 2 else "观察"
 
     tf_emojis = []
-    for tf in ("D", "4h", "1h", "15m", "5m"):
+    for tf in TF_ORDER:
         tf_emojis.append(f"{tf}{_tf_emoji(klines.get(tf, {}))}")
     mtf_summary = " · ".join(tf_emojis)
     multi_src_line = _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual_indicator)
@@ -403,13 +404,15 @@ def render_v96_card(
     lines.append(f"【依据】SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict}")
     lines.append("")
 
-    lines.append("① 周期体温 / 多周期定位")
+    lines.append("① 周期体温 / 多周期定位（5m→15m→1h→4h→D）")
     lines.append("| 周期 | SVP主指标 | HALDRO副指标 | 位置 |")
     lines.append("|:---:|:---|:---|:---|")
-    for tf in ("D", "4h", "1h", "15m", "5m"):
+    main_tf = _main_tf(symbol)
+    for tf in TF_ORDER:
         k = klines.get(tf, {}) if isinstance(klines, dict) else {}
-        lines.append(f"| {tf} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text(k)} | {_vwap_pos(k, price)} |")
-    lines.append(f"→ {mtf_summary} · 主执行{_main_tf(symbol)}")
+        mark = " ⭐主" if tf == main_tf else ""
+        lines.append(f"| {tf}{mark} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text(k)} | {_vwap_pos(k, price)} |")
+    lines.append(f"→ 主执行{main_tf} · 先看{TF_ORDER[0]}向上确认")
     lines.append("")
 
     lines.append("② 关键位 / 结构关键位")

@@ -2336,7 +2336,26 @@ def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dic
     got = _norm_symbol_for_cache(cache_symbol)
     symbol_ok = (not got) or got.startswith(want) or want.startswith(got)
     fresh = age_min is not None and age_min <= max_age_minutes
-    usable = bool(symbol_ok and fresh)
+
+    # v9.6 第二道防线：价位合理性校验，拦截 XAU/BTC 缓存交叉污染
+    # BTC POC/VAH/VAL 应 >10000；XAU 应 <10000。价位落在错品种区间即判污染。
+    _poc_raw = cache.get("poc")
+    poc = None
+    try:
+        poc = float(str(_poc_raw).replace(",", "").replace(" ", "")) if _poc_raw is not None else None
+    except (ValueError, TypeError):
+        poc = None
+    price_ok = True
+    price_reason = ""
+    if poc:
+        if want.startswith("BTC") and poc < 10000:
+            price_ok = False
+            price_reason = f"价位污染 POC={poc} 疑似XAU数据"
+        elif want.startswith("XAU") and poc > 10000:
+            price_ok = False
+            price_reason = f"价位污染 POC={poc} 疑似BTC数据"
+
+    usable = bool(symbol_ok and fresh and price_ok)
     reason = "实时/新鲜" if usable else ""
     if not symbol_ok:
         reason = f"品种不匹配 {cache_symbol or '?'}"
@@ -2344,6 +2363,8 @@ def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dic
         reason = "无时间戳"
     elif not fresh:
         reason = f"缓存过期 {age_min:.0f}分钟"
+    elif not price_ok:
+        reason = price_reason
     return {
         "usable": usable,
         "source": "cache",
@@ -3607,17 +3628,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
         try:
             from topic_router import get_target
             target = get_target(symbol)
-            # 截图先发（MEDIA 走 gateway 上传需要时间）
-            if screenshot_path:
-                try:
-                    import subprocess as _sp
-                    _sp.run([
-                        sys.executable, "-m", "hermes_cli.main", "send",
-                        "-t", target, "-q", f"MEDIA:{screenshot_path}"
-                    ], timeout=15, capture_output=True)
-                except Exception:
-                    pass
-            # 卡片走 telegram_reliable RichMarkdown 真表格
+            # 卡片走 telegram_reliable RichMarkdown 真表格（纯文字，不发截图）
             sys.path.insert(0, str(Path(__file__).parent))
             from telegram_reliable import send_telegram_reliable
             ok, reason = send_telegram_reliable(
