@@ -73,17 +73,19 @@ lines.append(f"| 美债10Y | {_fmt(snap.get('us10y'))}% | — |")
 lines.append(f"| 黄金 | {_fmt(snap.get('gold'))} | — |")
 lines.append(f"| 白银 | {_fmt(snap.get('silver'))} | — |")
 lines.append("")
-lines.append(f"风险情绪: {snap.get('risk_label','—')}")
-poly_bias = poly.get("label", "—")
-lines.append(f"Polymarket: {poly_bias}")
-# 决策：综合宏观与Poly
 risk = snap.get("risk_sentiment", "")
+risk_icon = "🔴" if risk == "risk_off" else "🟢" if risk == "risk_on" else "⚪"
+lines.append(f"风险情绪: {risk_icon}{snap.get('risk_label','—')}")
+poly_bias = poly.get("label", "—")
+poly_icon = "🟢" if "偏多" in poly_bias else "🔴" if "偏空" in poly_bias else "⚪"
+lines.append(f"Polymarket: {poly_icon}{poly_bias}")
+# 决策：综合宏观与Poly
 if risk == "risk_off":
     lines.append("📉 宏观避险→BTC承压，减仓/观望为主")
 elif risk == "risk_on":
     lines.append("📈 宏观风险偏好→BTC偏多环境")
 else:
-    lines.append("○ 宏观中性，按结构交易")
+    lines.append("⚪ 宏观中性，按结构交易")
 
 output = "\n".join(lines)
 print(output)

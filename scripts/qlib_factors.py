@@ -170,7 +170,8 @@ def main():
     lines.append("|------|------|------|------|")
     
     def arrow(v, bullish, bearish):
-        return "↑" if v is not None and v > bullish else "↓" if v is not None and v < bearish else "→"
+        if v is None: return "⚪"
+        return "🟢" if v > bullish else "🔴" if v < bearish else "⚪"
     
     lines.append(f"| 动量 | RSI(14) | {f.get('RSI', '?'):.0f}" + (f" | {arrow(f.get('RSI'), 60, 40)} |" if f.get('RSI') else " | - |"))
     lines.append(f"| 动量 | MACD | {f.get('MACD', '?'):+.1f}" + (f" | {arrow(f.get('MACD'), 0, -0.1)} |" if f.get('MACD') is not None else " | - |"))
@@ -182,7 +183,7 @@ def main():
     
     score = f.get("SIGNAL", 0)
     bias = f.get("BIAS", "?")
-    direction_arrow = "↑" if score > 0 else "↓" if score < 0 else "→"
+    direction_arrow = "🟢" if score > 0 else "🔴" if score < 0 else "⚪"
     # 三维归类（用真实因子值，避免 `or 50` 掩盖真实RSI）
     rsi = f.get("RSI")
     rsi_score = 1 if (rsi or 50) > 55 else -1 if (rsi or 50) < 45 else 0

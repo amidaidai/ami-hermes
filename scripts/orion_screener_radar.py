@@ -551,17 +551,24 @@ def build_report(candidates, ts):
         oi_str = fmt_volume(c.get("oi_usd", 0))
         oi_chg_str = fmt_pct(c.get("oi_chg") or 0)
         fund_str = fmt_funding(c.get("funding") or 0)
-        conf_str = f"{c.get('confidence', 0):.1f}"
+        conf = c.get("confidence", 0)
+        # 置信等级符号：高⭐ / 中🔸 / 低⚪
+        lvl = "⭐" if conf >= 6 else "🔸" if conf >= 4 else "⚪"
+        conf_cell = f"{lvl}`{conf:.1f}`"
         bn = c.get("binance") or {}
         taker = "—"
         if bn.get("taker_ratio"):
             taker = f"主动{bn.get('taker_dir', '中性')}{float(bn.get('taker_ratio', 1)):.2f}"
+        # 信号强弱表情
+        sig_icon = ""
+        if (c.get("oi_chg") or 0) > 5: sig_icon = "🔥"
+        elif (c.get("funding") or 0) < -0.001: sig_icon = "💰"
         data = f"价`{price_str}`·1h`{chg_str}`·24h`{fmt_pct(c.get('chg_24h') or 0)}`·OI`{oi_str}`"
-        signal = f"OI`{oi_chg_str}`·费`{fund_str}`·{taker}"
-        lines.append(f"| {symbol} | `{conf_str}` | {data} | {signal} |")
+        signal = f"{sig_icon}OI`{oi_chg_str}`·费`{fund_str}`·{taker}"
+        lines.append(f"| {symbol} | {conf_cell} | {data} | {signal} |")
     lines.append("")
 
-    lines.append("| 品种 | 判断 | 动作 | 仓位系数 |")
+    lines.append("| 品种 | 判断 | 动作 | 仓位 |")
     lines.append("|:----|:----|:----|:----:|")
     for c in top:
         symbol = c.get("symbol", "?")
@@ -570,6 +577,7 @@ def build_report(candidates, ts):
         chg24 = c.get("chg_24h") or 0
         funding = c.get("funding") or 0
         conf = c.get("confidence", 0)
+        lvl = "⭐" if conf >= 6 else "🔸" if conf >= 4 else "⚪"
         # 仓位系数：置信度+趋势质量综合（仅建议，非指令）
         if conf >= 7 and oi_chg > 0 and chg > 0 and funding < -0.001:
             verdict, action, size = "⚡真突破+负费率", "等回踩做多", "1.0×"
@@ -588,7 +596,7 @@ def build_report(candidates, ts):
         # 24h偏离加大提示
         if abs(chg24) > 8:
             verdict += f"·24h{chg24:+.0f}%"
-        lines.append(f"| {symbol} | {verdict} | {action} | {size} |")
+        lines.append(f"| {symbol} | {lvl}{verdict} | {action} | {size} |")
 
     # 总体结论：首行置信度最高的候选方向 + 一句话
     best = top[0]

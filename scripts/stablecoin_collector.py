@@ -115,7 +115,7 @@ def main():
         delta_m = c.get("delta", 0) / 1e6
         pct = c.get("pct", 0)
         share = (c.get("now", 0) / total_now * 100) if total_now else 0
-        arrow = "↑" if c.get("delta", 0) > 0 else "↓" if c.get("delta", 0) < 0 else "→"
+        arrow = "🟢" if c.get("delta", 0) > 0 else "🔴" if c.get("delta", 0) < 0 else "⚪"
         lines.append(f"| {sym} | ${val_b:.1f}B | {arrow}{delta_m:+.0f}M({pct:+.1f}%) | {share:.1f}% |")
 
     # 总体结论

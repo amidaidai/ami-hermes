@@ -162,7 +162,7 @@ def _print_table(data: dict):
         call_m = d['call_oi_usd'] / 1e6
         put_m = d['put_oi_usd'] / 1e6
         cp = d['cp_ratio']
-        signal = "偏多(看涨需求强)" if cp > 1.5 else "偏空(看跌保护重)" if cp < 0.7 else "中性"
+        signal = "🟢偏多(看涨需求强)" if cp > 1.5 else "🔴偏空(看跌保护重)" if cp < 0.7 else "⚪中性"
         mp = d.get("max_pain", "?")
         # 决策：MaxPain 通常价格磁吸；C/P高=情绪偏多但需防过热
         verdict = f"γ区上方·偏{cp:.1f}" if cp > 1.1 else f"γ区下方·偏{cp:.1f}" if cp < 0.9 else "γ中性"
@@ -174,7 +174,7 @@ def _print_table(data: dict):
         lines.append(f"| Call OI | ${call_m:.0f}M | — |")
         lines.append(f"| Put OI | ${put_m:.0f}M | — |")
         lines.append(f"| C/P比 | {cp} | {verdict} |")
-        lines.append(f"| MaxPain | ${mp} | 价格磁吸位 |")
+        lines.append(f"| MaxPain | ${mp} | 🧲价格磁吸位 |")
         lines.append(f"| 合约数 | {d['options_count']} | — |")
         top = d.get("top_strikes", [])[:3]
         if top:

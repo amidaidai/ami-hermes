@@ -406,7 +406,9 @@ def main() -> int:
             def _dev(ref, base):
                 if ref is None or base is None or base == 0:
                     return "—"
-                return f"{(ref-base)/base*100:+.2f}%"
+                pct = (ref-base)/base*100
+                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                return f"{arrow}{pct:+.2f}%"
             # 现价优先现货，否则用区间中值近似
             cur = spot if spot else (None)
             # 决策：现价相对关键位位置
@@ -414,13 +416,13 @@ def main() -> int:
             action = "等待突破/回踩确认"
             if cur and vwap and poc and val and vah:
                 if cur > vah:
-                    verdict = "↑偏强"; action = "回踩VAH不破做多，破位反手"
+                    verdict = "🟢偏强"; action = "回踩VAH不破做多，破位反手"
                 elif cur > vwap:
-                    verdict = "↗多头区"; action = "回踩VWAP/VAL支撑做多"
+                    verdict = "🔵多头区"; action = "回踩VWAP/VAL支撑做多"
                 elif cur > val:
-                    verdict = "↘空头区"; action = "反弹VWAP/VAH承压做空"
+                    verdict = "🟠空头区"; action = "反弹VWAP/VAH承压做空"
                 else:
-                    verdict = "↓偏弱"; action = "反抽VAL不过做空"
+                    verdict = "🔴偏弱"; action = "反抽VAL不过做空"
             rng = ""
             if recent_high and recent_low:
                 rng = f"{recent_low:,.0f}–{recent_high:,.0f}"

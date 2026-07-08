@@ -152,12 +152,12 @@ if __name__ == "__main__":
                 lines.append("|:----|:----:|:----|")
                 for ex in ex_list:
                     nf_ex = ex.get("netflow", 0) or 0
-                    ex_sig = "流入·抛压" if nf_ex > 0 else "流出·积累"
+                    ex_sig = "🟢流入·积累" if nf_ex > 0 else "🔴流出·抛压"
                     lines.append(f"| {ex.get('exchange', '?')} | {'${:+,.0f}'.format(nf_ex)} | {ex_sig} |")
                 lines.append("")
-            # 决策总结
-            verdict = "↑交易所净流出(积累)" if nf < 0 else "↓交易所净流入(抛压)"
-            lines.append(f"**链上结论**: {verdict}")
+                # 决策总结
+                verdict = "🟢交易所净流出(积累)" if nf < 0 else "🔴交易所净流入(抛压)"
+                lines.append(f"**链上结论**: {verdict}")
 
         output = "\n".join(lines)
         print(output)

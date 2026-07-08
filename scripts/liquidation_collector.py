@@ -96,7 +96,9 @@ def main():
         if r.get("status") == "no_data": lines.append(f"| {r['symbol']} | - | - | - | - | 等待数据 | - |"); continue
         oi_m = r["oi"] / 1e6
         squeeze_icon = "🟡" if "爆仓" in r.get("squeeze", "") else ""
-        lines.append(f"| {r['symbol']} | ${r['price']:,.1f} | ${oi_m:.1f}M | {r['oi_delta_pct']:+.1f}% | {r['price_delta_pct']:+.1f}% | {squeeze_icon}{r['squeeze']} | {r.get('verdict','○')} |")
+        oi_dir = "📈" if r["oi_delta_pct"] > 0 else "📉" if r["oi_delta_pct"] < 0 else "➡️"
+        px_dir = "📈" if r["price_delta_pct"] > 0 else "📉" if r["price_delta_pct"] < 0 else "➡️"
+        lines.append(f"| {r['symbol']} | ${r['price']:,.1f} | ${oi_m:.1f}M | {oi_dir}{r['oi_delta_pct']:+.1f}% | {px_dir}{r['price_delta_pct']:+.1f}% | {squeeze_icon}{r['squeeze']} | {r.get('verdict','○')} |")
         if "爆仓" in r.get("squeeze", ""): has_squeeze = True
 
     lines.append("")

@@ -194,13 +194,15 @@ def _build_detail(data: dict) -> list:
         oi = entry.get("oi", 0)
         main = pos.get("杠杆基金") or pos.get("投机") or {}
         net = main.get("net", 0)
-        bias = "机构偏多" if net > 0 else "机构偏空" if net < 0 else "机构中性"
+        bias = "🟢机构偏多" if net > 0 else "🔴机构偏空" if net < 0 else "⚪机构中性"
         lines.append(f"**{label}** [总OI {oi:,}] — {bias}")
         lines.append("")
         lines.append("| 参与方 | 多 | 空 | 净 |")
         lines.append("|:----|----:|----:|----:|")
         for trader, p in pos.items():
-            lines.append(f"| {trader} | {p.get('long',0):,} | {p.get('short',0):,} | {p.get('net',0):+} |")
+            net_v = p.get('net', 0)
+            net_cell = f"🟢{net_v:+}" if net_v > 0 else f"🔴{net_v:+}" if net_v < 0 else f"⚪{net_v:+}"
+            lines.append(f"| {trader} | {p.get('long',0):,} | {p.get('short',0):,} | {net_cell} |")
         lines.append("")
 
         # 总体结论：统计各品种机构净向
