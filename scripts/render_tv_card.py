@@ -96,30 +96,36 @@ def _tf_mini(main: dict, symbol: str = "") -> str:
     return " · ".join(out)
 
 
-def _level_strip(vwap, vah, val, poc, price) -> str:
-    vals = []
-    for lab, val in (("VAH", vah), ("VWAP", vwap), ("POC", poc), ("VAL", val)):
-        if val:
-            try:
-                vals.append((lab, float(str(val).replace(",", ""))))
-            except Exception:
-                pass
+def _level_table(vwap, vah, val, poc, price) -> str:
+    """结构位前置：真管道表（上沿 / 现价 / 下沿）。替代旧的全角竖线伪表格行。"""
     try:
         px = float(price or 0)
     except Exception:
         px = 0
-    if not vals or not px:
-        return f"⚖现{_fmt_num(price)}"
-    vals.sort(key=lambda x: abs(x[1] - px))
-    above = [x for x in vals if x[1] > px]
-    below = [x for x in vals if x[1] < px]
-    parts = []
-    if above:
-        parts.append(f"🔴{above[0][0]}{_fmt_num(above[0][1])}")
-    parts.append(f"⚖现{_fmt_num(px)}")
-    if below:
-        parts.append(f"🟢{below[0][0]}{_fmt_num(below[0][1])}")
-    return "｜".join(parts)
+    if not px:
+        return "| 结构 | 价格 | 距现价 |\n|:---|:---:|---:|\n| ⚠现价 | 待采集 | — |"
+    vals = []
+    for lab, v in (("VAH", vah), ("VWAP", vwap), ("POC", poc), ("VAL", val)):
+        if v:
+            try:
+                vals.append((lab, float(str(v).replace(",", ""))))
+            except Exception:
+                pass
+    if not vals:
+        return f"| 结构 | 价格 | 距现价 |\n|:---|:---:|---:|\n| ⚠现价 | `{_fmt_num(px)}` | — |"
+    above = sorted([x for x in vals if x[1] > px], key=lambda x: x[1])
+    below = sorted([x for x in vals if x[1] < px], key=lambda x: -x[1])
+    a = above[0] if above else None
+    b = below[0] if below else None
+    rows = []
+    if a:
+        dist = f"{(a[1] - px) / px * 100:+.2f}%"
+        rows.append(f"| 🔴{a[0]} 上 | `{_fmt_num(a[1])}` | {dist} |")
+    rows.append(f"| ⚖**现价** | `{_fmt_num(px)}` | — |")
+    if b:
+        dist = f"{(b[1] - px) / px * 100:+.2f}%"
+        rows.append(f"| 🟢{b[0]} 下 | `{_fmt_num(b[1])}` | {dist} |")
+    return "| 结构 | 价格 | 距现价 |\n|:---|:---:|---:|\n" + "\n".join(rows)
 
 
 def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: str = "BTCUSDT", price: float = 0, mode: str = "push") -> str:
@@ -163,7 +169,6 @@ def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: st
 
 def _render_push(symbol, price, grade, direction, treatment, signal, conclusion, htf, oi_status, cvd_flow, vol_status, share_data, liq_data, vwap, vah, val, poc, operation, entry, stop, target, magnet_up, magnet_down, check, main, sub, dual) -> str:
     short_sym = symbol.replace("USDT", "").replace(".P", "")
-    structure = _level_strip(vwap, vah, val, poc, price)
     tf_line = _tf_mini(main, symbol)
     conclusion_clean = _clean_text(conclusion or signal or treatment, 28) or "待确认"
     entry_clean = _clean_text(entry, 22) if entry else _fmt_num(price)
@@ -176,7 +181,7 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
 
     lines = [
         f"📊 {short_sym} · {_now_chinese()}",
-        structure,
+        _level_table(vwap, vah, val, poc, price),
         f"{_dir_icon(direction)}{direction} · {_grade_icon(grade)}{grade} · {conclusion_clean}",
         tf_line,
         "",
@@ -190,7 +195,7 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
         lines.append(f"| ⭐主推 空 | {entry_clean} | 空 损{stop_clean} 标{target_clean} |")
         lines.append(f"| 🔁备选 多 | {magnet_down_clean} | 主推失效后再看多 |")
     else:
-        lines.append(f"| 🔵主推 等 | {structure} | 等结构位确认 |")
+        lines.append(f"| 🔵主推 等 | {entry_clean} | 等结构位确认 |")
         lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/冲突 | 主副不共振不做 |")
     lines.append("")
@@ -210,10 +215,11 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
 
 
 def _render_full(symbol, price, grade, direction, treatment, signal, conclusion, htf, oi_status, cvd_flow, vol_status, share_data, liq_data, vwap, vah, val, poc, operation, entry, stop, target, magnet_up, magnet_down, check, main, sub, dual) -> str:
-    structure = _level_strip(vwap, vah, val, poc, price)
+    level_tbl = _level_table(vwap, vah, val, poc, price)
     lines = [
         f"📊 {symbol} · {_now_chinese()} · {_grade_icon(grade)}{grade}",
-        f"【结构】{structure}",
+        "【结构位】",
+        level_tbl,
         f"【主推】{_dir_icon(direction)}{direction} · {_clean_text(treatment or operation or conclusion, 34)}",
         "",
         "① 多周期定位（5m→15m→1h→4h→D）",
@@ -238,13 +244,13 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         "|:---|:---|:---|",
     ]
     if direction == "做多":
-        lines.append(f"| ⭐主推 多 | {entry or structure} | 多 损{stop or '—'} 标{target or '—'} |")
+        lines.append(f"| ⭐主推 多 | {entry or '—'} | 多 损{stop or '—'} 标{target or '—'} |")
         lines.append(f"| 🔁备选 空 | {magnet_up or '主推失效'} | 只作失效路径 |")
     elif direction == "做空":
-        lines.append(f"| ⭐主推 空 | {entry or structure} | 空 损{stop or '—'} 标{target or '—'} |")
+        lines.append(f"| ⭐主推 空 | {entry or '—'} | 空 损{stop or '—'} 标{target or '—'} |")
         lines.append(f"| 🔁备选 多 | {magnet_down or '主推失效'} | 只作失效路径 |")
     else:
-        lines.append(f"| 🔵主推 等 | {structure} | 等结构位确认 |")
+        lines.append(f"| 🔵主推 等 | {entry or _fmt_num(price)} | 等结构位确认 |")
         lines.append("| 🔁备选 | 反向破位 | 只作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/主副冲突 | 不做 |")
     lines.append("")

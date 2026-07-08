@@ -255,24 +255,21 @@ def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> li
     return clean[:7]
 
 
-def _structure_strip(levels: list[dict], price: float | None) -> str:
-    """结构位前置：把当前价格夹在最近上/下结构之间。"""
+def _structure_table(levels: list[dict], price: float | None) -> str:
+    """结构位前置：真管道表（上结构位 / 现价 / 下结构位）。替代旧的全角竖线伪表格行。"""
     if not price:
-        return "⚖现价待采集"
+        return "| 结构位 | 价格 | 距现价 |\n|:---|:---:|---:|\n| ⚠现价 | 待采集 | — |"
     above = [x for x in levels if x["level"] > float(price)]
     below = [x for x in levels if x["level"] < float(price)]
-    mid = [x for x in levels if x["level"] == float(price)]
     a = above[0] if above else None
     b = below[0] if below else None
-    parts = []
+    rows = []
     if a:
-        parts.append(f"{a['icon']}{a['kind']}{_num(a['level'])}")
-    parts.append(f"⚖现{_num(price)}")
+        rows.append(f"| {a['icon']}{a['kind']} 上 | `{_num(a['level'])}` | {a['dist']} |")
+    rows.append(f"| ⚖**现价** | `{_num(price)}` | — |")
     if b:
-        parts.append(f"{b['icon']}{b['kind']}{_num(b['level'])}")
-    if mid:
-        parts.insert(0, f"⚖{mid[0]['kind']}")
-    return "｜".join(parts)
+        rows.append(f"| {b['icon']}{b['kind']} 下 | `{_num(b['level'])}` | {b['dist']} |")
+    return "| 结构位 | 价格 | 距现价 |\n|:---|:---:|---:|\n" + "\n".join(rows)
 
 
 def _dual_short(dual: dict | None, ac: str) -> tuple[str, str, str]:
@@ -352,7 +349,6 @@ def render_v96_card(
     bias = _bias_label(direction, status)
     display = _display_symbol(symbol)
     levels_prepared = _prepare_levels(levels or [], klines, price)
-    structure = _structure_strip(levels_prepared, price)
     svp_short, haldro_short, dual_verdict = _dual_short(dual_indicator, ac)
 
     dir_a = "空" if bearish else "多"
@@ -399,9 +395,10 @@ def render_v96_card(
 
     lines: list[str] = []
     lines.append(f"📊 {display} · {now} · {s_emoji}{status} · {bias}")
-    lines.append(f"【现在】{structure}")
-    lines.append(f"【做法】只执行{recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')} · {recommend_trigger} · {recommend_rr}")
-    lines.append(f"【依据】SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict}")
+    lines.append("【现在】结构位")
+    lines.append(_structure_table(levels_prepared, price))
+    lines.append(f"**【做法】** 只执行{recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')} · {recommend_trigger} · {recommend_rr}")
+    lines.append(f"**【依据】** SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict}")
     lines.append("")
 
     lines.append("① 周期体温 / 多周期定位（D→4h→1h→15m→5m）")
