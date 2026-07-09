@@ -97,10 +97,18 @@ def try_launch() -> bool:
     tv_exe = next((p for p in TV_CANDIDATES if os.path.exists(p)), None)
     if not tv_exe:
         return False
+    # 关键修复：清掉 ELECTRON_RUN_AS_NODE 等 env 污染。
+    # Hermes 终端默认带 ELECTRON_RUN_AS_NODE=1，会让 TV Desktop(Electron)
+    # 以 node 模式启动并拒绝 Chromium flag ("bad option: --remote-debugging-port")。
+    # 必须清掉该 env 才能正常带 CDP 端口启动。
+    child_env = os.environ.copy()
+    child_env.pop("ELECTRON_RUN_AS_NODE", None)
+    child_env.pop("ELECTRON_DISABLE_SANDBOX", None)
     try:
         subprocess.Popen(
             [tv_exe, f"--remote-debugging-port={PORT}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=child_env,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         for _ in range(8):
