@@ -762,10 +762,21 @@ def main():
     if report:
         print(report)
         # v9.7: 统一走 RichMarkdown 真表格通道推 TG（替代 cron MarkdownV2 退化）
+        # v9.8: 加 dedup 限频——内容变化或每1小时强制推一次，避免每30分无脑轰炸
         try:
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from telegram_reliable import push_tg_rich
-            push_tg_rich("telegram:-1003733144325:846", report)
+            from alert_dedup import should_send
+            if should_send("orion_radar", report, force_every_seconds=3600):
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from telegram_reliable import push_tg_rich
+                push_tg_rich("telegram:-1003733144325:846", report)
+        except ImportError:
+            # alert_dedup 不可用时退化为直接推（不丢报告）
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from telegram_reliable import push_tg_rich
+                push_tg_rich("telegram:-1003733144325:846", report)
+            except Exception as _te:
+                log(f"⚠ Orion报告RichMarkdown推送失败: {_te}")
         except Exception as _te:
             log(f"⚠ Orion报告RichMarkdown推送失败: {_te}")
     log(f"⏱ 总耗时 {elapsed():.1f}s")

@@ -195,10 +195,21 @@ def _print_table(data: dict):
     lines.append(f"**总体结论**: {concl}。")
     output = "\n".join(lines)
     print(output)
+    # v9.8: 加 dedup 限频——内容变化或每1小时强制推一次，避免每30分无脑轰炸
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from telegram_reliable import push_tg_rich
-        push_tg_rich("telegram:-1003733144325:846", output)
+        from alert_dedup import should_send
+        if should_send("deribit_options", output, force_every_seconds=3600):
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", output)
+    except ImportError:
+        # alert_dedup 不可用时退化为直接推（不丢报告）
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from telegram_reliable import push_tg_rich
+            push_tg_rich("telegram:-1003733144325:846", output)
+        except Exception as _te:
+            print(f"⚠ Deribit期权RichMarkdown推送失败: {_te}", file=sys.stderr)
     except Exception as _te:
         print(f"⚠ Deribit期权RichMarkdown推送失败: {_te}", file=sys.stderr)
 
