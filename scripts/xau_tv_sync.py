@@ -30,6 +30,15 @@ if hermes_venv.exists():
 
 
 async def _run():
+    # 端口探测前置：TV Desktop CDP(9222)未开则静默退出，避免启动 node 超时/异常
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", 9222)) != 0:
+                print("⚠ TV Desktop(9222)未运行，XAU同步跳过")
+                return 0
+    except Exception:
+        return 0
     try:
         from mcp.client.stdio import stdio_client, StdioServerParameters
         from fetch_tv_mcp import (
