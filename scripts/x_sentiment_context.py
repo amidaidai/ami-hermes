@@ -209,7 +209,13 @@ def main() -> int:
 **总体结论**: {fg_icon}情绪**{fgcls}**（{fg_note}）· 恐惧贪婪{fgv} · **{'🔥资金偏热FOMO' if (trending.get('fomo_score',0) or 0)>=4 else '❄️热度冷清' if (trending.get('fomo_score',0) or 0)<2 else '🌡️温和关注'}**{' · 有Orion共振候选可跟' if orion else ''}。"""
         sys.path.insert(0, "D:/Hermes agent/scripts")
         from telegram_reliable import push_tg_rich
-        push_tg_rich("telegram:-1003733144325:846", rich)
+        # v9.8: 加 dedup 限频——内容变化或每2小时强制推一次，避免每小时无脑轰炸
+        try:
+            from alert_dedup import should_send
+            if should_send("x_sentiment_llm", rich, force_every_seconds=7200):
+                push_tg_rich("telegram:-1003733144325:846", rich)
+        except ImportError:
+            push_tg_rich("telegram:-1003733144325:846", rich)
     except Exception as _te:
         print(f"⚠ X情绪快照RichMarkdown推送失败: {_te}", file=sys.stderr)
 

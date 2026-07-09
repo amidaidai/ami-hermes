@@ -416,7 +416,15 @@ def main() -> int:
         print(report)
         sys.path.insert(0, str(SCRIPTS))
         from telegram_reliable import push_tg_rich
-        ok, reason = push_tg_rich("telegram:-1003733144325:846", report)
+        # v9.8: 加 dedup 限频——内容变化或每2小时强制推一次，避免每小时无脑轰炸
+        try:
+            from alert_dedup import should_send
+            if should_send("signal_confluence", report, force_every_seconds=7200):
+                ok, reason = push_tg_rich("telegram:-1003733144325:846", report)
+            else:
+                ok, reason = True, "dedup_skip"
+        except ImportError:
+            ok, reason = push_tg_rich("telegram:-1003733144325:846", report)
         print(f"[TG] ok={ok} reason={reason}", file=sys.stderr)
         return 0 if ok else 1
     except Exception as e:  # noqa: BLE001

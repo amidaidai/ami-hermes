@@ -497,7 +497,9 @@ def main() -> int:
             push_tg_rich("telegram:-1003733144325:846", report)
         except Exception as _te:
             print(f"⚠ BTC关键位失败告警RichMarkdown推送失败: {_te}", file=sys.stderr)
-        return 1
+        # v9.8: TV MCP 偶断时降级 exit 0，不因单一数据源(TV)偶断拖垮 cron
+        # 失败信息已推TG + 落盘 error.json，cron 看到 exit 0 不会误报
+        return 0
 
 
 if __name__ == "__main__":
