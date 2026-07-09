@@ -361,7 +361,13 @@ def push_tg_rich(target: str, text: str, token: str | None = None) -> tuple[bool
 
     不走 hermes send / cron 的 MarkdownV2 退化通道，直接 sendRichMessage
     渲染真表格。供所有推 TG 的 no_agent 脚本调用。失败落盘 pending。
+
+    夜间静默：23:00–08:00 不推送（后台计算仍跑，cron 视为正常完成），
+    返回 (True, "silent_night") 避免 cron 误判失败 / pending 堆积。
     """
+    now_h = datetime.now(TZ).hour
+    if now_h >= 23 or now_h < 8:
+        return True, "silent_night"
     return send_telegram_reliable(target, text, token=token, parse_mode="RichMarkdown", retries=3)
 
 

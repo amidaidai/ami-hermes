@@ -220,7 +220,11 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         f"📊 {symbol} · {_now_chinese()} · {_grade_icon(grade)}{grade}",
         "【结构位】",
         level_tbl,
-        f"【主推】{_dir_icon(direction)}{direction} · {_clean_text(treatment or operation or conclusion, 34)}",
+        "【决策摘要】",
+        "| 维度 | 内容 |",
+        "|:---|:---|",
+        f"| 主推 | {_dir_icon(direction)}{direction} · {_clean_text(treatment or operation or conclusion, 34)} |",
+        f"| 裁决 | {_dir_icon(direction)}{direction} · 主副指标已纳入 · 不再只看单行信号 |",
         "",
         "① 多周期定位（5m→15m→1h→4h→D）",
         _tf_mini(main, symbol),
@@ -254,7 +258,6 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         lines.append("| 🔁备选 | 反向破位 | 只作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/主副冲突 | 不做 |")
     lines.append("")
-    lines.append(f"【裁决】{_dir_icon(direction)}{direction} · 主副指标已纳入 · 不再只看单行信号")
     return "\n".join(lines) + "\n"
 
 
