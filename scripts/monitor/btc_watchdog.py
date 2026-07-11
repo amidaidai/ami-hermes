@@ -1,93 +1,147 @@
 #!/usr/bin/env python3
-"""BTC daemon watchdog — 1m cron, restarts if heartbeat stale >120s"""
-import json, os, subprocess, time
+# -*- coding: utf-8 -*-
+"""BTC daemon watchdog — 5m cron, restarts if heartbeat stale >120s.
+
+铁律（2026-07-11 审计复发后加固）：
+1. 启动前用 psutil 杀掉所有 btc_daemon.py 实例，不只依赖 PID 文件。
+2. 清锁 + 写 PID 文件，确保下次能追踪。
+3. 不用 shell start /B；用 Popen 直接启动 python 子进程。
+4. 启动后验证进程真的存在，否则推 TG 告警。
+"""
+import json, os, subprocess, sys, time
 from pathlib import Path
 from datetime import datetime
 
-DAEMON = "D:/Hermes agent/scripts/btc_daemon.py"
-HEARTBEAT = "D:/Hermes agent/data/.btc_daemon_heartbeat.json"
-PID_FILE = "D:/Hermes agent/data/.btc_daemon.pid"
+DAEMON = Path("D:/Hermes agent/scripts/btc_daemon.py").resolve()
+HEARTBEAT = Path("D:/Hermes agent/data/.btc_daemon_heartbeat.json")
+PID_FILE = Path("D:/Hermes agent/data/.btc_daemon.pid")
+LOCK_FILE = Path("D:/Hermes agent/data/.btc_daemon.lock")
 WORKDIR = "D:/Hermes agent"
 
 
 def log(m):
-    # 正常心跳不输出；异常重启只输出下方3表，避免Telegram收到调试散行。
     return None
 
 
-# Check heartbeat
-hb = None
-try:
-    with open(HEARTBEAT) as f:
-        hb = json.load(f)
-except Exception:
-    pass
+def _now_ts() -> float:
+    return time.time()
 
-now = time.time()
-alive = False
 
-if hb and "ts" in hb:
+def _heartbeat_age() -> float | None:
     try:
-        dt = datetime.fromisoformat(hb["ts"])
-        age = now - dt.timestamp()
-        if age < 120:
-            alive = True
-    except Exception as e:
-        log(f"hb parse: {e}")
+        with open(HEARTBEAT) as f:
+            hb = json.load(f)
+        ts = hb.get("ts")
+        if not ts:
+            return None
+        dt = datetime.fromisoformat(ts)
+        return _now_ts() - dt.timestamp()
+    except Exception:
+        return None
 
-if alive:
-    # All good: stdout 必须为空；状态详情留给本地 heartbeat/log，不推送。
-    exit(0)
 
-# Daemon dead — restart
-log("Heartbeat stale, restarting daemon...")
+def _list_daemon_instances() -> list[int]:
+    import psutil
+    pids = []
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        cmd = " ".join(p.info["cmdline"] or [])
+        if str(DAEMON) in cmd or "btc_daemon.py" in cmd:
+            pids.append(p.info["pid"])
+    return pids
 
-# Kill old PID if file exists
-old = "无"
-try:
-    if os.path.exists(PID_FILE):
-        with open(PID_FILE) as f:
-            old = f.read().strip()
-        if old.isdigit():
-            subprocess.run(["taskkill", "/F", "/PID", old],
-                           capture_output=True, timeout=5)
-            log(f"Killed old PID {old}")
-except Exception as e:
-    log(f"kill old: {e}")
 
-# Start new daemon — use start /B (background, same console)
-cmd = f'start /B python "{DAEMON}"'
-log(f"Running: {cmd}")
-subprocess.Popen(
-    cmd, shell=True, cwd=WORKDIR,
-    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-)
+def _kill_instances(pids: list[int]) -> None:
+    import psutil
+    for pid in pids:
+        try:
+            psutil.Process(pid).terminate()
+            try:
+                psutil.Process(pid).wait(timeout=5)
+            except Exception:
+                psutil.Process(pid).kill()
+        except Exception:
+            pass
 
-now_cn = datetime.now().strftime('%Y年%m月%d日%H：%M')
-report = f"""⚠ BTC守护重启 · {now_cn}
+
+def _clean_locks() -> None:
+    for f in (PID_FILE, LOCK_FILE):
+        try:
+            if f.exists():
+                f.unlink()
+        except Exception:
+            pass
+
+
+def _start_daemon() -> int | None:
+    import psutil
+    # 用当前解释器启动守护进程，避免多 python 版本混乱
+    exe = sys.executable
+    proc = subprocess.Popen(
+        [exe, str(DAEMON)],
+        cwd=WORKDIR,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    # 等待并验证
+    time.sleep(2)
+    try:
+        psutil.Process(proc.pid)
+        PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+        return proc.pid
+    except Exception:
+        return None
+
+
+def _send_report(reason: str, old_count: int, new_pid: int | None) -> None:
+    now_cn = datetime.now().strftime("%Y年%m月%d日%H：%M")
+    report = f"""⚠ BTC守护重启 · {now_cn} · {reason}
 
 | 项目 | 数据 | 状态 |
 |:----|:----|:----|
-| 守护 | btc_daemon.py | 已重启 |
+| 守护 | btc_daemon.py | {'已重启 PID=' + str(new_pid) if new_pid else '启动失败'} |
 | 心跳 | 超过`120s` | 失联 |
 | 目标 | TG386信号源 | 恢复中 |
 
 | 模块 | 数据 | 状态 |
 |:----|:----|:----|
-| 旧PID | `{old if 'old' in globals() else '无'}` | 已清理 |
-| 新进程 | start/B python | 已拉起 |
+| 旧实例数 | `{old_count}` | 已清理 |
+| 新进程 | python.exe | {'已拉起' if new_pid else '失败'} |
 | 日志 | stdout静默 | 防刷屏 |
 
 | 方向 | 触发 | 动作 |
 |:---:|:----|:----|
 | ○观察 | 2分钟后有心跳 | 无需操作 |
 | ×修复 | 继续失联 | 查daemon日志 |"""
-print(report)
-# v9.7: 统一走 RichMarkdown 真表格通道推 TG
-try:
-    import sys
-    sys.path.insert(0, "D:/Hermes agent/scripts")
-    from telegram_reliable import push_tg_rich
-    push_tg_rich("telegram:-1003733144325:846", report)
-except Exception as _te:
-    print(f"⚠ BTC守护告警RichMarkdown推送失败: {_te}", file=sys.stderr)
+    print(report)
+    try:
+        sys.path.insert(0, "D:/Hermes agent/scripts")
+        from telegram_reliable import push_tg_rich
+        push_tg_rich("telegram:-1003733144325:846", report)
+    except Exception as _te:
+        print(f"⚠ BTC守护告警RichMarkdown推送失败: {_te}", file=sys.stderr)
+
+
+def main() -> int:
+    age = _heartbeat_age()
+    # 心跳新鲜 → 静默退出，不打扰
+    if age is not None and age < 120:
+        return 0
+
+    reason = f"心跳失联 age={age:.0f}s" if age is not None else "心跳文件不存在"
+    old_pids = _list_daemon_instances()
+    if old_pids:
+        _kill_instances(old_pids)
+        time.sleep(1)
+        # double-check
+        remaining = _list_daemon_instances()
+        if remaining:
+            _kill_instances(remaining)
+    _clean_locks()
+    new_pid = _start_daemon()
+    _send_report(reason, len(old_pids), new_pid)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

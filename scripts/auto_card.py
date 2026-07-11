@@ -2540,14 +2540,17 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     # v9.7: XAUUSDT 在 Binance 可能不存在/慢，限制 timeout 避免管线卡住
     klines = {}
     _raw_klines_multi = {}
-    from binance_public import fetch_spot
+    from binance_public import fetch_spot, fetch_futures
+    # XAUUSDT 在 Binance 现货不存在，只能走 U 本位期货 public K线
+    _kl_fetcher = fetch_futures if is_xau else fetch_spot
+    _kl_path = "/fapi/v1/klines" if is_xau else "/api/v3/klines"
     _xau_tf_limit = [("15m", 100), ("1h", 100)] if is_xau else [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]
-    _xau_timeout = 3 if is_xau else 6
+    _xau_timeout = 4 if is_xau else 6
     for tf, limit in _xau_tf_limit:
         _ok = False
         try:
-            data = fetch_spot(
-                "/api/v3/klines",
+            data = _kl_fetcher(
+                _kl_path,
                 {"symbol": sym, "interval": tf, "limit": limit},
                 timeout=_xau_timeout,
             )

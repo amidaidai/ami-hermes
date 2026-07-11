@@ -9,6 +9,7 @@ Binance Futures response.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -31,7 +32,9 @@ FAPI_HEALTH_SECONDS = 300.0
 
 
 def _opener():
-    """Use a direct connection; provider traffic must not inherit a local proxy."""
+    """Respect system proxy if one is configured (Hermes env needs it); otherwise direct."""
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
+        return urllib.request.build_opener()
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -68,6 +71,21 @@ def fapi_available(timeout: int = 2) -> bool:
     _FAPI_HEALTH = isinstance(payload, dict) and bool(payload.get("serverTime"))
     _FAPI_HEALTH_AT = now
     return _FAPI_HEALTH
+
+
+def fetch_futures(path: str, params: dict[str, Any] | None = None, timeout: int = 8) -> Any:
+    """Fetch Binance USD-M futures public market data."""
+    query = urllib.parse.urlencode(params or {})
+    suffix = f"?{query}" if query else ""
+    now = time.monotonic()
+    base = "https://fapi.binance.com"
+    if _HOST_DOWN_UNTIL.get(base, 0.0) > now:
+        return None
+    payload = fetch_url(f"{base}{path}{suffix}", timeout=timeout)
+    if payload is not None and not (isinstance(payload, dict) and payload.get("code")):
+        return payload
+    _HOST_DOWN_UNTIL[base] = time.monotonic() + HOST_COOLDOWN_SECONDS
+    return None
 
 
 def fetch_orion_ticker(symbol: str, timeout: int = 15) -> dict[str, Any] | None:
