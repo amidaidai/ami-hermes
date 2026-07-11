@@ -52,8 +52,8 @@ GATE_RULES = {
     "dual_indicator": {
         "weight": 2,
         "description": "双指标共振",
-        "pass_condition": "SVP主方向与HALDRO副指标同向或副指标不适用",
-        "red_light": "SVP主驾驶与HALDRO副驾驶强冲突，禁止A级执行"
+        "pass_condition": "SVP主方向与有效HALDRO同向或副指标不适用",
+        "red_light": "SVP主驾驶与聚合有效HALDRO强冲突，禁止执行"
     },
     "portfolio_exposure": {
         "weight": 1,
@@ -181,10 +181,15 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     dual = engine_data.get("_dual_indicator_verdict") or {}
     if not isinstance(dual, dict):
         dual = {}
-    if dual.get("conflict"):
+    hard_conflict = dual.get("hard_conflict") if "hard_conflict" in dual else dual.get("conflict")
+    valid_code = dual.get("valid_code", 2 if dual.get("usable") else 0)
+    if hard_conflict:
         gates["dual_indicator"] = {"status": "red", "reason": GATE_RULES["dual_indicator"]["red_light"]}
         red_gates.append("dual_indicator")
         go = False
+    elif dual.get("conflict") and valid_code == 1:
+        gates["dual_indicator"] = {"status": "yellow", "reason": "HALDRO单源回退与SVP冲突·只等待不执行"}
+        yellow_gates.append("dual_indicator")
     elif dual.get("usable") or not dual.get("asset_is_crypto", True):
         reason = dual.get("direction_verdict") or "主副指标已读"
         gates["dual_indicator"] = {"status": "green", "reason": reason}
@@ -205,15 +210,28 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         red_gates.append("portfolio_exposure")
         go = False
 
+    # FinalVerdict 是渲染/告警/仓位/执行的唯一真相源。旧八闸门只负责诊断，
+    # 不能在 FinalVerdict=WAIT/NO-GO 时重新把计划判成可执行。
+    final = engine_data.get("_final_verdict") or {}
+    if not isinstance(final, dict):
+        final = {}
+    final_state = str(final.get("state") or "").upper()
+    final_reason = str(final.get("reason") or "")
+    if final and not bool(final.get("executable", False)):
+        go = False
+
     green_count = sum(1 for g in gates.values() if g["status"] == "green")
     yellow_count = len(yellow_gates)
     red_count = len(red_gates)
     
-    verdict = (
-        f"✅ GO · 绿灯{green_count}/8"
-        if go
-        else f"✗ NO-GO · 红灯{red_count}灯·{'/'.join(red_gates[:3])}"
-    )
+    if final_state == "WAIT":
+        verdict = f"○ WAIT · {final_reason or '等待触发完成'} · 绿灯{green_count}/8"
+    elif final_state == "NO-GO":
+        verdict = f"✗ NO-GO · {final_reason or '/'.join(red_gates[:3])}"
+    elif go:
+        verdict = f"✅ GO · {final_state or 'LEGACY'} · 绿灯{green_count}/8"
+    else:
+        verdict = f"✗ NO-GO · 红灯{red_count}灯·{'/'.join(red_gates[:3])}"
 
     return {
         "go": go,
@@ -224,6 +242,8 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         "green_count": green_count,
         "red_count": red_count,
         "yellow_count": yellow_count,
+        "final_state": final_state or ("GO" if go else "NO-GO"),
+        "final_reason": final_reason,
         "gates": gates,
         "verdict": verdict,
         "timestamp": now,
@@ -232,7 +252,11 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
 
 def gate_report_card(result: dict, symbol: str) -> str:
     """生成GO/NO-GO报告卡（追加到分析卡尾部）。"""
-    if result["go"]:
+    final_state = str(result.get("final_state") or "")
+    if final_state == "WAIT":
+        emoji = "○"
+        status_text = "WAIT · 等待，不执行"
+    elif result["go"]:
         emoji = "✅"
         status_text = "GO · 允许执行"
     else:

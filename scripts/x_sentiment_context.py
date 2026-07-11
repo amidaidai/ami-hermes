@@ -72,8 +72,8 @@ def fetch_global() -> dict:
 
 
 def fetch_binance_24h(symbol: str) -> dict:
-    q = urllib.parse.urlencode({"symbol": symbol})
-    data = fetch_json(f"https://api.binance.com/api/v3/ticker/24hr?{q}", 8)
+    from binance_public import fetch_spot
+    data = fetch_spot("/api/v3/ticker/24hr", {"symbol": symbol}, timeout=8) or {}
     return {
         "symbol": symbol,
         "price": float(data.get("lastPrice", 0)),

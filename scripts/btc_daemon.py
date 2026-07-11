@@ -32,7 +32,7 @@ SIGNAL_FILE = DATA_DIR / "btc_signal.json"
 STATE_FILE = DATA_DIR / ".btc_daemon_state.json"
 PID_FILE = DATA_DIR / ".btc_daemon.pid"
 
-BINANCE_API = "https://api.binance.com"
+BINANCE_APIS = ("https://api.binance.com", "https://data-api.binance.vision")
 TARGET = "telegram:-1003733144325:386"
 TZ = timezone(timedelta(hours=8))
 POLL_S = 15
@@ -99,13 +99,17 @@ def fetch(url):
     except: return None
 
 def get_price():
-    d = fetch(f"{BINANCE_API}/api/v3/ticker/price?symbol=BTCUSDT")
-    return float(d["price"]) if d and "price" in d else None
+    for base in BINANCE_APIS:
+        d = fetch(f"{base}/api/v3/ticker/price?symbol=BTCUSDT")
+        if d and "price" in d:
+            return float(d["price"])
+    return None
 
 def get_klines(limit=30):
-    d = fetch(f"{BINANCE_API}/api/v3/klines?symbol=BTCUSDT&interval=15m&limit={limit}")
-    if d:
-        return [{"t":k[0],"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in d]
+    for base in BINANCE_APIS:
+        d = fetch(f"{base}/api/v3/klines?symbol=BTCUSDT&interval=15m&limit={limit}")
+        if d:
+            return [{"t":k[0],"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in d]
     return None
 
 def detect_zone(price):

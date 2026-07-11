@@ -66,16 +66,16 @@ def fetch_klines_after(symbol: str, start_ms: int, interval: str = INTERVAL,
                        limit: int = MAX_BARS) -> list:
     """拉取 start_ms 之后的 K 线（含入场当根之后）。"""
     try:
-        r = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={"symbol": symbol, "interval": interval,
-                    "startTime": start_ms, "limit": limit},
+        from binance_public import fetch_spot
+        rows = fetch_spot(
+            "/api/v3/klines",
+            {"symbol": symbol, "interval": interval, "startTime": start_ms, "limit": limit},
             timeout=10,
         )
-        if r.status_code != 200:
+        if not isinstance(rows, list):
             return []
         return [[float(x[0]), float(x[1]), float(x[2]), float(x[3]),
-                 float(x[4]), float(x[5])] for x in r.json()]
+                 float(x[4]), float(x[5])] for x in rows]
     except Exception as e:
         print(f"  ⚠ klines {symbol}: {e}")
         return []

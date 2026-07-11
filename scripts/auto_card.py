@@ -15,7 +15,7 @@
   4. 可选推送 Telegram
 """
 
-import sys, json, time
+import sys, json, time, re, subprocess, os
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -317,8 +317,14 @@ def _tv_cache_indicators_to_studies(cache: dict | None) -> list[dict]:
         "mcp_setup_score": "MCP Setup Score", "mcp_entry_price": "MCP Entry Price",
         "mcp_stop_price": "MCP Stop Price", "mcp_target_price": "MCP Target Price",
         "mcp_cvd_value": "MCP CVD Value", "mcp_quality_code": "MCP Quality Code",
+        "mcp_cvd_method_code": "MCP CVD Method Code (2=lower-TF estimate,1=bar estimate)",
+        "mcp_ema_length_1": "MCP EMA Length 1", "mcp_ema_length_2": "MCP EMA Length 2",
+        "mcp_ema_length_3": "MCP EMA Length 3", "mcp_ema_length_4": "MCP EMA Length 4",
+        "mcp_struct_pack": "MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))",
+        "mcp_risk_pack": "MCP Risk Pack (Risk%*10000+DailyLoss%*100+WeeklyLoss%)",
         "mcp_bull_fvg_ce": "MCP Bull FVG CE", "mcp_bear_fvg_ce": "MCP Bear FVG CE",
         "mcp_fvg_quality_code": "MCP FVG Quality Code",
+        "mcp_fvg_quality_score": "MCP FVG Quality Score", "mcp_ob_quality_score": "MCP OB Quality Score",
     }
     sub_map = {
         "oi_total": "OI Total", "estimated_cvd_value": "Estimated CVD Value", "cvd_value": "Estimated CVD Value",
@@ -328,7 +334,8 @@ def _tv_cache_indicators_to_studies(cache: dict | None) -> list[dict]:
         "coverage_spot": "Coverage Spot", "coverage_perp": "Coverage Perp",
         "coverage_feed_mode": "Coverage Feed Mode", "exchange_dominance_%": "Exchange Dominance %",
         "exchange_dominance_pct": "Exchange Dominance %", "confirm_score": "Confirm Score",
-        "composite": "Composite",
+        "haldro_valid_code": "HALDRO Valid Code", "haldro_risk_code": "HALDRO Risk Code",
+        "oi_change_pct_normalized": "OI Change % (Normalized)", "composite": "Composite",
     }
     main_vals = {tv_key: indicators[src] for src, tv_key in main_map.items() if src in indicators}
     sub_vals = {tv_key: indicators[src] for src, tv_key in sub_map.items() if src in indicators}
@@ -360,6 +367,51 @@ def _tv_cache_decision_tables(cache: dict, grade: str = "C等待", treatment: st
     if sub_rows and any(r.startswith("信号 |") for r in sub_rows):
         tables.append({"name": "Volume Aggregated", "tables": [{"rows": sub_rows}]})
     return tables
+
+
+def _tv_symbol_cache_path(symbol: str) -> Path:
+    raw = str(symbol or "").upper().split(":")[-1]
+    if raw.endswith(".P"):
+        raw = raw[:-2]
+    key = "".join(ch for ch in raw if ch.isalnum())
+    if key.endswith("PERP"):
+        key = key[:-4]
+    return DATA / f"tv_live_{key}.json"
+
+
+def _tv_live_levels(cache: dict) -> tuple[float, float, float]:
+    """读取tv_live顶层结构位；顶层为空时回退Data Window indicators。"""
+    indicators = cache.get("indicators") if isinstance(cache, dict) else {}
+    if not isinstance(indicators, dict):
+        indicators = {}
+    def level(name: str) -> float:
+        raw = cache.get(name)
+        if raw in (None, ""):
+            raw = indicators.get(f"{name}_price")
+        return _decision_float(raw)
+    return level("poc"), level("vah"), level("val")
+
+
+def _inject_tv_live_pine(engine_data: dict, cache: dict) -> bool:
+    """把已通过symbol/fresh门禁的tv_live缓存提升为本轮唯一TV指标输入。"""
+    if not isinstance(engine_data, dict) or not isinstance(cache, dict):
+        return False
+    studies = cache.get("studies", []) or _tv_cache_indicators_to_studies(cache)
+    grade = cache.get("grade") or "C等待"
+    treatment = cache.get("treatment") or cache.get("action") or "?"
+    tables = _tv_cache_decision_tables(cache, grade=str(grade), treatment=str(treatment))
+    if not tables and isinstance(cache.get("table_raw"), list):
+        rows = [f"等级 | {grade}", f"处理 | {treatment}", *cache["table_raw"]]
+        tables = [{"name": "SVP+ICT+VWAP+CVD", "tables": [{"rows": rows}]}]
+        if isinstance(cache.get("sub_table_raw"), list):
+            tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
+    if not studies and not tables:
+        return False
+    engine_data["_tv_pine"] = {"studies": studies, "tables": tables}
+    # 防止同一轮前段读取的cron缓存继续覆盖刚验证的tv_live数据。
+    engine_data.pop("_tv_main", None)
+    engine_data.pop("_tv_sub", None)
+    return True
 
 
 def _parse_tv_sub_table(tv_tables: list | None) -> dict:
@@ -438,7 +490,10 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
             "coverage": tv_main.get("sub_coverage_exchanges"),
             "volume": tv_main.get("sub_volume_ratio"),
             "lsr": tv_main.get("sub_lsr"),
-            "risk": tv_main.get("sub_cvd_quality_code"),
+            "oi_change_pct": tv_main.get("sub_oi_change_pct_normalized"),
+            "valid_code": tv_main.get("sub_haldro_valid_code"),
+            "risk_code": tv_main.get("sub_haldro_risk_code"),
+            "risk": tv_main.get("sub_haldro_risk_code") or tv_main.get("sub_cvd_quality_code"),
         }
 
     status = str(meta.get("status") or tv_main.get("grade") or "C等待")
@@ -465,8 +520,13 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "quality_verdict": "不因HALDRO缺失降级" if not is_crypto else "覆盖不足降级",
         "state": status,
         "conflict": False,
+        "hard_conflict": False,
+        "aligned": False,
+        "valid_code": 0,
+        "risk_code": 0,
         "usable": bool(tv_main) or not is_crypto,
     }
+
     if not is_crypto:
         engine_data["_dual_indicator_verdict"] = dual
         return dual
@@ -478,7 +538,29 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     coverage = tv_main.get("sub_coverage_exchanges") or tv_sub.get("coverage")
     volume_ratio = tv_main.get("sub_volume_ratio") or tv_sub.get("volume")
     lsr = tv_main.get("sub_lsr") or tv_sub.get("lsr")
+    oi_change_pct = tv_main.get("sub_oi_change_pct_normalized") or tv_sub.get("oi_change_pct")
+    risk_raw = tv_main.get("sub_haldro_risk_code")
+    if risk_raw is None:
+        risk_raw = tv_sub.get("risk_code")
+    risk_code = 0
+    try:
+        risk_code = int(float(str(risk_raw).replace("−", "-")))
+    except (TypeError, ValueError):
+        pass
+    risk_defs = ((1, "低覆盖"), (2, "单所主导"), (4, "上级冲突"),
+                 (8, "OI背离"), (16, "CVD背离"), (32, "非加密"), (64, "LSR拥挤"))
+    risk_labels = [label for bit, label in risk_defs if risk_code & bit]
+    risk_text = "、".join(risk_labels) if risk_labels else "无硬风险"
     quality = tv_main.get("sub_cvd_quality_code") or tv_sub.get("risk") or coverage
+    valid_raw = tv_main.get("sub_haldro_valid_code")
+    if valid_raw is None:
+        valid_raw = tv_sub.get("valid_code")
+    valid_code = 1 if valid_raw is None and any(v not in (None, "") for v in (composite, confirm, coverage)) else 0
+    try:
+        if valid_raw is not None:
+            valid_code = int(float(str(valid_raw).replace("−", "-")))
+    except (TypeError, ValueError):
+        pass
 
     comp_text = str(composite) if composite not in (None, "") else "待刷新"
     comp_num = None
@@ -486,6 +568,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         comp_num = float(composite)
     except (TypeError, ValueError):
         pass
+
     if comp_num is not None:
         haldro_dir = "偏多" if comp_num > 0 else "偏空" if comp_num < 0 else "中性"
     elif any(x in comp_text for x in ("多", "买", "long", "LONG", "+")):
@@ -507,25 +590,277 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     svp_short = "空" in status or direction == "short" or "空" in str(svp_dir)
     sub_long = "偏多" in haldro_dir
     sub_short = "偏空" in haldro_dir
-    conflict = (svp_long and sub_short) or (svp_short and sub_long)
+    raw_conflict = (svp_long and sub_short) or (svp_short and sub_long)
     aligned = (svp_long and sub_long) or (svp_short and sub_short)
+    conflict = raw_conflict if valid_code >= 1 else False
+    hard_conflict = raw_conflict and valid_code >= 2
+    crowding_risk = bool(risk_code & 64)
+    flow_risk = bool(risk_code & (4 | 8 | 16))
+    executable_grade = status.startswith(("A", "B", "C反"))
+    downgraded_state = "X禁做观察" if hard_conflict and executable_grade else (
+        "B等待（单源冲突）" if conflict and valid_code == 1 else
+        "B等待（副指标无效）" if valid_code <= 0 and executable_grade else
+        "B等待（副指标风险）" if status.startswith("A") and (crowding_risk or flow_risk) else status
+    )
 
     dual.update({
         "haldro_direction": f"{haldro_dir} · Composite {comp_text}",
-        "haldro_position": f"OI {oi or '待判'} · {lsr_text}",
+        "haldro_position": f"OI {oi or '待判'} · 归一变化 {oi_change_pct if oi_change_pct not in (None, '') else '待判'}% · {lsr_text}",
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
-        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'}",
+        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'} · 风险 {risk_text}",
         "haldro_confirm": f"Confirm {confirm or '待判'}",
-        "direction_verdict": "主副强冲突" if conflict else "主副同向" if aligned else "副指标不足",
+        "direction_verdict": "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if hard_conflict else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
         "structure_verdict": "结构顺向" if aligned else "结构需确认",
-        "flow_verdict": "订单流冲突，不追" if conflict else "订单流支持" if aligned else "等CVD/OI确认",
-        "quality_verdict": "覆盖/质量需确认" if not coverage and not quality else "质量已读",
-        "state": "X禁做观察" if conflict and status.startswith("A") else status,
+        "flow_verdict": "订单流冲突，不追" if conflict else f"订单流风险：{risk_text}" if flow_risk or crowding_risk else "订单流支持" if aligned else "等CVD/OI确认",
+        "quality_verdict": f"副指标降级：{risk_text}" if risk_labels else "质量已读",
+        "state": downgraded_state,
         "conflict": conflict,
-        "usable": bool(tv_sub or composite is not None or confirm is not None),
+        "hard_conflict": hard_conflict,
+        "aligned": aligned and valid_code >= 1,
+        "valid_code": valid_code,
+        "risk_code": risk_code,
+        "usable": valid_code >= 1 and bool(tv_sub or composite is not None or confirm is not None),
     })
+
     engine_data["_dual_indicator_verdict"] = dual
     return dual
+
+
+def _project_final_verdict(main: dict, final: dict) -> dict:
+    """把唯一FinalVerdict投影到现有渲染字段，禁止原始A级订单绕过闸门。"""
+    projected = dict(main or {})
+    projected["_final_verdict"] = dict(final or {})
+    projected["grade"] = final.get("grade") or projected.get("grade") or "C等待"
+    side = final.get("side")
+    projected["direction_text"] = "偏多" if side == "long" else "偏空" if side == "short" else "观望"
+    projected["treatment"] = final.get("reason") or projected.get("treatment") or ""
+    if final.get("executable"):
+        projected["entry"] = final.get("entry")
+        projected["stop"] = final.get("stop")
+        projected["target"] = final.get("target")
+    else:
+        projected.pop("entry", None)
+        projected.pop("stop", None)
+        projected.pop("target", None)
+        projected["execution"] = "不执行·" + str(final.get("state") or "WAIT")
+    return projected
+
+
+def _decision_float(value, default: float = 0.0) -> float:
+    """把TV/卡片数值安全转成float；等待文案、破折号和空值一律降级为默认值。"""
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip().replace(",", "").replace("−", "-").replace("%", "")
+    if not text or text in {"—", "--", "N/A", "None", "null", "待确认", "等触发"}:
+        return default
+    multiplier = 1.0
+    suffix = text[-1:].upper()
+    if suffix in {"K", "M", "B"}:
+        multiplier = {"K": 1e3, "M": 1e6, "B": 1e9}[suffix]
+        text = text[:-1].strip()
+    try:
+        return float(text) * multiplier
+    except (TypeError, ValueError):
+        return default
+
+
+def _tv_vwap_ema_fallback(symbol: str) -> dict:
+    """Build the VWAP/EMA engine contract from fresh TV MCP Data Window fields."""
+    path = _tv_symbol_cache_path(symbol)
+    if not path.exists():
+        return {}
+    try:
+        cache = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not _tv_cache_status(cache, symbol, max_age_minutes=30).get("usable"):
+        return {}
+    indicators = cache.get("indicators") if isinstance(cache.get("indicators"), dict) else {}
+    vwap = _decision_float(indicators.get("s_vwap"))
+    ema9 = _decision_float(indicators.get("ema_9"))
+    ema55 = _decision_float(indicators.get("ema_55"))
+    price = _decision_float(cache.get("last_price"))
+    if not price:
+        snapshot_path = DATA / f"source_snapshot_{str(symbol).upper()}.json"
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
+            prices = snapshot.get("prices") if isinstance(snapshot.get("prices"), dict) else {}
+            price = _decision_float(prices.get("primary"))
+        except (OSError, json.JSONDecodeError):
+            price = 0.0
+    if not (vwap and ema9 and ema55):
+        return {}
+    return {
+        "source": "TV MCP Data Window",
+        "ema": {"9": ema9, "55": ema55},
+        "vwap": {"value": vwap, "price_above": bool(price and price > vwap)},
+        "cvd": _decision_float(indicators.get("mcp_cvd_value") or indicators.get("cumulative_delta")),
+    }
+
+
+def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
+                                tv_main: dict, dual: dict, st_primary: dict,
+                                model_id: str) -> dict:
+    """用真实闭柱特征、HALDRO和风控宪法生成卡片唯一裁决。"""
+    from decision_loop import resolve_final_verdict
+    from decision_regime import classify_decision_regime
+    from feature_builder import build_regime_features, ohlcv_from_binance_klines
+    from risk_constitution_v2 import evaluate_risk
+
+    fk = engine_data.get("futures_klines") or {}
+    ohlcv = None
+    if isinstance(fk, dict) and fk.get("closes"):
+        ohlcv = fk
+    elif isinstance(fk, dict):
+        for key in ("15m", "5m", "1h"):
+            candidate = fk.get(key)
+            if isinstance(candidate, dict) and candidate.get("closes"):
+                ohlcv = candidate
+                break
+        if ohlcv is None:
+            candidates = [v for v in fk.values() if isinstance(v, dict) and v.get("closes")]
+            if candidates:
+                ohlcv = max(candidates, key=lambda value: len(value.get("closes") or []))
+    if ohlcv is None:
+        raw_multi = engine_data.get("_raw_klines_multi") or {}
+        if isinstance(raw_multi, dict):
+            for key in ("15m", "5m", "1h", "4h"):
+                raw_rows = raw_multi.get(key)
+                if isinstance(raw_rows, list) and len(raw_rows) >= 51:
+                    parsed = ohlcv_from_binance_klines(raw_rows, drop_open_bar=True)
+                    if len(parsed.get("closes") or []) >= 50:
+                        ohlcv = parsed
+                        engine_data["_decision_ohlcv_source"] = f"binance:{key}:closed"
+                        break
+
+    regime = None
+    features = build_regime_features(ohlcv, tv_main) if isinstance(ohlcv, dict) else None
+    if features:
+        regime = classify_decision_regime(
+            adx=float(features["adx"] or 0),
+            atr_ratio=float(features["atr_ratio"] or 1),
+            ema_spread_atr=float(features["ema_spread_atr"] or 0),
+            vwap_crosses_20=int(features["vwap_crosses_20"] or 0),
+            va_stay_ratio_20=float(features["va_stay_ratio_20"] or 0),
+            displacement_atr=float(features["displacement_atr"] or 0),
+            rvol=float(features["rvol"] or 0),
+            adr_remaining_ratio=features.get("adr_remaining_ratio"),
+            vwap_distance_atr=features.get("vwap_distance_atr"),
+        )
+        engine_data["_decision_features"] = features
+        engine_data["_decision_regime"] = {
+            "code": regime.code, "name": regime.name,
+            "allowed_models": list(regime.allowed_models),
+            "blocked_models": list(regime.blocked_models),
+            "position_multiplier": regime.position_multiplier,
+            "exhausted": regime.exhausted, "reason": regime.reason,
+        }
+
+    candidate = dict(tv_main or {})
+    numeric_entry = _decision_float(candidate.get("entry"))
+    if numeric_entry <= 0:
+        numeric_entry = _decision_float(engine_data.get("prices", {}).get("primary") or meta.get("entry_price"))
+    numeric_stop = _decision_float(candidate.get("stop"))
+    if numeric_stop <= 0:
+        numeric_stop = _decision_float(st_primary.get("stop"))
+    numeric_target = _decision_float(candidate.get("target"))
+    if numeric_target <= 0:
+        numeric_target = _decision_float(st_primary.get("target"))
+    numeric_rr = _decision_float(candidate.get("rr"))
+    if numeric_rr <= 0:
+        numeric_rr = _decision_float(st_primary.get("rr") or meta.get("rr_a") or meta.get("rr1"))
+    candidate.update({
+        "grade": meta.get("status") or candidate.get("grade") or "C等待",
+        "direction": meta.get("direction") or candidate.get("direction_text") or "",
+        "model_id": model_id,
+        "entry": numeric_entry or None,
+        "stop": numeric_stop or None,
+        "target": numeric_target or None,
+        "rr": numeric_rr,
+    })
+
+    route_candidates = engine_data.get("_candidate_plans")
+    if regime is not None and isinstance(route_candidates, list) and route_candidates:
+        from model_router import select_primary_model
+        route = select_primary_model(route_candidates, regime)
+        if route:
+            for key in ("model_id", "entry", "stop", "target", "rr", "quality"):
+                if route.get(key) not in (None, ""):
+                    candidate[key] = route[key]
+            model_id = str(candidate.get("model_id") or model_id)
+            engine_data["_model_route"] = route
+
+    entry = _decision_float(candidate.get("entry"))
+    atr = _decision_float(st_primary.get("atr") or (features or {}).get("atr"))
+    risk = evaluate_risk({
+        "symbol": symbol,
+        "account_balance": _decision_float(engine_data.get("account_balance") or engine_data.get("balance"), 100.0),
+        "entry_price": entry,
+        "stop_price": _decision_float(candidate.get("stop")),
+        "target_price": _decision_float(candidate.get("target")),
+        "atr": atr,
+        "atr_pct": atr / entry if entry > 0 else 0,
+        "regime_multiplier": regime.position_multiplier if regime else 1.5,
+        "current_drawdown_pct": _decision_float(engine_data.get("_current_drawdown_pct")),
+        "has_major_news": bool(engine_data.get("_banned_live")),
+        "volatility_24h_pct": _decision_float(engine_data.get("_volatility_24h_pct")),
+        "current_bar": int(_decision_float(engine_data.get("_current_bar"))),
+        "total_exposure_pct": _decision_float(engine_data.get("_total_exposure_pct")),
+        "corr_high": bool(engine_data.get("_corr_high")),
+    })
+    engine_data["_risk_v2"] = risk
+    final = resolve_final_verdict(symbol, candidate, dual, regime=regime, risk=risk).to_dict()
+    engine_data["_final_verdict"] = final
+    if engine_data.get("_shadow_enabled"):
+        from shadow_calibration import append_shadow_signal
+        interval_ms = 900_000 if str(symbol).upper().endswith("USDT") else 300_000
+        ts_ms = int(engine_data.get("_snapshot_ts") or time.time() * 1000)
+        signal_id = f"{symbol}:{model_id}:{ts_ms // interval_ms}"
+        watch_entry = final.get("watch_entry") or candidate.get("entry")
+        shadow_entry = _decision_float(watch_entry)
+        shadow_stop = _decision_float(candidate.get("stop"))
+        shadow_target = _decision_float(candidate.get("target"))
+        if shadow_entry > 0 and shadow_stop > 0 and shadow_target > 0:
+            main_snapshot_keys = (
+                "grade", "direction", "direction_text", "model_id", "entry", "stop", "target", "rr",
+                "data_grade", "snapshot_age_sec", "mtf_conflict", "location_valid", "trigger_confirmed",
+                "mcp_fvg_quality_score", "mcp_ob_quality_score",
+            )
+            main_snapshot = {key: candidate.get(key) for key in main_snapshot_keys if key in candidate}
+            main_snapshot.update({
+                "model_id": final.get("model_id") or candidate.get("model_id"),
+                "entry": shadow_entry, "stop": shadow_stop, "target": shadow_target,
+            })
+            dual_snapshot = {
+                key: dual.get(key) for key in (
+                    "asset_is_crypto", "valid_code", "risk_code", "conflict", "hard_conflict", "aligned"
+                ) if key in dual
+            }
+            regime_snapshot = dict(engine_data.get("_decision_regime") or {})
+            risk_snapshot = dict(risk or {})
+            append_shadow_signal(
+                engine_data.get("_shadow_path") or DATA / "shadow" / "decision_signals.jsonl",
+                {
+                    "signal_id": signal_id, "symbol": symbol,
+                    "timeframe": "15m" if str(symbol).upper().endswith("USDT") else "5m",
+                    "ts": ts_ms, "side": final.get("watch_side") or candidate.get("direction"),
+                    "entry": shadow_entry, "stop": shadow_stop,
+                    "target": shadow_target, "model_id": final.get("model_id"),
+                    "regime_code": regime.code if regime else "unknown", "grade": candidate.get("grade"),
+                    "fvg_quality": candidate.get("mcp_fvg_quality_score"),
+                    "ob_quality": candidate.get("mcp_ob_quality_score"),
+                    "haldro_valid_code": dual.get("valid_code"),
+                    "haldro_risk_code": dual.get("risk_code"),
+                    "final_state": final.get("state"), "blockers": final.get("blockers"),
+                    "main": main_snapshot, "dual": dual_snapshot,
+                    "regime": regime_snapshot, "risk": risk_snapshot,
+                    "features": features,
+                },
+            )
+    return final
+
 
 def _unknown_tv_text(value) -> bool:
     s = str(value or "").strip()
@@ -599,11 +934,19 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
             ("MCP Setup Score", "mcp_setup_score"), ("MCP Entry Price", "mcp_entry_price"),
             ("MCP Stop Price", "mcp_stop_price"), ("MCP Target Price", "mcp_target_price"),
             ("MCP CVD Value", "mcp_cvd_value"), ("MCP Quality Code", "mcp_quality_code"),
+            ("MCP CVD Method Code (2=lower-TF estimate,1=bar estimate)", "mcp_cvd_method_code"),
+            ("MCP EMA Length 1", "mcp_ema_length_1"), ("MCP EMA Length 2", "mcp_ema_length_2"),
+            ("MCP EMA Length 3", "mcp_ema_length_3"), ("MCP EMA Length 4", "mcp_ema_length_4"),
+            ("MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))", "mcp_struct_pack"),
+            ("MCP Risk Pack (Risk%*10000+DailyLoss%*100+WeeklyLoss%)", "mcp_risk_pack"),
             ("MCP Bull FVG CE", "mcp_bull_fvg_ce"), ("MCP Bear FVG CE", "mcp_bear_fvg_ce"),
             ("MCP FVG Quality Code", "mcp_fvg_quality_code"),
+            ("MCP FVG Quality Score", "mcp_fvg_quality_score"), ("MCP OB Quality Score", "mcp_ob_quality_score"),
             ("OI Total", "sub_oi_total"), ("Estimated CVD Value", "sub_estimated_cvd_value"),
             ("CVD Method Code", "sub_cvd_method_code"), ("CVD Quality Code", "sub_cvd_quality_code"),
             ("LSR", "sub_lsr"),
+            ("OI Change % (Normalized)", "sub_oi_change_pct_normalized"),
+            ("HALDRO Valid Code", "sub_haldro_valid_code"), ("HALDRO Risk Code", "sub_haldro_risk_code"),
             ("Volume Ratio", "sub_volume_ratio"),
             ("Coverage Exchanges", "sub_coverage_exchanges"), ("Coverage Spot", "sub_coverage_spot"),
             ("Coverage Perp", "sub_coverage_perp"), ("Coverage Feed Mode", "sub_coverage_feed_mode"),
@@ -1002,6 +1345,23 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                         pass
     
     dual_indicator = _dual_indicator_verdict(symbol, meta, engine_data, cvd_dir, cvd_quality)
+    decision_main = dict(engine_data.get("_tv_main") or {})
+    decision_main.setdefault("entry", price)
+    decision_main.setdefault("stop", st_a.get("stop"))
+    decision_main.setdefault("target", st_a.get("target"))
+    engine_data.setdefault("_shadow_enabled", True)
+    final_verdict = _resolve_card_final_verdict(
+        symbol, meta, engine_data, decision_main, dual_indicator, st_a, model_id
+    )
+    projected_main = _project_final_verdict(decision_main, final_verdict)
+    projected_main["_decision_regime"] = engine_data.get("_decision_regime") or {}
+    engine_data["_tv_main_final"] = projected_main
+    # 渲染只消费FinalVerdict状态，禁止旧A/B/C/X等级与GO-B执行权互相打架。
+    status = final_verdict.get("state") or final_verdict.get("grade") or status
+    direction = final_verdict.get("side") or direction
+    bearish = direction == "short"
+    dual_indicator["final_state"] = final_verdict.get("state")
+    dual_indicator["state"] = final_verdict.get("grade") or dual_indicator.get("state")
     if dual_indicator.get("asset_is_crypto") and dual_indicator.get("usable"):
         sub_line = dual_indicator.get("haldro_flow") or dual_indicator.get("haldro_direction")
         comp_line = dual_indicator.get("haldro_direction")
@@ -1027,12 +1387,14 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         displacement=displacement, one_reason=one_reason,
         model_id=model_id, n5=n5, eng_conf=eng_conf,
         klines=klines,
-        tv_dmi=engine_data.get("_tv_main") or tv_dmi_rows or {},
+        tv_dmi=projected_main or tv_dmi_rows or {},
         dual_indicator=dual_indicator,
     )
     
     # v9: TV双指标直出卡（优先：主+副指标数据齐全时使用）
     tv_main = engine_data.get("_tv_main", {})
+    tv_main = _project_final_verdict(tv_main, final_verdict)
+    tv_main["_decision_regime"] = engine_data.get("_decision_regime") or {}
     tv_sub = engine_data.get("_tv_sub", {})
     if not force_full and tv_main and tv_sub:
         try:
@@ -1222,7 +1584,7 @@ def _leverage_text(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(symbol)
     if ac == "gold":
-        return "OANDA 1000x"
+        return "杠杆按账户风控·OANDA仅数据源"
     if ac == "crypto":
         if su in ("BTCUSDT", "ETHUSDT"):
             return "Binance 100x"
@@ -2120,6 +2482,45 @@ def _downgrade_low_rr_a_status(meta: dict, engine_data: dict, price, symbol: str
     return rr_plan
 
 
+def _merge_collected_klines(engine_data: dict, incoming: dict, *, preserve_existing: bool = False) -> None:
+    """合并外部K线；XAU的Binance回退不得覆盖TV MCP现场结构。"""
+    existing = engine_data.get("klines")
+    if not isinstance(existing, dict):
+        existing = {}
+        engine_data["klines"] = existing
+    for tf, payload in (incoming or {}).items():
+        if preserve_existing and tf in existing:
+            continue
+        existing[tf] = payload
+
+
+def _inject_orion_derivatives_fallback(engine_data: dict, symbol: str) -> None:
+    """Fill missing derivatives fields from Orion's Binance feed at quality B."""
+    try:
+        from binance_public import orion_derivatives_snapshot
+        snap = orion_derivatives_snapshot(symbol)
+    except Exception:
+        return
+    if not snap.get("ok"):
+        return
+    source = str(snap.get("source") or "Orion/Binance Futures")
+    if not engine_data.get("funding"):
+        raw_rate = float(snap.get("funding") or 0)
+        rate_pct = raw_rate * 100
+        engine_data["funding"] = {
+            "rate_pct": f"{rate_pct:.4f}%", "rate": rate_pct,
+            "quality": "B", "source": source,
+        }
+    if not engine_data.get("oi"):
+        oi_val = float(snap.get("open_interest") or 0)
+        engine_data["oi"] = {
+            "oi": f"{oi_val:,.0f}", "value": oi_val,
+            "trend": "up" if float(snap.get("oi_change_1h_pct") or 0) > 0.1 else "down" if float(snap.get("oi_change_1h_pct") or 0) < -0.1 else "flat",
+            "change_1h_pct": float(snap.get("oi_change_1h_pct") or 0),
+            "quality": "B", "source": source,
+        }
+
+
 def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     """Fetch Binance futures data with HMAC signing for authenticated endpoints."""
     import requests, time as _time, hmac, hashlib, urllib.parse
@@ -2138,70 +2539,59 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     # v4.4: 拉长 15m/1h 回溯以支撑 FVG/OB 检测（lookback 50/100）
     klines = {}
     _raw_klines_multi = {}
+    from binance_public import fetch_spot
     for tf, limit in [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]:
         _ok = False
-        # P1b: 多源回退（fapi 403 时切 spot/vision）
-        for _b in (base, "https://api.binance.com/api/v3",
-                   "https://data-api.binance.vision/api/v3"):
-            try:
-                _endpoint = f"{_b}/fapi/v1/klines" if "fapi" in _b else f"{_b}/klines"
-                r = requests.get(_endpoint, params={"symbol": sym, "interval": tf, "limit": limit}, timeout=6)
-                data = r.json()
-                if isinstance(data, list) and data:
-                    _raw_klines_multi[tf] = data  # v4.4: 原始 OHLCV 供 FVG/OB/吸收检测
-                    closes = [float(c[4]) for c in data]
-                    highs = [float(c[2]) for c in data]
-                    lows = [float(c[3]) for c in data]
-                    volumes = [float(c[5]) for c in data]
-                    chg_pct = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0
-                    avg_vol = sum(volumes) / len(volumes) if volumes else 0
-                    rng = max(highs) - min(lows)
-                    poc = sum(closes) / len(closes) if closes else closes[-1]
-                    direction = "偏多" if chg_pct > 0.3 else "偏空" if chg_pct < -0.3 else "震荡"
-                    klines[tf] = {
-                        "close": closes[-1], "high": max(highs), "low": min(lows),
-                        "open": float(data[0][1]), "volume": sum(volumes),
-                        "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
-                        "change_pct": round(chg_pct, 4),
-                        "avg_volume": avg_vol, "range": rng,
-                        "poc": round(poc, 2), "vah": round(max(highs), 2), "val": round(min(lows), 2),
-                        "direction": direction,
-                        "description": _kl_desc(tf, closes, highs, lows, volumes),
-                    }
-                    _ok = True
-                    break
-            except Exception:
-                continue
+        try:
+            data = fetch_spot(
+                "/api/v3/klines",
+                {"symbol": sym, "interval": tf, "limit": limit},
+                timeout=6,
+            )
+            if isinstance(data, list) and data:
+                _raw_klines_multi[tf] = data  # 原始已收/未收OHLCV；体制层会剔除末根未收K
+                closes = [float(c[4]) for c in data]
+                highs = [float(c[2]) for c in data]
+                lows = [float(c[3]) for c in data]
+                volumes = [float(c[5]) for c in data]
+                chg_pct = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0
+                avg_vol = sum(volumes) / len(volumes) if volumes else 0
+                rng = max(highs) - min(lows)
+                poc = sum(closes) / len(closes) if closes else closes[-1]
+                direction = "偏多" if chg_pct > 0.3 else "偏空" if chg_pct < -0.3 else "震荡"
+                klines[tf] = {
+                    "close": closes[-1], "high": max(highs), "low": min(lows),
+                    "open": float(data[0][1]), "volume": sum(volumes),
+                    "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
+                    "change_pct": round(chg_pct, 4),
+                    "avg_volume": avg_vol, "range": rng,
+                    "poc": round(poc, 2), "vah": round(max(highs), 2), "val": round(min(lows), 2),
+                    "direction": direction,
+                    "description": _kl_desc(tf, closes, highs, lows, volumes),
+                }
+                _ok = True
+        except Exception:
+            pass
         if not _ok:
             # 回退源全失败：留空该 tf，不阻断其他周期
             pass
-    engine_data["klines"] = klines
+    _merge_collected_klines(engine_data, klines, preserve_existing=is_xau)
     engine_data["_raw_klines_multi"] = _raw_klines_multi  # v4.4: 原始 OHLCV 供高级订单流分析
-    if not api_key:
-        # No API key — fallback to public endpoints only
-        try:
-            r = requests.get(f"{base}/fapi/v1/fundingRate", params={"symbol": sym, "limit": 1}, timeout=5)
-            data = r.json()
-            if isinstance(data, list) and data:
-                rate = float(data[0]["fundingRate"]) * 100
-                engine_data["funding"] = {"rate_pct": f"{rate:.4f}%", "rate": rate}
-        except Exception:
-            pass
-        try:
-            r = requests.get(f"{base}/fapi/v1/openInterest", params={"symbol": sym}, timeout=5)
-            data = r.json()
-            engine_data["oi"] = {"oi": f"{float(data.get('openInterest',0)):,.0f}", "value": float(data.get("openInterest", 0))}
-        except Exception:
-            pass
-        # CVD fallback
+    from binance_public import fapi_available
+    fapi_ok = fapi_available(timeout=2)
+    if not api_key or not fapi_ok:
+        # Futures主域不可用时，统一使用Orion的Binance期货快照；不再串行等待
+        # funding/OI/LSR/taker四个超时。缺失的LSR/taker保持缺失，由HALDRO裁决。
+        _inject_orion_derivatives_fallback(engine_data, sym)
         try:
             from cvd_aggtrades import get_cvd_aggtrades
             cvd = get_cvd_aggtrades(sym)
             engine_data["cvd"] = {"direction": cvd.get("direction", "N/A"), "quality": cvd.get("quality", "B")}
         except Exception:
             pass
+        engine_data["_fapi_available"] = bool(fapi_ok)
         return
-    
+
     # ── HMAC-signed endpoints ──
     # Funding rate
     try:
@@ -2249,6 +2639,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     except Exception:
         pass
     
+    _inject_orion_derivatives_fallback(engine_data, sym)
     # CVD via spot aggTrades
     try:
         from cvd_aggtrades import get_cvd_aggtrades
@@ -2763,6 +3154,35 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print(f"⚠️ 管线路由不可用({e})·使用默认步骤")
         pipeline_steps = ["tv","macro","x_sent","card"]
     completed_steps = set()
+
+    # TV MCP是分析前提：先切目标品种+主周期并刷新Data Window，再进入任何指标/体制引擎。
+    try:
+        from pipeline_router import timeframe_info
+        tf_main = str(timeframe_info(symbol).get("main") or "15m")
+        tf_code = {"5m": "5", "15m": "15", "1h": "60", "4h": "240", "D": "D"}.get(tf_main, "15")
+        if _asset_class(symbol) == "gold":
+            xau_env = os.environ.copy()
+            xau_env["XAU_TV_NO_PUSH"] = "1"
+            xau_sync = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "xau_tv_sync.py")],
+                cwd=str(ROOT), capture_output=True, text=True, env=xau_env,
+                encoding="utf-8", errors="replace", timeout=180,
+            )
+            if xau_sync.returncode != 0:
+                print(f"  ⚠ XAU五层前置同步失败: {(xau_sync.stderr or xau_sync.stdout)[:160]}")
+        tv_refresh = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py"),
+             "--symbol", symbol, "--timeframe", tf_code, "--verbose"],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=150,
+        )
+        engine_tv_ready = tv_refresh.returncode == 0
+        print(f"  {'✅' if engine_tv_ready else '⚠'} TV分析前置刷新: {symbol} {tf_main}")
+        if not engine_tv_ready:
+            print(f"  ⚠ TV前置详情: {(tv_refresh.stderr or tv_refresh.stdout)[:160]}")
+    except Exception as exc:
+        engine_tv_ready = False
+        print(f"  ⚠ TV分析前置刷新异常: {str(exc)[:120]}")
     
     # ═══ Step 1: 数据采集 ═══
     print("① 数据采集...")
@@ -2778,10 +3198,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
         # 期货价格优先（TV/Binance Perp），CMC现货作 backup
         futures_price = None
         try:
-            import requests as _req
+            from binance_public import orion_derivatives_snapshot
             sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
-            r = _req.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}", timeout=5)
-            futures_price = float(r.json().get("price", 0))
+            snap = orion_derivatives_snapshot(sym)
+            futures_price = float(snap.get("mark_price") or 0) if snap.get("ok") else None
         except Exception:
             pass
         
@@ -2845,8 +3265,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
                 pass
             
         except Exception as e:
-            print(f"  ⚠️ CMC: {e}")
-            engine_data["binance_spot"] = {"price": 64000}
+            print(f"  ⚠️ CMC/Binance采集失败: {e}")
+            engine_data["quality"] = "C"
+            engine_data["grades"] = {"overall": "C"}
+            engine_data["prices"] = {"primary": None, "source": "采集失败"}
     elif asset == "metal":
         try:
             import requests as _req
@@ -2901,7 +3323,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     except Exception:
                         pass
             else:
-                engine_data["prices"] = {"primary": 4310, "source": "fallback"}
+                engine_data["prices"] = {"primary": None, "source": "XAU多源采集失败"}
                 engine_data["quality"] = "C"
                 engine_data["grades"] = {"overall": "C"}
             
@@ -2917,7 +3339,8 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     engine_data["dxy"] = dxy_price
                     print(f"  ✅ DXY: {dxy_price:.2f}")
             except Exception:
-                engine_data["dxy"] = 100.85
+                engine_data["dxy"] = None
+                engine_data["_dxy_error"] = "DXY实时源不可用"
             
             # ── FMP macro: SPX/VIX/US10Y + EURUSD ──
             try:
@@ -3002,7 +3425,32 @@ def auto_card(symbol: str, push: bool = False) -> str:
             
         except Exception as e:
             print(f"  ⚠️ XAU: {e}")
-            engine_data["prices"] = {"primary": 4310, "source": "error-fallback"}
+            engine_data["quality"] = "C"
+            engine_data["grades"] = {"overall": "C"}
+    elif asset in {"stock", "forex", "futures"}:
+        # 非加密市场统一走按资产路由的数据矩阵，禁止只保存Key却不进入驾驶舱。
+        try:
+            from multi_source_collector import gather_all
+            routed = gather_all(asset, symbol)
+            engine_data["_asset_sources"] = routed
+            for key in ("macro", "fmp", "av", "td", "td_tech", "massive", "tushare"):
+                if routed.get(key):
+                    engine_data[key] = routed[key]
+            price_candidates = []
+            for key in ("tushare", "fmp", "av", "td", "massive"):
+                value = routed.get(key)
+                if isinstance(value, dict):
+                    price_candidates.append((key, _decision_float(value.get("price") or value.get("close"))))
+            source, price = next(((key, value) for key, value in price_candidates if value > 0), ("", 0.0))
+            engine_data["prices"] = {"primary": price or None, "source": source or "数据待刷新"}
+            engine_data["quality"] = "A-" if price > 0 and len([v for v in routed.values() if isinstance(v, dict) and v and "_error" not in v]) >= 3 else "B" if price > 0 else "C"
+            engine_data["grades"] = {"overall": engine_data["quality"]}
+            print(f"  {'✅' if price else '⚠'} {asset}: {price if price else '价格待刷新'} · 来源{source or '无'} · 已接{','.join(k for k in routed if k not in {'symbol','asset_class','time'})}")
+        except Exception as e:
+            engine_data["quality"] = "C"
+            engine_data["grades"] = {"overall": "C"}
+            engine_data["_asset_source_error"] = str(e)[:160]
+            print(f"  ⚠️ {asset}多源采集失败: {e}")
     
     # v2.1: 实时事件禁做（Jin10日历 + 宏观过滤）
     print("② 引擎运算...")
@@ -3123,7 +3571,13 @@ def auto_card(symbol: str, push: bool = False) -> str:
             _cv = "买" if _vwap_ema_result.get("vwap", {}).get("price_above") else "卖"
             print(f"  ✅ VWAP/EMA引擎：快线{_ema.get('9','?')}·慢线{_ema.get('55','?')}·CVD方向{_cv}")
         else:
-            print("  ⏭ VWAP/EMA引擎：无K线数据，跳过")
+            _vwap_ema_result = _tv_vwap_ema_fallback(symbol)
+            if _vwap_ema_result:
+                _ema = _vwap_ema_result.get("ema", {}) or {}
+                _cv = "买" if _vwap_ema_result.get("vwap", {}).get("price_above") else "卖"
+                print(f"  ✅ VWAP/EMA引擎：快线{_ema.get('9','?')}·慢线{_ema.get('55','?')}·CVD方向{_cv}·TV MCP")
+            else:
+                print("  ⏭ VWAP/EMA引擎：无K线或TV Data Window数据，跳过")
     except Exception as _vee:
         print(f"  ⚠️ VWAP/EMA引擎：{_vee}")
     
@@ -3286,22 +3740,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
     except Exception as _xe:
         print(f"  ⚠️ X情绪: {_xe}")
 
-    # ═══ Step 6: 市场体制（用于速读区一句话） ═══
+    # ═══ Step 6: 市场体制由闭柱OHLCV+TV结构在决策闭环内实时判定 ═══
     print("⑥ 市场体制...")
     regime_name = None
-    try:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        from regime_classifier import classify_regime
-        regime = classify_regime(
-            vix=18.5,
-            btc_change_24h_pct=engine_data.get("cmc", {}).get("percent_change_24h", -2.9),
-            btc_volatility_20d_pct=3.8,
-            fear_greed=int(engine_data.get("fear_greed", {}).get("value", 15) or 15),
-        )
-        regime_name = regime.name
-        print(f"  ✅ 体制 {regime.name}")
-    except Exception as e:
-        print(f"  ⚠ 体制跳过: {e}")
+    print("  ✅ 实时体制：等待闭柱特征构建，禁止固定VIX/演示波动率")
 
     # ═══ Step 7: 锁定排版输出 ═══
     print("⑥.① Binance数据采集...")
@@ -3311,16 +3753,13 @@ def auto_card(symbol: str, push: bool = False) -> str:
 
     # ═══ 深度数据采集（仅加密品种）═══
     try:
-        import urllib.request, json as _dj
         _sym = symbol.upper().replace(".P", "").split("-")[0].split(" ")[0]
         if not _sym.endswith("USDT"):
             print(f"  ℹ️ 深度: {_sym} 非加密品种·跳过")
             engine_data["depth"] = {"note": f"{_sym}非加密"}
         else:
-            _url = f"https://api.binance.com/api/v3/depth?symbol={_sym}&limit=5"
-            _req = urllib.request.Request(_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(_req, timeout=10) as _resp:
-                _depth = _dj.loads(_resp.read().decode())
+            from binance_public import fetch_spot
+            _depth = fetch_spot("/api/v3/depth", {"symbol": _sym, "limit": 5}, timeout=10) or {}
             _bids = _depth.get("bids", [])
             _asks = _depth.get("asks", [])
             if _bids and _asks:
@@ -3480,7 +3919,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # v9.6: TV实时数据注入 — 优先读tv_live.json(agent现场) → 回退tv_dmi_cache.json(cron)
     try:
         import json as _j2
-        if engine_data.get("_xau_tv_limitation"):
+        if engine_data.get("_xau_placeholder"):
             xau_tv_reason = str(engine_data.get("_xau_tv_limitation"))
             engine_data.setdefault("_tv_live_status", {})
             engine_data.setdefault("_tv_cache_status", {})
@@ -3492,16 +3931,37 @@ def auto_card(symbol: str, push: bool = False) -> str:
                 engine_data["_tv_cache_status"]["reason"] = xau_tv_reason
             print(f"  ℹ TV实时注入跳过: {xau_tv_reason}")
         else:
-            # 优先：agent上下文现场dump的tv_live.json（含完整POC/VAH/VAL/行动格）
-            live_path = ROOT / "data" / "tv_live.json"
+            # 优先同品种独立缓存，避免BTC/XAU轮流写通用tv_live.json导致跨品种覆盖。
+            symbol_live_path = _tv_symbol_cache_path(symbol)
+            generic_live_path = ROOT / "data" / "tv_live.json"
+            live_paths = [symbol_live_path, generic_live_path]
             cache_path2 = ROOT / "data" / "tv_dmi_cache.json"
             c2 = None
             skipped_tv_caches = []
-            for p in [live_path, cache_path2]:
+            live_indicator_injected = False
+            # Data Window指标与结构位分开选源；当前柱POC为空也不能丢HALDRO/MCP。
+            for live_path in live_paths:
+                if not live_path.exists():
+                    continue
+                try:
+                    live_candidate = _j2.loads(live_path.read_text(encoding="utf-8"))
+                    live_status = _tv_cache_status(live_candidate, symbol)
+                    if live_candidate.get("fresh") and live_status.get("usable"):
+                        live_indicator_injected = _inject_tv_live_pine(engine_data, live_candidate)
+                        if live_indicator_injected:
+                            engine_data["_tv_live_status"] = live_status
+                            print(f"  📡 TV实时指标注入: {live_path.name} Data Window/行动格已采用")
+                            break
+                    else:
+                        skipped_tv_caches.append(f"{live_path.name}: {live_status.get('reason')}")
+                except Exception as exc:
+                    skipped_tv_caches.append(f"{live_path.name}: {exc}")
+            structure_paths = list(dict.fromkeys([*live_paths, cache_path2]))
+            for p in structure_paths:
                 if p.exists():
                     try:
                         candidate = _j2.loads(p.read_text(encoding="utf-8"))
-                        if candidate.get("fresh") and candidate.get("poc"):
+                        if candidate.get("fresh") and _tv_live_levels(candidate)[0] > 0:
                             cache_status2 = _tv_cache_status(candidate, symbol)
                             if cache_status2.get("usable"):
                                 c2 = candidate
@@ -3513,9 +3973,20 @@ def auto_card(symbol: str, push: bool = False) -> str:
             if not c2 and skipped_tv_caches:
                 engine_data["_tv_live_status"] = {"usable": False, "reason": "; ".join(skipped_tv_caches)}
                 print(f"  ⚠ TV实时注入未采用: {'; '.join(skipped_tv_caches)}")
-            if c2 and c2.get("fresh") and c2.get("poc"):
+            if c2 and c2.get("fresh"):
+                if not live_indicator_injected:
+                    _inject_tv_live_pine(engine_data, c2)
                 klines = engine_data.setdefault("klines", {})
-                poc = c2.get("poc"); vah = c2.get("vah"); val = c2.get("val")
+                if _asset_class(symbol) == "gold":
+                    # XAU五层结构权威来自xau_tv_sync；防止中间引擎重建klines后只剩Data Window单周期。
+                    try:
+                        xau_state = json.loads((ROOT / "data" / "xau_tv_state.json").read_text(encoding="utf-8"))
+                        for x_tf, x_data in (xau_state.get("timeframes") or {}).items():
+                            if x_tf in {"4h", "1h", "15m", "5m"} and isinstance(x_data, dict):
+                                klines.setdefault(x_tf, dict(x_data))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                poc, vah, val = _tv_live_levels(c2)
                 ag = c2.get("action_grid", {})
                 direction = ag.get("方向", "待判")
                 for tf in ["D", "4h", "1h", "15m", "5m"]:
@@ -3678,10 +4149,26 @@ def auto_card(symbol: str, push: bool = False) -> str:
         if not isinstance(tv_override_obj, dict):
             tv_override_obj = {}
         tv_active = bool(tv_override_obj.get("tv_active"))
-        tv_usable = tv_active or bool(tv_status_obj.get("usable"))
+        tf_coverage = sum(1 for tf in ("D", "4h", "1h", "15m", "5m")
+                          if isinstance(klines.get(tf), dict) and klines.get(tf))
+        tv_usable = (tv_active or bool(tv_status_obj.get("usable"))) and tf_coverage == 5
         if tv_usable:
             completed_steps.add("tv")
-        if "cron_read" in pipeline_steps: completed_steps.add("cron_read")
+        cron_fresh = []
+        cron_missing = []
+        if "cron_read" in pipeline_steps:
+            try:
+                from pipeline_router import cron_sources
+                for source_name in cron_sources(symbol):
+                    source_path = ROOT / "data" / f"{source_name}.json"
+                    if source_path.exists() and time.time() - source_path.stat().st_mtime <= 6 * 3600:
+                        cron_fresh.append(source_name)
+                    else:
+                        cron_missing.append(source_name)
+                if cron_fresh and not cron_missing:
+                    completed_steps.add("cron_read")
+            except Exception:
+                cron_missing.append("cron_sources")
         price_fields = engine_data.get("prices")
         if not isinstance(price_fields, dict):
             price_fields = {}
@@ -3693,6 +4180,8 @@ def auto_card(symbol: str, push: bool = False) -> str:
         if engine_data.get("_advanced",{}).get("orphan",{}).get("corr_multiplier") is not None: completed_steps.add("corr")
         if engine_data.get("gold_macro") or any(k in card for k in ["GLD", "黄金"]): completed_steps.add("gold_macro")
         if engine_data.get("forex_rate") or any(k in card for k in ["利差", "forex_rate"]): completed_steps.add("forex_rate")
+        if isinstance(engine_data.get("fmp"), dict) and engine_data["fmp"] and "_error" not in engine_data["fmp"]: completed_steps.add("fmp")
+        if engine_data.get("options_line"): completed_steps.add("options_chain")
         completed_steps.add("orphan")  # orphan integration always runs
         
         step_status = {}
@@ -3702,11 +4191,11 @@ def auto_card(symbol: str, push: bool = False) -> str:
             step_status[s] = emoji
             if s == "tv":
                 if tv_usable:
-                    step_notes[s] = "TV行动格/缓存已采用"
+                    step_notes[s] = "TV五层与行动格/缓存均已采用"
                 else:
-                    step_notes[s] = (tv_status_obj.get("reason") or "TV未实时读取/缓存不可用")
+                    step_notes[s] = f"TV缓存可用={bool(tv_active or tv_status_obj.get('usable'))}·周期覆盖{tf_coverage}/5"
             elif s == "cron_read":
-                step_notes[s] = "读取本地cron缓存；需看各源mtime"
+                step_notes[s] = f"新鲜:{','.join(cron_fresh) or '无'}；缺失/过期:{','.join(cron_missing) or '无'}"
             elif s in completed_steps:
                 step_notes[s] = "已完成"
             else:
@@ -4152,7 +4641,7 @@ def _parse_cli_symbol(argv=None) -> str:
         if not arg or arg.startswith("-"):
             continue
         symbol = arg.upper().strip()
-        if symbol in {"BTC", "BTCUSDT", "XAU", "XAUUSD"} or symbol.endswith(("USDT", "USD")):
+        if re.match(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$", symbol):
             return "BTCUSDT" if symbol == "BTC" else "XAUUSD" if symbol == "XAU" else symbol
     return "BTCUSDT"
 

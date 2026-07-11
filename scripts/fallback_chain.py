@@ -99,7 +99,7 @@ def crypto_price_fallback(symbol: str = "BTCUSDT"):
     """加密价格回退: Binance → CoinGecko → cache"""
     sym_lower = symbol.lower().replace("usdt", "")
     return [
-        {"name": "Binance", "url": f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", "timeout": 8},
+        {"name": "BinanceVision", "url": f"https://data-api.binance.vision/api/v3/ticker/price?symbol={symbol}", "timeout": 8},
         {"name": "CoinGecko", "url": f"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", "timeout": 10},  # 简化
     ]
 

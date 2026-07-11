@@ -13,6 +13,7 @@ import sys
 import json
 import asyncio
 import os
+import subprocess
 import time
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -21,9 +22,38 @@ ROOT = Path(__file__).resolve().parents[1]
 TZ = timezone(timedelta(hours=8))
 OUT = ROOT / "data" / "xau_tv_state.json"
 SYMBOL = "OANDA:XAUUSD"
-TIMEFRAMES = ["5m", "15m", "1h", "4h"]
+TIMEFRAMES = [("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
+SOURCE_SNAPSHOT = ROOT / "data" / "source_snapshot_XAUUSD.json"
 
-# TV MCP 连接依赖（与 fetch_tv_mcp.py 一致）
+
+def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1200) -> None:
+    """Keep XAU's multi-source quality snapshot inside the 30-minute freshness gate."""
+    try:
+        if SOURCE_SNAPSHOT.exists() and time.time() - SOURCE_SNAPSHOT.stat().st_mtime <= max_age_seconds:
+            return
+        scripts_dir = str(ROOT / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from trading_system import source_snapshot
+        source_snapshot("XAUUSD")
+    except Exception as exc:
+        print(f"⚠ XAU多源快照刷新失败: {exc}", file=sys.stderr)
+
+
+def _refresh_tv_live_cache() -> None:
+    """同步XAU OHLCV后刷新同品种Data Window缓存，避免两条TV权威链分裂。"""
+    cmd = [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py"),
+           "--symbol", SYMBOL, "--verbose"]
+    result = subprocess.run(
+        cmd, cwd=str(ROOT), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "tv_live_dump failed")[:200])
+    if result.stdout.strip():
+        print(result.stdout.strip())
+
+# TV MCP 连接依赖
 hermes_venv = Path(os.path.expanduser("~/AppData/Local/hermes/hermes-agent/venv/Lib/site-packages"))
 if hermes_venv.exists():
     sys.path.insert(0, str(hermes_venv))
@@ -64,8 +94,8 @@ async def _run():
             await asyncio.sleep(2)
 
             result = {"symbol": SYMBOL, "updated_at": datetime.now(TZ).isoformat(), "timeframes": {}}
-            for tf in TIMEFRAMES:
-                await set_timeframe(session, tf)
+            for tf, resolution in TIMEFRAMES:
+                await set_timeframe(session, resolution)
                 await asyncio.sleep(3)
                 state = await get_chart_state(session)
                 ohlcv = await get_ohlcv(session)
@@ -79,6 +109,10 @@ async def _run():
                     print(f"  ⚠ {tf}: 解析失败", file=sys.stderr)
 
             OUT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 缓存权威读取固定在XAU主执行周期5m。
+            await set_timeframe(session, "5")
+            await asyncio.sleep(3)
+            _refresh_source_snapshot_if_stale()
             print(f"✅ XAU TV状态已写 {OUT}")
             # v9.8: 推 TG 五层关键位表
             try:
@@ -109,63 +143,71 @@ async def _run():
                         lines.append("**总体结论**: XAU五层数据不足，方向待选。")
                     output = "\n".join(lines)
                     print(output)
-                    sys.path.insert(0, str(Path(__file__).resolve().parent))
-                    from telegram_reliable import push_tg_rich
-                    push_tg_rich("telegram:-1003733144325:846", output)
+                    if os.environ.get("XAU_TV_NO_PUSH") != "1":
+                        sys.path.insert(0, str(Path(__file__).resolve().parent))
+                        from telegram_reliable import push_tg_rich
+                        push_tg_rich("telegram:-1003733144325:846", output)
             except Exception as _te:
                 print(f"⚠ XAU TV RichMarkdown推送失败: {_te}", file=sys.stderr)
             return 0
 
 
 def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
-    """从 TV MCP OHLCV/state 文本提取最新K线 high/low/close/open。"""
-    import re
-    # 尝试 OHLCV 文本中的数字行: [time, open, high, low, close, volume]
-    nums = re.findall(r"-?\d+\.?\d*", ohlcv_text)
-    # 取末尾一组 4-6 个数字 (high/low/close/open 附近)
-    if len(nums) >= 4:
-        try:
-            floats = [float(x) for x in nums[-6:]]
-            # 假设顺序 open high low close ... 取合理区间
-            candidates = [f for f in floats if 1000 < f < 5000]  # XAU 价格区间
-            if len(candidates) >= 3:
+    """优先解析TV MCP结构化OHLCV，并只消费倒数第二根已闭合K线。"""
+    try:
+        payload = json.loads(ohlcv_text)
+        if isinstance(payload, dict) and isinstance(payload.get("result"), str):
+            payload = json.loads(payload["result"])
+        bars = payload.get("last_5_bars") if isinstance(payload, dict) else None
+        if isinstance(bars, list) and bars:
+            bar = bars[-2] if len(bars) >= 2 else bars[-1]
+            o = float(bar["open"])
+            h = float(bar["high"])
+            l = float(bar["low"])
+            c = float(bar["close"])
+            if 1000 < l <= h < 10000 and l <= min(o, c) <= max(o, c) <= h:
                 return {
-                    "open": candidates[0],
-                    "high": max(candidates),
-                    "low": min(candidates),
-                    "close": candidates[-1],
-                    "change_pct": 0,
+                    "open": o, "high": h, "low": l, "close": c,
+                    "change_pct": (c - o) / o * 100 if o else 0.0,
                 }
-        except Exception:
-            pass
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        pass
     return None
 
 
-if __name__ == "__main__":
-    # v9.6 三级降级：TV CDP 偶断不得直接 exit 1 让 cron 报错。
-    # 失败则保留旧 xau_tv_state.json（若 15min 内）或写降级标记，cron 仍 ok。
+def main() -> int:
+    """Run the TV sync with a cron-safe three-level degradation path."""
     try:
         rc = asyncio.run(_run())
-        raise SystemExit(rc if isinstance(rc, int) else 0)
+        if isinstance(rc, int) and rc != 0:
+            raise RuntimeError(f"同步返回非零状态 {rc}")
+        _refresh_tv_live_cache()
+        return 0
     except Exception as e:
-        import json as _json
-        import time as _t
-        # 若旧文件 15min 内，保留旧数据不覆盖
+        # 若旧文件15分钟内，保留旧数据，不让单次CDP抖动破坏有效缓存。
         if OUT.exists():
             try:
-                age = (time.time() - OUT.stat().st_mtime)
+                age = time.time() - OUT.stat().st_mtime
                 if age < 900:
                     print(f"⚠ XAU TV同步失败({e})，保留 {age:.0f}s 前旧数据")
-                    raise SystemExit(0)
-            except Exception:
+                    return 0
+            except OSError:
                 pass
-        # 无可用旧数据 → 写降级占位，标 stale
+        # 无可用旧数据时落盘明确stale，严禁伪装成现场数据。
         try:
-            _json.dump({"symbol": "OANDA:XAUUSD", "stale": True,
-                        "error": str(e)[:200],
-                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+08:00")},
-                       OUT.open("w", encoding="utf-8"), ensure_ascii=False, indent=2)
+            payload = {
+                "symbol": SYMBOL,
+                "stale": True,
+                "error": str(e)[:200],
+                "updated_at": datetime.now(TZ).isoformat(),
+            }
+            OUT.parent.mkdir(parents=True, exist_ok=True)
+            OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"⚠ XAU TV同步失败({e})，写降级占位")
-        except Exception:
+        except OSError:
             pass
-        raise SystemExit(0)
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

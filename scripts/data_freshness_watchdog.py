@@ -30,7 +30,7 @@ WATCH_FILES = {
     "deribit_options.json": {"threshold": 1, "paths": [PROJECT_DATA / "deribit_options.json", HERMES_DATA / "deribit_options.json"]},
     "dune_cache.json": {"threshold": 5, "paths": [PROJECT_DATA / "dune_cache.json", HERMES_DATA / "dune_cache.json"]},
     "qlib_factors.json": {"threshold": 2, "paths": [PROJECT_DATA / "qlib_factors.json", HERMES_DATA / "qlib_factors.json"]},
-    "orion_radar.json": {"threshold": 1, "paths": [PROJECT_DATA / "orion_radar.json", HERMES_DATA / "orion_radar.json"]},
+    "orion_radar.json": {"threshold": 2.5, "paths": [PROJECT_DATA / "orion_radar.json", HERMES_DATA / "orion_radar.json"]},
     "liquidation_pressure.json": {"threshold": 2, "paths": [HERMES_DATA / "liquidation_pressure.json", PROJECT_DATA / "liquidation_pressure.json"]},
     "stablecoin_snapshot.json": {"threshold": 6, "paths": [HERMES_DATA / "stablecoin_snapshot.json", PROJECT_DATA / "stablecoin_snapshot.json"]},
     "xau_macro_context.json": {"threshold": 24, "paths": [PROJECT_DATA / "xau_macro_context.json", HERMES_DATA / "xau_macro_context.json"]},
@@ -45,6 +45,21 @@ def _best_existing(paths):
     if not existing:
         return None
     return max(existing, key=lambda p: p.stat().st_mtime)
+
+
+def _quality_issue(fname: str, path: Path) -> str:
+    """检测“时间新但内容坏”的假新鲜缓存。"""
+    if fname != "liquidation_pressure.json":
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return "JSON损坏"
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return "结果为空"
+    valid = [row for row in rows if isinstance(row, dict) and row.get("status") not in ("api_error", "no_data") and float(row.get("oi") or 0) > 0]
+    return "接口全部失败" if not valid else ""
 
 
 def _fmt_hours(h: float) -> str:
@@ -68,9 +83,10 @@ def main():
         
         mtime = fp.stat().st_mtime
         age_hours = (time.time() - mtime) / 3600
-        
-        if age_hours > threshold_hours:
-            stale.append((fname, round(age_hours, 2), threshold_hours, str(fp)))
+        quality_issue = _quality_issue(fname, fp)
+
+        if age_hours > threshold_hours or quality_issue:
+            stale.append((fname, round(age_hours, 2), threshold_hours, str(fp), quality_issue))
         else:
             fresh.append((fname, round(age_hours, 2), str(fp)))
     
@@ -78,16 +94,21 @@ def main():
         # 干净无异状，完全静默
         return 0
 
-    lines = [f"## 数据过期告警 — {ts}", ""]
-    lines.append("| 文件 | 过期时间 | 阈值 | 落后幅度 |")
-    lines.append("|---|---|---:|:---|")
-    for fname, age, threshold, fp in stale:
+    lines = [f"## 数据过期/质量告警 — {ts}", ""]
+    lines.append("| 文件 | 数据年龄 | 阈值 | 问题 |")
+    lines.append("|---|---:|---:|:---|")
+    over_values = []
+    for fname, age, threshold, fp, quality_issue in stale:
         over_pct = round((age - threshold) / threshold * 100) if threshold > 0 else 999
-        lines.append(f"| {fname} | {_fmt_hours(age)} | {_fmt_hours(threshold)} | 💀 +{over_pct}% |")
+        if age > threshold:
+            over_values.append(over_pct)
+        issue = quality_issue or f"过期+{over_pct}%"
+        lines.append(f"| {fname} | {_fmt_hours(age)} | {_fmt_hours(threshold)} | 💀 {issue} |")
     lines.append("")
-    lines.append(f"正常文件: {len(fresh)} 个 · 过期文件: {len(stale)} 个")
+    lines.append(f"正常文件: {len(fresh)} 个 · 异常文件: {len(stale)} 个")
     lines.append("")
-    lines.append(f"**总体结论**: **{len(stale)}个数据源过期**（最严重 +{max(round((a-t)/t*100) for _,a,t,_ in stale)}%），**需检查对应采集脚本/接口**。")
+    worst = f"最严重过期+{max(over_values)}%" if over_values else "内容质量失败"
+    lines.append(f"**总体结论**: **{len(stale)}个数据源异常**（{worst}），**需检查对应采集脚本/接口**。")
 
     output = "\n".join(lines)
     try:

@@ -11,7 +11,9 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-DUNE_KEY = os.environ.get("DUNE_API_KEY", "") or "43Fsk9VjjoU0G9pZzeDCZCMehXeB4iWx"
+from credential_store import read_secret
+
+DUNE_KEY = read_secret("dune_api_key.txt", "DUNE_API_KEY")
 DUNE_BASE = "https://api.dune.com/api/v1"
 TZ = timezone(timedelta(hours=8))
 ROOT = Path("D:/Hermes agent")

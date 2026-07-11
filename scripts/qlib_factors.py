@@ -13,16 +13,28 @@ DATA_DIR = os.path.expanduser("~/AppData/Local/hermes/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
+def _fetch_json_url(url: str, proxy=None):
+    handler = urllib.request.ProxyHandler({} if proxy == "direct" else proxy)
+    opener = urllib.request.build_opener(handler) if proxy is not None else urllib.request.build_opener()
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with opener.open(req, timeout=10) as response:
+        return json.loads(response.read())
+
+
 def fetch_klines(symbol="BTCUSDT", interval="1h", limit=200) -> list:
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    for ph in [None, {}]:
-        try:
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler(ph)) if ph is not None else urllib.request.build_opener()
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with opener.open(req, timeout=10) as r:
-                return json.loads(r.read())
-        except Exception:
-            continue
+    urls = [
+        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+    ]
+    for url in urls:
+        for proxy in ("direct", None):
+            try:
+                payload = _fetch_json_url(url, proxy=proxy)
+                if isinstance(payload, list) and payload:
+                    return payload
+            except Exception:
+                continue
     return []
 
 

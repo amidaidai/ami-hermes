@@ -291,7 +291,8 @@ def yahoo_chart_price(yahoo_symbol: str) -> float | None:
     return None
 
 
-CG_KEY = os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+from credential_store import read_secret
+CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
 
 
 def coingecko_price(asset: str) -> float | None:
@@ -644,20 +645,27 @@ def binance_spot_price(symbol: str) -> float | None:
     if not s.endswith("USDT") or "XAU" in s:
         return None
     try:
-        data = http_get("https://api.binance.com/api/v3/ticker/price", {"symbol": symbol})
-        return float(data["price"])
+        from binance_public import fetch_spot
+        data = fetch_spot("/api/v3/ticker/price", {"symbol": s})
+        return float(data["price"]) if isinstance(data, dict) and data.get("price") else None
     except Exception:
         return None
 
 
+_FAPI_DOWN_UNTIL = 0.0
+
+
 def binance_futures_snapshot(symbol: str) -> dict[str, Any]:
+    global _FAPI_DOWN_UNTIL
     base = "https://fapi.binance.com"
     out: dict[str, Any] = {"source": "Binance Futures", "symbol": symbol, "ok": False}
     try:
-        premium = http_get(base + "/fapi/v1/premiumIndex", {"symbol": symbol})
-        oi = http_get(base + "/fapi/v1/openInterest", {"symbol": symbol})
-        ls = http_get(base + "/futures/data/globalLongShortAccountRatio", {"symbol": symbol, "period": "5m", "limit": 3})
-        taker = http_get(base + "/futures/data/takerlongshortRatio", {"symbol": symbol, "period": "5m", "limit": 3})
+        if time.monotonic() < _FAPI_DOWN_UNTIL:
+            raise RuntimeError("Binance Futures主域冷却中")
+        premium = http_get(base + "/fapi/v1/premiumIndex", {"symbol": symbol}, timeout=4)
+        oi = http_get(base + "/fapi/v1/openInterest", {"symbol": symbol}, timeout=4)
+        ls = http_get(base + "/futures/data/globalLongShortAccountRatio", {"symbol": symbol, "period": "5m", "limit": 3}, timeout=4)
+        taker = http_get(base + "/futures/data/takerlongshortRatio", {"symbol": symbol, "period": "5m", "limit": 3}, timeout=4)
         out.update(
             {
                 "ok": True,
@@ -672,7 +680,17 @@ def binance_futures_snapshot(symbol: str) -> dict[str, Any]:
             }
         )
     except Exception as e:
-        out.update({"error": str(e), "quality": "C"})
+        _FAPI_DOWN_UNTIL = time.monotonic() + 300.0
+        try:
+            from binance_public import orion_derivatives_snapshot
+            fallback = orion_derivatives_snapshot(symbol)
+            if fallback.get("ok"):
+                out.update(fallback)
+                out["fallback_reason"] = str(e)[:160]
+            else:
+                out.update({"error": str(e), "quality": "C"})
+        except Exception as fallback_error:
+            out.update({"error": f"{e}; Orion fallback: {fallback_error}", "quality": "C"})
     out["interpretation"] = interpret_derivatives(out)
     return out
 

@@ -25,7 +25,8 @@ _secrets = _load_json_secrets("D:/Hermes agent/hermes/secrets/binance.json")
 API_KEY = _os.environ.get("BINANCE_API_KEY") or _secrets.get("api_key", "")
 SECRET_KEY = _os.environ.get("BINANCE_SECRET_KEY") or _secrets.get("secret_key", "")
 
-CG_KEY = _os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+from credential_store import read_secret
+CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
 
 def fetch(url, headers=None, timeout=10):
     req = urllib.request.Request(url, headers=headers or {"User-Agent": UA})
@@ -39,9 +40,11 @@ def safe_fetch(url, headers=None, timeout=10, default=None):
         return {"_error": str(e)[:120]}
 
 def signed_futures(path, params_extra=""):
-    """Binance 签名请求"""
+    """Binance签名请求；主域不健康时立即降级，不制造串行超时。"""
     if not API_KEY or not SECRET_KEY:
         return {"_error": "Binance API keys not configured"}
+    if not fapi_available(timeout=2):
+        return {"_error": "Binance Futures host unavailable"}
     ts = int(time.time() * 1000)
     params = f"{params_extra}{'&' if params_extra else ''}timestamp={ts}"
     signature = hmac.new(SECRET_KEY.encode(), params.encode(), hashlib.sha256).hexdigest()
@@ -53,6 +56,8 @@ def signed_futures(path, params_extra=""):
     except Exception as e:
         return {"_error": str(e)[:120]}
 
+from binance_public import fetch_spot, fapi_available, orion_derivatives_snapshot
+
 # ─── 快照容器 ───
 snap = {
     "snapshot_time": datetime.now(TZ).isoformat(timespec="seconds"),
@@ -63,15 +68,15 @@ snap = {
 # ═══════════════════════════════════════
 # 1. 价格 (Binance + CoinGecko)
 # ═══════════════════════════════════════
-bt = safe_fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
-bp = safe_fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+bt = fetch_spot("/api/v3/ticker/24hr", {"symbol": "BTCUSDT"}) or {}
+bp = fetch_spot("/api/v3/ticker/price", {"symbol": "BTCUSDT"}) or {}
 
 snap["binance_spot"] = {
-    "price": float(bp.get("price", 0)) if isinstance(bp, dict) else None,
-    "24h_high": float(bt.get("highPrice", 0)) if isinstance(bt, dict) else None,
-    "24h_low": float(bt.get("lowPrice", 0)) if isinstance(bt, dict) else None,
-    "24h_volume_btc": float(bt.get("volume", 0)) if isinstance(bt, dict) else None,
-    "24h_change_pct": float(bt.get("priceChangePercent", 0)) if isinstance(bt, dict) else None,
+    "price": float(bp["price"]) if isinstance(bp, dict) and bp.get("price") else None,
+    "24h_high": float(bt["highPrice"]) if isinstance(bt, dict) and bt.get("highPrice") else None,
+    "24h_low": float(bt["lowPrice"]) if isinstance(bt, dict) and bt.get("lowPrice") else None,
+    "24h_volume_btc": float(bt["volume"]) if isinstance(bt, dict) and bt.get("volume") else None,
+    "24h_change_pct": float(bt["priceChangePercent"]) if isinstance(bt, dict) and bt.get("priceChangePercent") is not None else None,
 }
 
 cg = safe_fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true",
@@ -89,24 +94,29 @@ if len(prices) >= 2:
 # ═══════════════════════════════════════
 # 2. 衍生品 (Funding, OI, Basis)
 # ═══════════════════════════════════════
-fr = signed_futures("/fapi/v1/fundingRate", "symbol=BTCUSDT&limit=2")
+deriv = orion_derivatives_snapshot("BTCUSDT")
 snap["funding"] = {
-    "current": float(fr[0]["fundingRate"]) if isinstance(fr, list) and fr else None,
-    "previous": float(fr[1]["fundingRate"]) if isinstance(fr, list) and len(fr) > 1 else None,
-    "history": [{"rate": float(d["fundingRate"]), "pct": f"{float(d['fundingRate'])*100:.4f}%"} for d in (fr if isinstance(fr, list) else [])[:5]],
+    "current": float(deriv.get("funding") or 0) if deriv.get("ok") else None,
+    "previous": None,
+    "history": [],
+    "source": deriv.get("source"),
+    "quality": deriv.get("quality", "C"),
 }
 
-oi = safe_fetch("https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT")
 snap["oi"] = {
-    "btc": float(oi.get("openInterest", 0)) if isinstance(oi, dict) else None,
-    "usd_nominal": float(oi.get("openInterest", 0)) * (snap["binance_spot"]["price"] or 0) if isinstance(oi, dict) else None,
+    "btc": float(deriv.get("open_interest") or 0) if deriv.get("ok") else None,
+    "usd_nominal": float(deriv.get("open_interest_usd") or 0) if deriv.get("ok") else None,
+    "change_1h_pct": float(deriv.get("oi_change_1h_pct") or 0) if deriv.get("ok") else None,
+    "source": deriv.get("source"),
+    "quality": deriv.get("quality", "C"),
 }
 
-basis = safe_fetch("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT")
 snap["basis"] = {
-    "mark": float(basis.get("markPrice", 0)) if isinstance(basis, dict) else None,
-    "index": float(basis.get("indexPrice", 0)) if isinstance(basis, dict) else None,
-    "premium_pct": round((float(basis["markPrice"]) / float(basis["indexPrice"]) - 1) * 100, 4) if isinstance(basis, dict) and basis.get("indexPrice") else None,
+    "mark": float(deriv.get("mark_price") or 0) if deriv.get("ok") else None,
+    "index": float(deriv.get("index_price") or 0) if deriv.get("ok") else None,
+    "premium_pct": float(deriv.get("basis_pct") or 0) if deriv.get("ok") else None,
+    "source": deriv.get("source"),
+    "quality": deriv.get("quality", "C"),
 }
 
 # ═══════════════════════════════════════

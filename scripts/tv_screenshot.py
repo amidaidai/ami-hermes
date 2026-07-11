@@ -35,8 +35,17 @@ SERVER_SCRIPT = Path("D:/Hermes agent/tools/tradingview-mcp/src/server.js")
 SYMBOL_MAP = {
     "BTCUSDT": ("BINANCE:BTCUSDT.P", "15", "15m"),
     "XAUUSD": ("OANDA:XAUUSD", "5", "5m"),
+    "AAPL": ("NASDAQ:AAPL", "60", "1h"),
+    "TSLA": ("NASDAQ:TSLA", "60", "1h"),
+    "NVDA": ("NASDAQ:NVDA", "60", "1h"),
+    "MSFT": ("NASDAQ:MSFT", "60", "1h"),
+    "EURUSD": ("OANDA:EURUSD", "15", "15m"),
+    "GBPUSD": ("OANDA:GBPUSD", "15", "15m"),
+    "USDJPY": ("OANDA:USDJPY", "15", "15m"),
+    "ES": ("CME_MINI:ES1!", "15", "15m"),
+    "NQ": ("CME_MINI:NQ1!", "15", "15m"),
+    "CL": ("NYMEX:CL1!", "15", "15m"),
 }
-# 其他加密默认 15m；非加密默认 15m
 DEFAULT_TF = ("15", "15m")
 
 
@@ -44,8 +53,10 @@ def _sym_tf(symbol: str):
     s = (symbol or "BTCUSDT").upper().replace(".P", "")
     if s in SYMBOL_MAP:
         return SYMBOL_MAP[s]
-    if s.endswith("USDT") or s.endswith("USD"):
+    if s.endswith("USDT"):
         return ("BINANCE:" + s + ".P", "15", "15m")
+    if len(s) == 6 and s.endswith("USD"):
+        return ("OANDA:" + s, "15", "15m")
     return (s, "15", "15m")
 
 
@@ -85,7 +96,7 @@ async def _capture(symbol: str) -> str | None:
                 return None
             # 截图（chart 区域）
             try:
-                res = await session.call_tool("capture_screenshot", {"region": "chart"})
+                res = await session.call_tool("capture_screenshot", {"region": "full"})
             except Exception as e:
                 print(f"[tv_screenshot] capture 失败: {e}", file=sys.stderr)
                 return None

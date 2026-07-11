@@ -33,19 +33,29 @@ import sys
 import urllib.request
 from collections import defaultdict
 
-DEPTH_URL = "https://fapi.binance.com/fapi/v1/depth?symbol={sym}&limit=500"
+DEPTH_URLS = (
+    "https://fapi.binance.com/fapi/v1/depth?symbol={sym}&limit=500",
+    "https://api.binance.com/api/v3/depth?symbol={sym}&limit=500",
+    "https://data-api.binance.vision/api/v3/depth?symbol={sym}&limit=500",
+)
 _TIMEOUT = 10
 
 
 def _fetch_depth(symbol: str) -> dict | None:
-    url = DEPTH_URL.format(sym=symbol.upper())
-    req = urllib.request.Request(url, headers={"User-Agent": "TangXi-DepthWall/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except Exception as e:  # noqa: BLE001 — 网络层兜底，调用方自行判 None
-        sys.stderr.write(f"depth_wall fetch failed: {e}\n")
-        return None
+    from binance_public import fapi_available, fetch_spot, fetch_url
+    if fapi_available(timeout=2):
+        payload = fetch_url(DEPTH_URLS[0].format(sym=symbol.upper()), timeout=_TIMEOUT)
+        if isinstance(payload, dict) and payload.get("bids") and payload.get("asks"):
+            payload.setdefault("_source", "Binance Futures")
+            return payload
+    payload = fetch_spot(
+        "/api/v3/depth", {"symbol": symbol.upper(), "limit": 500}, timeout=_TIMEOUT,
+    )
+    if isinstance(payload, dict) and payload.get("bids") and payload.get("asks"):
+        payload.setdefault("_source", "Binance Spot")
+        return payload
+    sys.stderr.write("depth_wall fetch failed: all Binance market-data hosts unavailable\n")
+    return None
 
 
 def _cluster(levels: list[list[str]], bucket_pct: float) -> list[dict]:
@@ -127,58 +137,68 @@ def analyze_walls(symbol: str, bucket_pct: float = 0.001,
     }
 
 
+def _fetch_binance_oi_history(symbol: str, period: str) -> list[dict] | None:
+    from binance_public import fapi_available, fetch_url
+    if not fapi_available(timeout=2):
+        return None
+    url = (f"https://fapi.binance.com/futures/data/openInterestHist"
+           f"?symbol={symbol}&period={period}&limit=2")
+    payload = fetch_url(url, timeout=_TIMEOUT)
+    return payload if isinstance(payload, list) and len(payload) >= 2 else None
+
+
+def _fetch_orion_ticker(symbol: str) -> dict | None:
+    from binance_public import fetch_orion_ticker
+    return fetch_orion_ticker(symbol)
+
+
+def _regime_from_deltas(oi_d: float, px_d: float) -> tuple[str, str]:
+    oi_up, oi_dn = oi_d > 0.1, oi_d < -0.1
+    px_up, px_dn = px_d > 0.05, px_d < -0.05
+    if oi_up and px_up:
+        return "新多进场", "净多堆积·上方墙=获利了结磁吸·回调风险累积"
+    if oi_up and px_dn:
+        return "新空进场", "净空堆积·下方墙=止盈磁吸·反弹轧空风险累积"
+    if oi_dn and px_up:
+        return "空头平仓", "轧空回补·上行有续航·非新多驱动"
+    if oi_dn and px_dn:
+        return "多头平仓", "多头投降·下行有续航·非新空驱动"
+    return "持仓平稳", "OI/价格无显著增量·无杠杆体制信号"
+
+
 def oi_price_regime(symbol: str, period: str = "15m") -> dict:
-    """OI增量 × 价格增量 四象限体制标注(社区精华·清算热力图项目)。
-
-    来源: GitHub minchillo4/btc-liquidation-heatmap + BitcoinCounterFlow。
-    按 OI delta 和 price delta 的符号组合,把杠杆持仓体制分类:
-      OI↑ 价↑ → 新多进场(净多堆积·上方挂单墙=止盈/获利了结磁吸)
-      OI↑ 价↓ → 新空进场(净空堆积·下方挂单墙=止盈磁吸)
-      OI↓ 价↑ → 空头平仓(轧空回补·上行有续航)
-      OI↓ 价↓ → 多头平仓(多头投降·下行有续航)
-
-    用 Binance 免费 openInterestHist + price 端点,零付费 key。
-    返回 {ok, regime, oi_delta_pct, price_delta_pct, summary}。
-    """
+    """OI增量×价格增量；直连Binance失败时降级Orion的Binance期货快照。"""
+    sym = symbol.upper()
+    if not sym.endswith("USDT"):
+        sym = f"{sym}USDT"
+    source = "Binance Futures"
     try:
-        sym = symbol.upper()
-        if not sym.endswith("USDT"):
-            sym = f"{sym}USDT"
-        # OI 历史(取最近2点算增量)
-        oi_url = (f"https://fapi.binance.com/futures/data/openInterestHist"
-                  f"?symbol={sym}&period={period}&limit=2")
-        req = urllib.request.Request(oi_url, headers={"User-Agent": "TangXi-DepthWall/1.0"})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
-            oi_hist = json.loads(r.read().decode("utf-8"))
-        if not isinstance(oi_hist, list) or len(oi_hist) < 2:
-            return {"ok": False, "summary": "OI历史不可用"}
-        oi_prev = float(oi_hist[0]["sumOpenInterest"])
-        oi_now = float(oi_hist[-1]["sumOpenInterest"])
-        px_prev = float(oi_hist[0]["sumOpenInterestValue"]) / oi_prev if oi_prev else 0
-        px_now = float(oi_hist[-1]["sumOpenInterestValue"]) / oi_now if oi_now else 0
-        oi_d = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0.0
-        px_d = (px_now - px_prev) / px_prev * 100 if px_prev else 0.0
-        oi_up = oi_d > 0.1
-        oi_dn = oi_d < -0.1
-        px_up = px_d > 0.05
-        px_dn = px_d < -0.05
-        if oi_up and px_up:
-            regime = "新多进场"; note = "净多堆积·上方墙=获利了结磁吸·回调风险累积"
-        elif oi_up and px_dn:
-            regime = "新空进场"; note = "净空堆积·下方墙=止盈磁吸·反弹轧空风险累积"
-        elif oi_dn and px_up:
-            regime = "空头平仓"; note = "轧空回补·上行有续航·非新多驱动"
-        elif oi_dn and px_dn:
-            regime = "多头平仓"; note = "多头投降·下行有续航·非新空驱动"
+        oi_hist = _fetch_binance_oi_history(sym, period)
+        if oi_hist:
+            oi_prev = float(oi_hist[0]["sumOpenInterest"])
+            oi_now = float(oi_hist[-1]["sumOpenInterest"])
+            px_prev = float(oi_hist[0]["sumOpenInterestValue"]) / oi_prev if oi_prev else 0
+            px_now = float(oi_hist[-1]["sumOpenInterestValue"]) / oi_now if oi_now else 0
+            oi_d = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0.0
+            px_d = (px_now - px_prev) / px_prev * 100 if px_prev else 0.0
         else:
-            regime = "持仓平稳"; note = "OI/价格无显著增量·无杠杆体制信号"
+            row = _fetch_orion_ticker(sym)
+            if not row:
+                return {"ok": False, "summary": "OI体制不可用", "source": "none"}
+            tf_key = {"5m": "tf5m", "15m": "tf15m", "1h": "tf1h", "4h": "tf4h"}.get(period, "tf1h")
+            tf = row.get(tf_key) if isinstance(row.get(tf_key), dict) else row.get("tf1h")
+            if not isinstance(tf, dict):
+                return {"ok": False, "summary": "Orion OI周期数据不可用", "source": "Orion/Binance"}
+            oi_d = float(tf.get("oiChange") or 0)
+            px_d = float(tf.get("changePercent") or 0)
+            source = "Orion/Binance"
+        regime, note = _regime_from_deltas(oi_d, px_d)
         summary = f"杠杆体制：{regime}（OI {oi_d:+.2f}% · 价 {px_d:+.2f}%）— {note}"
         return {"ok": True, "regime": regime, "oi_delta_pct": round(oi_d, 2),
-                "price_delta_pct": round(px_d, 2), "summary": summary}
+                "price_delta_pct": round(px_d, 2), "summary": summary, "source": source}
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"oi_price_regime failed: {e}\n")
-        return {"ok": False, "summary": "OI体制不可用"}
-
+        return {"ok": False, "summary": "OI体制不可用", "source": "none"}
 
 def wall_summary(symbol: str) -> str:
     """便捷入口：直接返回可嵌入分析卡的人读字符串。"""

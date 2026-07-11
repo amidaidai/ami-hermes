@@ -147,3 +147,36 @@ def test_auto_card_builds_tables_from_tv_bridge_decision_cache():
     assert main["进场"] == "扫高受阻 64,200"
     assert sub["signal"].startswith("🟡 偏空")
     assert sub["oi"] == "▼新空进场"
+
+
+def test_renderer_never_shows_star_order_when_final_verdict_is_no_go():
+    render = _load(RENDER, "render_tv_card_final_verdict")
+    card = render.render_tv_card(
+        {
+            "grade": "A多", "entry": 100, "stop": 98, "target": 105,
+            "_final_verdict": {
+                "state": "NO-GO", "executable": False, "side": "neutral",
+                "grade": "X禁做", "entry": None, "stop": None, "target": None,
+                "reason": "硬闸门：dual_indicator",
+            },
+        },
+        {"signal": "偏空"}, "BTCUSDT", 100, mode="push",
+    )
+    assert "⭐主推" not in card
+    assert "主推 等" in card
+    assert "X禁做" in card
+
+
+def test_renderer_surfaces_regime_model_and_final_state_once():
+    render = _load(RENDER, "render_tv_card_regime")
+    card = render.render_tv_card(
+        {
+            "grade": "A多", "entry": 100, "stop": 98, "target": 105,
+            "_decision_regime": {"name": "趋势"},
+            "_final_verdict": {
+                "state": "GO-A", "executable": True, "side": "long", "grade": "A多",
+                "entry": 100, "stop": 98, "target": 105, "model_id": "fvg_pullback", "reason": "全部通过",
+            },
+        }, {"signal": "偏多"}, "BTCUSDT", 100, mode="push",
+    )
+    assert card.count("体制趋势 · 模型fvg_pullback · GO-A") == 1

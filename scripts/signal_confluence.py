@@ -105,12 +105,9 @@ def read_btc_levels() -> dict:
         return {"error": "no valid TV cache"}
     spot = None
     try:
-        req = urllib.request.Request(
-            "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
-            headers={"User-Agent": "Hermes/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=8) as r:
-            spot = float(json.loads(r.read()).get("price", 0))
+        from binance_public import fetch_spot
+        payload = fetch_spot("/api/v3/ticker/price", {"symbol": "BTCUSDT"})
+        spot = float(payload.get("price", 0)) if isinstance(payload, dict) else None
     except Exception:
         spot = None
     return {

@@ -14,11 +14,11 @@ ZONE_HIGH = 60342  # 支撑墙上沿
 STATE_FILE = os.path.join(os.path.dirname(__file__), "btc_zone_state.json")
 
 def get_price():
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={SYM}"
-    req = urllib.request.Request(url, headers={"User-Agent": "curl/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.loads(r.read().decode("utf-8"))
-        return float(data["price"])
+    from binance_public import fetch_spot
+    data = fetch_spot("/api/v3/ticker/price", {"symbol": SYM}, timeout=10)
+    if not isinstance(data, dict) or not data.get("price"):
+        raise RuntimeError("Binance price unavailable")
+    return float(data["price"])
 
 def load_state():
     try:

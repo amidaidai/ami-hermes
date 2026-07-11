@@ -9,6 +9,7 @@ import urllib.request
 TZ = timezone(timedelta(hours=8))
 UA = "Hermes/1.0"
 BASE = "https://fapi.binance.com"
+ORION_URL = "https://screener.orionterminal.com/api/screener?exchange=binance"
 DATA_DIR = os.path.expanduser("~/AppData/Local/hermes/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
@@ -26,10 +27,41 @@ def _fetch(url, timeout=10):
     return None
 
 
-def fetch_oi_and_price(symbol: str) -> dict:
+def _orion_current(row: dict) -> dict:
+    """Normalize Orion's Binance futures snapshot to the collector contract."""
+    tf1h = row.get("tf1h") if isinstance(row.get("tf1h"), dict) else {}
+    return {
+        "symbol": str(row.get("symbol") or ""),
+        "oi": float(row.get("openInterest") or 0),
+        "price": float(row.get("price") or row.get("markPrice") or 0),
+        "oi_delta_pct": float(tf1h.get("oiChange") or 0),
+        "price_delta_pct": float(tf1h.get("changePercent") or 0),
+        "source": "Orion/Binance",
+    }
+
+
+def _fetch_orion_map() -> dict[str, dict]:
+    payload = _fetch(ORION_URL, timeout=15)
+    rows = payload.get("tickers") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row.get("symbol") or "").upper(): row
+        for row in rows
+        if isinstance(row, dict) and row.get("symbol")
+    }
+
+
+def fetch_oi_and_price(symbol: str, orion_rows: dict[str, dict] | None = None) -> dict:
+    # Orion exposes Binance's live futures OI/mark data in one request and is the
+    # preferred public path on hosts where fapi TLS is unavailable.
+    if orion_rows and symbol in orion_rows:
+        current = _orion_current(orion_rows[symbol])
+        if current.get("oi") and current.get("price"):
+            return current
     oi_data = _fetch(f"{BASE}/fapi/v1/openInterest?symbol={symbol}", timeout=5)
     price_data = _fetch(f"{BASE}/fapi/v1/ticker/price?symbol={symbol}", timeout=5)
-    result = {"symbol": symbol, "oi": 0, "price": 0}
+    result = {"symbol": symbol, "oi": 0, "price": 0, "source": "Binance Futures"}
     if oi_data: result["oi"] = float(oi_data.get("openInterest", 0))
     if price_data: result["price"] = float(price_data.get("price", 0))
     return result
@@ -52,8 +84,8 @@ def analyze(symbol: str, current: dict, prev: dict) -> dict:
     oi_now, price_now = current.get("oi", 0), current.get("price", 0)
     oi_prev, price_prev = prev.get("oi", oi_now), prev.get("price", price_now)
     if not oi_now: return {"symbol": symbol, "status": "no_data"}
-    oi_delta_pct = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0
-    price_delta_pct = (price_now - price_prev) / price_prev * 100 if price_prev else 0
+    oi_delta_pct = float(current.get("oi_delta_pct")) if current.get("oi_delta_pct") is not None else ((oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0)
+    price_delta_pct = float(current.get("price_delta_pct")) if current.get("price_delta_pct") is not None else ((price_now - price_prev) / price_prev * 100 if price_prev else 0)
 
     if oi_delta_pct < -2 and price_delta_pct < -1: squeeze, detail = "多头爆仓", f"OI{oi_delta_pct:+.1f}% 价{price_delta_pct:+.1f}%→多杀多"
     elif oi_delta_pct < -2 and price_delta_pct > 1: squeeze, detail = "空头爆仓", f"OI{oi_delta_pct:+.1f}% 价{price_delta_pct:+.1f}%→轧空"
@@ -70,15 +102,27 @@ def analyze(symbol: str, current: dict, prev: dict) -> dict:
         verdict, action = "⚠杠杆拥挤", "警惕插针清算"
     else:
         verdict, action = "○常态", "按结构交易"
-    return {"symbol": symbol, "oi": oi_now, "price": price_now, "oi_delta_pct": round(oi_delta_pct, 2), "price_delta_pct": round(price_delta_pct, 2), "squeeze": squeeze, "detail": detail, "verdict": verdict, "action": action}
+    return {"symbol": symbol, "oi": oi_now, "price": price_now, "oi_delta_pct": round(oi_delta_pct, 2), "price_delta_pct": round(price_delta_pct, 2), "squeeze": squeeze, "detail": detail, "verdict": verdict, "action": action, "source": current.get("source", "unknown")}
 
+
+
+def _overall_conclusion(results: list[dict]) -> tuple[str, bool]:
+    valid = [r for r in results if r.get("status") not in ("api_error", "no_data")]
+    if not valid:
+        return "**数据源全部失败**，当前**不能判断清算压力**，禁止按‘无爆仓’处理", False
+    if any("爆仓" in str(r.get("squeeze", "")) for r in valid):
+        return "**检测到爆仓**，顺势跟随方向、**不接刀**", True
+    if any("杠杆拥挤" in str(r.get("verdict", "")) for r in valid):
+        return "**OI拥挤**，警惕**插针清算**", True
+    return "无爆仓信号，市场常态", True
 
 
 def main():
     now = datetime.now(TZ); ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}：{now.minute:02d}"
     results = []
+    orion_rows = _fetch_orion_map()
     for sym in SYMBOLS:
-        current = fetch_oi_and_price(sym)
+        current = fetch_oi_and_price(sym, orion_rows)
         if not current["oi"]: results.append({"symbol": sym, "status": "api_error"}); continue
         prev = load_prev(sym)
         analysis = analyze(sym, current, prev)
@@ -87,18 +131,18 @@ def main():
     
     lines = [f"💥 清算压力 {ts}"]
     lines.append("")
-    lines.append("| 品种 | 现价 | OI | OI变化 | 价格变化 | 清算信号 | 决策 |")
-    lines.append("|:----|:----:|:----:|:----:|:----:|:----|:----|")
+    lines.append("| 品种 | 现价 | OI | OI变化 | 价格变化 | 清算信号 | 数据源 | 决策 |")
+    lines.append("|:----|:----:|:----:|:----:|:----:|:----|:----|:----|")
 
     has_squeeze = False
     for r in results:
-        if r.get("status") == "api_error": lines.append(f"| {r['symbol']} | - | - | - | - | 获取失败 | - |"); continue
-        if r.get("status") == "no_data": lines.append(f"| {r['symbol']} | - | - | - | - | 等待数据 | - |"); continue
+        if r.get("status") == "api_error": lines.append(f"| {r['symbol']} | - | - | - | - | 获取失败 | - | - |"); continue
+        if r.get("status") == "no_data": lines.append(f"| {r['symbol']} | - | - | - | - | 等待数据 | - | - |"); continue
         oi_m = r["oi"] / 1e6
         squeeze_icon = "🟡" if "爆仓" in r.get("squeeze", "") else ""
         oi_dir = "📈" if r["oi_delta_pct"] > 0 else "📉" if r["oi_delta_pct"] < 0 else "➡️"
         px_dir = "📈" if r["price_delta_pct"] > 0 else "📉" if r["price_delta_pct"] < 0 else "➡️"
-        lines.append(f"| {r['symbol']} | ${r['price']:,.1f} | ${oi_m:.1f}M | {oi_dir}{r['oi_delta_pct']:+.1f}% | {px_dir}{r['price_delta_pct']:+.1f}% | {squeeze_icon}{r['squeeze']} | {r.get('verdict','○')} |")
+        lines.append(f"| {r['symbol']} | ${r['price']:,.1f} | {oi_m:.2f}M币 | {oi_dir}{r['oi_delta_pct']:+.1f}% | {px_dir}{r['price_delta_pct']:+.1f}% | {squeeze_icon}{r['squeeze']} | {r.get('source','-')} | {r.get('verdict','○')} |")
         if "爆仓" in r.get("squeeze", ""): has_squeeze = True
 
     lines.append("")
@@ -113,18 +157,15 @@ def main():
         for r in results:
             if "爆仓" in r.get("squeeze", ""): lines.append(f"⚠ {r['symbol']}: {r['detail']} → {r.get('action','')}")
 
-    # 总体结论
-    squeeze_types = [r.get("verdict", "○") for r in results if r.get("status") not in ("api_error", "no_data")]
-    if has_squeeze:
-        concl = "**检测到爆仓**，顺势跟随方向、**不接刀**"
-    elif any("杠杆拥挤" in v for v in squeeze_types):
-        concl = "**OI拥挤**，警惕**插针清算**"
-    else:
-        concl = "无爆仓信号，市场常态"
+    # 总体结论：数据全失效时不得伪装成“市场常态”。
+    concl, data_ok = _overall_conclusion(results)
     lines.append("")
     lines.append(f"**总体结论**: {concl}。")
 
     output = "\n".join(lines)
+    if not data_ok:
+        print(output)
+        return 1
     if has_squeeze:
         print(output)
         try:

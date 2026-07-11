@@ -20,7 +20,7 @@ TV需以CDP模式运行 (端口9222)，否则fallback到已有cache。
 缓存: data/tv_dmi_cache.json
 """
 
-import subprocess, json, sys, os
+import subprocess, json, sys, os, time
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -33,7 +33,8 @@ CACHE = ROOT / "data" / "tv_dmi_cache.json"
 def _norm_symbol_for_cache(symbol: str) -> str:
     """归一化品种标识，供跨缓存品种门禁比对。"""
     s = str(symbol or "").upper()
-    s = s.replace("BINANCE:", "").replace("OANDA:", "").replace("TVC:", "")
+    # 交易所前缀不属于品种身份；兼容NASDAQ/BATS/CME/NYMEX等所有市场。
+    s = s.split(":")[-1]
     s = s.replace(".P", "")
     return s
 
@@ -97,7 +98,23 @@ def read_indicators(symbol=None):
     indicators = {}
     for study in data.get("studies", []):
         for key, val in (study.get("values") or {}).items():
-            indicators[key.lower().replace(" ", "_")] = val
+            norm = key.lower().replace(" ", "_")
+            indicators[norm] = val
+            # 带公式说明的 Data Window 标题需要稳定别名，避免下游无法命中。
+            if key.startswith("MCP StructPack"):
+                indicators["mcp_struct_pack"] = val
+            elif key.startswith("MCP Risk Pack"):
+                indicators["mcp_risk_pack"] = val
+            elif key.startswith("MCP EMA Length "):
+                indicators[key.lower().replace(" ", "_")] = val
+            elif key.startswith("MCP CVD Method Code"):
+                indicators["mcp_cvd_method_code"] = val
+            elif key == "OI Change % (Normalized)":
+                indicators["oi_change_pct_normalized"] = val
+            elif key == "HALDRO Risk Code":
+                indicators["haldro_risk_code"] = val
+            elif key == "HALDRO Valid Code":
+                indicators["haldro_valid_code"] = val
     return indicators
 
 
@@ -159,6 +176,22 @@ def read_state_symbol():
     return sym.strip() or None
 
 
+def ensure_expected_symbol(expect_symbol: str, attempts: int = 5) -> bool:
+    """先切到目标品种，再用chart state验证；禁止给当前图数据强贴目标symbol。"""
+    if not expect_symbol:
+        return True
+    _out, ok = _tv("symbol", expect_symbol, timeout=20)
+    if not ok:
+        return False
+    expected = _norm_symbol_for_cache(expect_symbol)
+    for _ in range(max(1, attempts)):
+        current = read_state_symbol()
+        if current and _norm_symbol_for_cache(current) == expected:
+            return True
+        time.sleep(1)
+    return False
+
+
 def load_cache():
     """加载已有缓存。"""
     if CACHE.exists():
@@ -188,13 +221,34 @@ def collect_and_cache(alert_mode=False, expect_symbol=None):
     if not tv_available():
         return None
 
-    # 有期望品种时 --symbol 直读目标品种，避免图表污染
-    read_sym = expect_symbol
+    # CLI values/data 的 --symbol 在部分TradingView版本中不会切换图表，却会让
+    # 下游误以为读到了目标品种。必须先真实切图并校验state，再读当前图。
+    if expect_symbol and not ensure_expected_symbol(expect_symbol):
+        old = load_cache()
+        if old:
+            old["fresh"] = False
+            old["stale"] = True
+            return old
+        return None
+    if expect_symbol:
+        # 自定义Pine在切品种后需要时间完成Data Window/行动格重算。
+        time.sleep(3)
+    read_sym = None
 
     indicators = read_indicators(read_sym)
     dmi = read_dmi_table(read_sym)
     lines = read_pine_lines(read_sym)
     quote = read_quote(expect_symbol or "BINANCE:BTCUSDT.P")
+
+    if expect_symbol:
+        current = read_state_symbol()
+        if not current or _norm_symbol_for_cache(current) != _norm_symbol_for_cache(expect_symbol):
+            old = load_cache()
+            if old:
+                old["fresh"] = False
+                old["stale"] = True
+                return old
+            return None
 
     # 品种门禁（兼容无 expect_symbol 的旧路径：仍读全局图表状态比对）
     if not expect_symbol:

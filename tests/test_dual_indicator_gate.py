@@ -41,6 +41,29 @@ def test_dual_indicator_aligned_passes_gate():
     assert result["gates"]["dual_indicator"]["status"] == "green"
 
 
+def test_single_source_haldro_conflict_is_yellow_not_hard_block():
+    engine = _base_engine()
+    engine["_dual_indicator_verdict"] = {
+        "asset_is_crypto": True, "usable": True, "valid_code": 1,
+        "conflict": True, "hard_conflict": False, "direction_verdict": "单源冲突，仅等待",
+    }
+    result = check_gate("BTCUSDT", engine, _base_meta())
+    assert result["go"]
+    assert result["gates"]["dual_indicator"]["status"] == "yellow"
+    assert "dual_indicator" in result["yellow_gates"]
+
+
+def test_invalid_haldro_is_yellow_and_cannot_create_red_conflict():
+    engine = _base_engine()
+    engine["_dual_indicator_verdict"] = {
+        "asset_is_crypto": True, "usable": False, "valid_code": 0,
+        "conflict": False, "hard_conflict": False,
+    }
+    result = check_gate("BTCUSDT", engine, _base_meta())
+    assert result["go"]
+    assert result["gates"]["dual_indicator"]["status"] == "yellow"
+
+
 def test_rr_below_two_blocks_execution_even_if_close():
     engine = _base_engine()
     engine["_dual_indicator_verdict"] = {"asset_is_crypto": True, "usable": True, "conflict": False, "direction_verdict": "主副同向"}
@@ -68,6 +91,38 @@ def test_non_crypto_without_haldro_does_not_block():
     assert result["go"]
     assert result["max_score"] == 8
     assert result["gates"]["dual_indicator"]["status"] == "green"
+
+
+def test_final_verdict_wait_is_single_execution_authority():
+    engine = _base_engine()
+    engine["_dual_indicator_verdict"] = {
+        "asset_is_crypto": True, "usable": False, "valid_code": 0,
+        "conflict": False, "hard_conflict": False,
+    }
+    engine["_final_verdict"] = {
+        "state": "WAIT", "executable": False,
+        "reason": "等待：haldro_invalid/rr_ratio",
+    }
+    result = check_gate("BTCUSDT", engine, _base_meta())
+    assert not result["go"]
+    assert result["final_state"] == "WAIT"
+    assert result["verdict"].startswith("○ WAIT")
+
+
+def test_final_verdict_no_go_overrides_legacy_green_gates():
+    engine = _base_engine()
+    engine["_dual_indicator_verdict"] = {
+        "asset_is_crypto": True, "usable": True, "valid_code": 2,
+        "conflict": False, "hard_conflict": False, "direction_verdict": "主副同向",
+    }
+    engine["_final_verdict"] = {
+        "state": "NO-GO", "executable": False,
+        "reason": "硬闸门：risk_constitution",
+    }
+    result = check_gate("BTCUSDT", engine, _base_meta())
+    assert not result["go"]
+    assert result["final_state"] == "NO-GO"
+    assert result["verdict"].startswith("✗ NO-GO")
 
 
 def test_tv_cache_indicator_mapping_keeps_lsr():

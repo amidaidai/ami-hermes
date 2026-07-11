@@ -58,6 +58,12 @@ def write_pending(zone, price):
 
 def fetch(url):
     try:
+        if "binance.com/api/v3/" in url:
+            import urllib.parse as _urlparse
+            from binance_public import fetch_spot
+            parsed = _urlparse.urlsplit(url)
+            params = dict(_urlparse.parse_qsl(parsed.query))
+            return fetch_spot(parsed.path, params, timeout=8)
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             return json.loads(r.read())

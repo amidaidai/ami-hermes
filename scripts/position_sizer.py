@@ -154,6 +154,25 @@ def position_size(
     return _result(tier, risk_usd, size_pct, reasons, position_qty, nominal, margin)
 
 
+def position_from_final_verdict(final: dict, symbol: str = "BTCUSDT") -> dict:
+    """把唯一FinalVerdict投影为仓位显示；不得重新按旧置信度放大风险。"""
+    if not isinstance(final, dict) or not final.get("executable"):
+        return _result("禁止", 0, 0, [str((final or {}).get("reason") or "FinalVerdict禁止执行")])
+    risk_usd = float(final.get("risk_usd") or 0)
+    entry = float(final.get("entry") or 0)
+    stop = float(final.get("stop") or 0)
+    if risk_usd <= 0 or entry <= 0 or stop <= 0 or entry == stop:
+        return _result("禁止", 0, 0, ["FinalVerdict仓位字段不完整"])
+    qty = round(risk_usd / abs(entry - stop), 8)
+    nominal = round(qty * entry, 2)
+    leverage = _get_leverage(symbol)
+    margin = round(nominal / leverage, 2) if leverage > 0 else 0
+    cap = _get_account_balance()
+    size_pct = round(risk_usd / cap * 100, 2) if cap > 0 else 0
+    tier = "常规" if final.get("state") == "GO-A" else "轻仓"
+    return _result(tier, risk_usd, size_pct, [str(final.get("reason") or "FinalVerdict")], qty, nominal, margin)
+
+
 def position_advice(merged: dict, entry: float = 0, stop: float = 0,
                     data_grade: str = "B", cvd_grade: str = "C",
                     event_ban: bool = False, symbol: str = "BTCUSDT") -> dict:

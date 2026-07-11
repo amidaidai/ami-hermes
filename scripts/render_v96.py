@@ -158,6 +158,12 @@ def _sub_tf_text(tf_data: dict) -> str:
     return "待刷新"
 
 
+def _sub_tf_text_for_asset(tf_data: dict, dual_indicator: dict | None) -> str:
+    if isinstance(dual_indicator, dict) and dual_indicator.get("asset_is_crypto") is False:
+        return "不适用"
+    return _sub_tf_text(tf_data)
+
+
 def _vwap_pos(tf_data: dict, price: float | None) -> str:
     if not isinstance(tf_data, dict):
         return "—"
@@ -266,7 +272,7 @@ def _structure_table(levels: list[dict], price: float | None) -> str:
     rows = []
     if a:
         rows.append(f"| {a['icon']}{a['kind']} 上 | `{_num(a['level'])}` | {a['dist']} |")
-    rows.append(f"| ⚖**现价** | `{_num(price)}` | — |")
+    rows.append(f"| ⚖现价 | `{_num(price)}` | — |")
     if b:
         rows.append(f"| {b['icon']}{b['kind']} 下 | `{_num(b['level'])}` | {b['dist']} |")
     return "| 结构位 | 价格 | 距现价 |\n|:---|:---:|---:|\n" + "\n".join(rows)
@@ -356,7 +362,8 @@ def render_v96_card(
     s_emoji = _status_emoji(status)
     dir_emoji = _dir_emoji(direction)
 
-    if str(status).startswith("X") or rr_a < 2:
+    final_state = str(status or "").upper()
+    if final_state == "NO-GO" or str(status).startswith("X") or rr_a < 2:
         action_summary = "⚠禁做 — 主线无优势或R:R不足"
         recommend_name = "⚠️主推 禁做"
         recommend_trigger = "现价无优势"
@@ -366,7 +373,7 @@ def render_v96_card(
         backup_trigger = "重新站回/跌破结构位后再算"
         backup_exec = "只做提醒，不做执行"
         backup_rr = "重算"
-    elif str(status).startswith("A"):
+    elif final_state in {"GO-A", "GO-B"} or str(status).startswith("A"):
         action_summary = f"{dir_emoji} {bias}可执行 — 只做最推荐方案"
         recommend_name = f"⭐主推 {dir_a}"
         recommend_trigger = f"{_price(price)}确认"
@@ -398,7 +405,7 @@ def render_v96_card(
     lines.append("【现在】结构位")
     lines.append(_structure_table(levels_prepared, price))
     rec_name_clean = recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')
-    lines.append("【决策摘要】")
+    lines.append("【做法】决策摘要")
     lines.append("| 维度 | 内容 |")
     lines.append("|:---|:---|")
     lines.append(f"| 做法 | 只执行{rec_name_clean} · {recommend_trigger} · {recommend_rr} |")
@@ -412,7 +419,7 @@ def render_v96_card(
     for tf in TF_ORDER:
         k = klines.get(tf, {}) if isinstance(klines, dict) else {}
         mark = " ⭐主" if tf == main_tf else ""
-        lines.append(f"| {tf}{mark} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text(k)} | {_vwap_pos(k, price)} |")
+        lines.append(f"| {tf}{mark} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text_for_asset(k, dual_indicator)} | {_vwap_pos(k, price)} |")
     lines.append(f"→ 主执行{main_tf} · 自上而下确认（D背景→{main_tf}执行）")
     lines.append("")
 

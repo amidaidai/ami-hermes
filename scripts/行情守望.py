@@ -211,10 +211,11 @@ def get_price(symbol, block=None):
     if "XAU" in symu or not symu.endswith("USDT"):
         return None
     try:
-        r = _http_get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol}, timeout=5)
-        r.raise_for_status()
-        return float(r.json()["price"])
-    except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError, KeyError, TypeError) as e:
+        from binance_public import fetch_spot
+        data = fetch_spot("/api/v3/ticker/price", {"symbol": symbol}, timeout=5)
+        if isinstance(data, dict) and data.get("price"):
+            return float(data["price"])
+    except (ValueError, KeyError, TypeError, OSError) as e:
         log(f"价格错误 {symbol}: {e}")
     if isinstance(block, dict) and isinstance(block.get("price_at_analysis"), (int, float)):
         log(f"价格源不可用 {symbol}: 使用分析价临时兜底")
@@ -227,11 +228,16 @@ def get_close(symbol, interval):
     if "XAU" in symu or not symu.endswith("USDT"):
         return get_price(symbol)
     try:
-        r = _http_get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": interval, "limit": 2}, timeout=5)
-        r.raise_for_status()
-        k = r.json()
+        from binance_public import fetch_spot
+        k = fetch_spot(
+            "/api/v3/klines",
+            {"symbol": symbol, "interval": interval, "limit": 2},
+            timeout=5,
+        )
+        if not isinstance(k, list) or not k:
+            return None
         return float(k[-2][4] if len(k) > 1 else k[-1][4])
-    except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, OSError) as e:
         log(f"收盘价错误 {symbol} {interval}: {e}")
         return None
 
@@ -250,9 +256,14 @@ def get_cvd(symbol):
         pass
     # 回退：1m K线 taker_buy_volume 估算
     try:
-        r = _http_get("https://api.binance.com/api/v3/klines", params={"symbol": symbol, "interval": "1m", "limit": 5}, timeout=5)
-        r.raise_for_status()
-        k = r.json()
+        from binance_public import fetch_spot
+        k = fetch_spot(
+            "/api/v3/klines",
+            {"symbol": symbol, "interval": "1m", "limit": 5},
+            timeout=5,
+        )
+        if not isinstance(k, list) or not k:
+            return "?", "C级"
         buy = sum(float(x[9]) for x in k)
         total = sum(float(x[7]) for x in k)
         sell = total - buy

@@ -13,7 +13,7 @@
   金十 MCP             → 快讯/日历/XAU
 """
 
-import json, time, os, urllib.request
+import json, time, os, re, urllib.request
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -39,7 +39,7 @@ TD_KEY = _read_secret("twelvedata_api_key.txt")
 TUSHARE_TOKEN = _read_secret("tushare_token.txt")
 FMP_KEY = _read_secret("fmp_api_key.txt")
 MASSIVE_KEY = _read_secret("massive_api_key.txt")
-CG_KEY = _read_secret("coingecko_api_key.txt") or os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+CG_KEY = os.environ.get("CG_API_KEY", "") or _read_secret("coingecko_api_key.txt")
 
 
 def _fetch(url: str, headers: dict = None, timeout: int = 10) -> dict:
@@ -437,7 +437,7 @@ def fmp_quote(symbol: str = "AAPL") -> dict:
     """FMP 股票/ETF 实时行情"""
     def fetch():
         d = _fetch(
-            f"https://financialmodelingprep.com/api/v3/quote/{symbol}?apikey={FMP_KEY}"
+            f"https://financialmodelingprep.com/stable/quote?symbol={symbol}&apikey={FMP_KEY}"
         )
         if isinstance(d, list) and d:
             q = d[0]
@@ -461,7 +461,7 @@ def fmp_forex(pair: str = "EURUSD") -> dict:
     """FMP 外汇实时行情"""
     def fetch():
         d = _fetch(
-            f"https://financialmodelingprep.com/api/v3/quote/{pair}?apikey={FMP_KEY}"
+            f"https://financialmodelingprep.com/stable/quote?symbol={pair}&apikey={FMP_KEY}"
         )
         if isinstance(d, list) and d:
             q = d[0]
@@ -475,12 +475,42 @@ def fmp_forex(pair: str = "EURUSD") -> dict:
         return {}
     return _cached(f"fmpfx_{pair}", fetch, ttl=60)
 
+def tushare_daily(symbol: str = "600519.SH") -> dict:
+    """TuShare A股最近交易日行情；非A股代码返回空，不污染美股路径。"""
+    raw = str(symbol or "").upper().strip()
+    if raw.isdigit() and len(raw) == 6:
+        raw += ".SH" if raw.startswith(("5", "6", "9")) else ".SZ"
+    if not TUSHARE_TOKEN or not re.match(r"^\d{6}\.(SH|SZ|BJ)$", raw):
+        return {}
+
+    def fetch():
+        body = json.dumps({
+            "api_name": "daily", "token": TUSHARE_TOKEN,
+            "params": {"ts_code": raw},
+            "fields": "ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+        }).encode("utf-8")
+        req = urllib.request.Request("https://api.tushare.pro", data=body,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=12) as response:
+            payload = json.loads(response.read())
+        data = payload.get("data") or {}
+        fields, items = data.get("fields") or [], data.get("items") or []
+        if not items:
+            return {}
+        row = dict(zip(fields, items[0]))
+        return {"symbol": raw, "date": row.get("trade_date"), "price": row.get("close"),
+            "open": row.get("open"), "high": row.get("high"), "low": row.get("low"),
+            "change_pct": row.get("pct_chg"), "volume": row.get("vol"),
+            "amount": row.get("amount"), "source": "TuShare"}
+    return _cached(f"tushare_{raw}", fetch, ttl=300)
+
+
 def gather_all(asset_class: str = "crypto", symbol: str = "BTC") -> dict:
     """
     统一采集入口
     asset_class: crypto | stock | forex | metal
     """
-    result = {"symbol": symbol, "asset_class": asset_class, "time": datetime.now(TZ).isoformat()}
+    result: dict[str, object] = {"symbol": symbol, "asset_class": asset_class, "time": datetime.now(TZ).isoformat()}
     
     if asset_class == "crypto":
         try:
@@ -516,16 +546,42 @@ def gather_all(asset_class: str = "crypto", symbol: str = "BTC") -> dict:
         except Exception:
             pass
     elif asset_class == "stock":
+        collectors = {
+            "av": lambda: av_quote(symbol),
+            "td": lambda: td_quote(symbol),
+            "td_tech": lambda: td_technical(symbol),
+            "fmp": lambda: fmp_quote(symbol),
+            "massive": lambda: massive_aggs(symbol, "stock"),
+            "tushare": lambda: tushare_daily(symbol),
+            "macro": macro_overview,
+        }
+        for key, fetcher in collectors.items():
+            try:
+                value = fetcher()
+                if value:
+                    result[key] = value
+            except Exception as exc:
+                result[key] = {"_error": str(exc)[:80]}
+    elif asset_class == "forex":
+        for key, fetcher in {
+            "fmp": lambda: fmp_forex(symbol),
+            "td": lambda: td_quote(symbol),
+            "td_tech": lambda: td_technical(symbol),
+            "macro": macro_overview,
+        }.items():
+            try:
+                value = fetcher()
+                if value:
+                    result[key] = value
+            except Exception as exc:
+                result[key] = {"_error": str(exc)[:80]}
+    elif asset_class == "futures":
         try:
-            result["av"] = av_quote(symbol)
-        except Exception as e:
-            result["av"] = {"_error": str(e)[:80]}
+            result["massive"] = massive_futures_snapshot(symbol)
+        except Exception as exc:
+            result["massive"] = {"_error": str(exc)[:80]}
         try:
-            result["td"] = td_quote(symbol)
-        except Exception:
-            pass
-        try:
-            result["td_tech"] = td_technical(symbol)
+            result["macro"] = macro_overview()
         except Exception:
             pass
     

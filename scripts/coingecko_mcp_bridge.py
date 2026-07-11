@@ -20,7 +20,9 @@ import urllib.request
 import urllib.error
 
 MCP_URL = "https://mcp.api.coingecko.com/mcp"
-API_KEY = os.environ.get("COINGECKO_DEMO_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+from credential_store import read_secret
+
+API_KEY = read_secret("coingecko_api_key.txt", "COINGECKO_DEMO_API_KEY", "CG_API_KEY")
 
 def call_mcp(method, params=None):
     """Send JSON-RPC request to CoinGecko MCP via Streamable HTTP."""

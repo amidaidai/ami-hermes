@@ -15,7 +15,9 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 TZ = timezone(timedelta(hours=8))
 CACHE_FILE = Path("D:/Hermes agent/data/coingecko_cache.json")
 CACHE_TTL = 300  # 5分钟缓存
-CG_KEY = os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+from credential_store import read_secret
+
+CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
 
 def _fetch(url: str) -> dict:
     headers = {"User-Agent": UA}

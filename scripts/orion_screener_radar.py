@@ -39,7 +39,8 @@ BS = os.environ.get("BINANCE_SECRET_KEY", "")
 HAS_KEYS = bool(BK and BS)
 
 # CoinGecko Demo API (CG- prefix key, uses api.coingecko.com)
-CG_KEY = os.environ.get("CG_API_KEY", "") or "CG-tkuaqHxNbpTQ92HgpvEc4QXY"
+from credential_store import read_secret
+CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
 HAS_CG = bool(CG_KEY)
 CG_BASE = "https://api.coingecko.com/api/v3"  # Demo & Free both use api.coingecko.com
 
@@ -87,15 +88,24 @@ def fetch_orion(exchange=""):
 
 # ─── Binance REST (public) ───
 def _bfetch(path):
+    """Binance spot public data with official Vision fallback."""
+    if not path.startswith("/api/v3/"):
+        return None
     try:
-        req = urllib.request.Request(f"{BINANCE_API}{path}", headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=BINANCE_TIMEOUT) as r:
-            return json.loads(r.read())
-    except: return None
+        from binance_public import fetch_spot
+        return fetch_spot(path, timeout=BINANCE_TIMEOUT)
+    except Exception:
+        return None
 
 def _fapi_signed(path, params=""):
     """Binance Futures signed request."""
     if not HAS_KEYS: return {"_e": "no_keys"}
+    try:
+        from binance_public import fapi_available
+        if not fapi_available(timeout=2):
+            return {"_e": "fapi_unavailable"}
+    except Exception:
+        return {"_e": "fapi_health_unknown"}
     ts = int(time.time() * 1000)
     p = f"{params}{'&' if params else ''}timestamp={ts}"
     sig = hmac.new(BS.encode(), p.encode(), hashlib.sha256).hexdigest()
@@ -114,6 +124,24 @@ def verify_binance(symbol):
     """Deep verify a symbol via Binance API (internal calls parallelized). Returns dict or None."""
     name = symbol.replace("USDT", "")
     result = {"name": name, "symbol": symbol}
+    try:
+        from binance_public import fetch_orion_ticker
+        live = fetch_orion_ticker(symbol)
+        if live:
+            result.update({
+                "oi": float(live.get("openInterest") or 0),
+                "oi_usd": float(live.get("openInterestUsd") or 0),
+                "mark_price": float(live.get("markPrice") or live.get("price") or 0),
+                "funding_rate": float(live.get("fundingRate") or 0),
+                "derivatives_source": "Orion/Binance",
+            })
+            tf15_raw = live.get("tf15m")
+            tf15 = tf15_raw if isinstance(tf15_raw, dict) else {}
+            trend_pct = float(tf15.get("oiChange") or 0)
+            result["oi_trend_pct"] = trend_pct
+            result["oi_trend"] = "↑" if trend_pct > 0.1 else "↓" if trend_pct < -0.1 else "→"
+    except Exception:
+        pass
 
     def _fetch_24h():
         d24 = _bfetch(f"/api/v3/ticker/24hr?symbol={symbol}")
@@ -529,6 +557,14 @@ def build_report(candidates, ts):
         lines.append("| Orion | ✅已扫描 | 无通过候选 |")
         lines.append("| Binance/CG | ○待触发 | 无需深验 |")
         lines.append("")
+        lines.append("| 品种 | 数据 | 信号 |")
+        lines.append("|:----|:----|:----|")
+        lines.append("| — | 无候选 | ○无触发 |")
+        lines.append("")
+        lines.append("| 品种 | 判断 | 动作 |")
+        lines.append("|:----|:----|:----|")
+        lines.append("| — | 市场平静 | 不追单·0× |")
+        lines.append("")
         lines.append("**总体结论**: 市场平静，无中高置信异动，**不追单**。")
         return "\n".join(lines)
 
@@ -542,8 +578,8 @@ def build_report(candidates, ts):
     lines.append(f"| Binance/CG | {'✅' + str(bn_count) + '深验' if HAS_KEYS else '⏳无Key'} | CG{cg_count}确认 |")
     lines.append("")
 
-    lines.append("| 品种 | 置信 | 数据 | 信号 |")
-    lines.append("|:----|:----:|:----|:----|")
+    lines.append("| 品种 | 数据 | 信号 |")
+    lines.append("|:----|:----|:----|")
     for c in top:
         symbol = c.get("symbol", "?")
         price_str = fmt_price(c.get("price"))
@@ -563,13 +599,13 @@ def build_report(candidates, ts):
         sig_icon = ""
         if (c.get("oi_chg") or 0) > 5: sig_icon = "🔥"
         elif (c.get("funding") or 0) < -0.001: sig_icon = "💰"
-        data = f"价`{price_str}`·1h`{chg_str}`·24h`{fmt_pct(c.get('chg_24h') or 0)}`·OI`{oi_str}`"
+        data = f"{conf_cell}·价`{price_str}`·1h`{chg_str}`·24h`{fmt_pct(c.get('chg_24h') or 0)}`·OI`{oi_str}`"
         signal = f"{sig_icon}OI`{oi_chg_str}`·费`{fund_str}`·{taker}"
-        lines.append(f"| {symbol} | {conf_cell} | {data} | {signal} |")
+        lines.append(f"| {symbol} | {data} | {signal} |")
     lines.append("")
 
-    lines.append("| 品种 | 判断 | 动作 | 仓位 |")
-    lines.append("|:----|:----|:----|:----:|")
+    lines.append("| 品种 | 判断 | 动作 |")
+    lines.append("|:----|:----|:----|")
     for c in top:
         symbol = c.get("symbol", "?")
         oi_chg = c.get("oi_chg") or 0
@@ -596,7 +632,7 @@ def build_report(candidates, ts):
         # 24h偏离加大提示
         if abs(chg24) > 8:
             verdict += f"·24h{chg24:+.0f}%"
-        lines.append(f"| {symbol} | {lvl}{verdict} | {action} | {size} |")
+        lines.append(f"| {symbol} | {lvl}{verdict} | {action}·{size} |")
 
     # 总体结论：首行置信度最高的候选方向 + 一句话
     best = top[0]

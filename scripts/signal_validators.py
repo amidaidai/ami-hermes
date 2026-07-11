@@ -40,6 +40,13 @@ def long_short_contra(symbol: str = "BTCUSDT") -> dict:
     signal: 'bull_trap' / 'bear_trap' / 'neutral'
     """
     sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+    try:
+        from binance_public import fapi_available
+        if not fapi_available(timeout=2):
+            return {"available": False, "signal": "neutral", "ratio": None,
+                    "contra": "", "note": "多空比主域不可用·交由HALDRO验证"}
+    except Exception:
+        pass
     url = (f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
            f"?symbol={sym}&period=5m&limit=1")
     data = _get_json(url)
@@ -68,16 +75,21 @@ def long_short_contra(symbol: str = "BTCUSDT") -> dict:
 
 
 def _tf_direction(symbol: str, interval: str) -> int:
-    """单个周期方向：收盘相对开盘。1=多 -1=空 0=中性。"""
+    """单个周期方向：已收盘K线收盘相对开盘。1=多 -1=空 0=中性。"""
     sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
-    url = (f"https://api.binance.com/api/v3/klines?symbol={sym}"
-           f"&interval={interval}&limit=3")
-    data = _get_json(url)
-    if not data or len(data) < 2:
+    try:
+        from binance_public import fetch_spot
+        data = fetch_spot(
+            "/api/v3/klines",
+            {"symbol": sym, "interval": interval, "limit": 3},
+        )
+    except Exception:
+        data = None
+    if not isinstance(data, list) or len(data) < 2:
         return 0
     try:
-        # 取最近一根的 开/收
-        o = float(data[-1][1]); c = float(data[-1][4])
+        # 最后一根通常未收盘，统一取倒数第二根防止K内漂移。
+        o = float(data[-2][1]); c = float(data[-2][4])
         if c > o * 1.0005:
             return 1
         if c < o * 0.9995:

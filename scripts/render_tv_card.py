@@ -121,16 +121,38 @@ def _level_table(vwap, vah, val, poc, price) -> str:
     if a:
         dist = f"{(a[1] - px) / px * 100:+.2f}%"
         rows.append(f"| 🔴{a[0]} 上 | `{_fmt_num(a[1])}` | {dist} |")
-    rows.append(f"| ⚖**现价** | `{_fmt_num(px)}` | — |")
+    rows.append(f"| ⚖现价 | `{_fmt_num(px)}` | — |")
     if b:
         dist = f"{(b[1] - px) / px * 100:+.2f}%"
         rows.append(f"| 🟢{b[0]} 下 | `{_fmt_num(b[1])}` | {dist} |")
     return "| 结构 | 价格 | 距现价 |\n|:---|:---:|---:|\n" + "\n".join(rows)
 
 
+def _decision_line(main: dict) -> str:
+    final = main.get("_final_verdict") if isinstance(main, dict) else None
+    regime = main.get("_decision_regime") if isinstance(main, dict) else None
+    if not isinstance(final, dict):
+        return ""
+    regime_name = regime.get("name") if isinstance(regime, dict) else "待判"
+    model_id = final.get("model_id") or "待判"
+    state = final.get("state") or "WAIT"
+    return f"体制{regime_name} · 模型{model_id} · {state}"
+
+
 def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: str = "BTCUSDT", price: float = 0, mode: str = "push") -> str:
     main = main or {}
     sub = sub or {}
+    final = main.get("_final_verdict") if isinstance(main, dict) else None
+    if isinstance(final, dict):
+        main = dict(main)
+        main["grade"] = final.get("grade") or main.get("grade") or "C等待"
+        main["treatment"] = final.get("reason") or main.get("treatment") or ""
+        if final.get("executable"):
+            main["entry"], main["stop"], main["target"] = final.get("entry"), final.get("stop"), final.get("target")
+        else:
+            main.pop("entry", None)
+            main.pop("stop", None)
+            main.pop("target", None)
 
     grade = main.get("grade", "C等待")
     treatment = main.get("treatment", "")
@@ -188,6 +210,9 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
         "| 优先级 | 触发价 | 操作 |",
         "|:---|:---:|:---|",
     ]
+    decision_line = _decision_line(main)
+    if decision_line:
+        lines.insert(4, decision_line)
     if direction == "做多":
         lines.append(f"| ⭐主推 多 | {entry_clean} | 多 损{stop_clean} 标{target_clean} |")
         lines.append(f"| 🔁备选 空 | {magnet_up_clean} | 主推失效后再看空 |")

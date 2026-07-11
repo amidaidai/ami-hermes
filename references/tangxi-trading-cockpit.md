@@ -7,6 +7,12 @@
 | 模块 | 职责 | 主文件/能力 |
 |---|---|---|
 | 数据驾驶舱 | 多源采集、数据定级、新鲜度判断 | TV MCP、Binance、FinanceKit、Jin10、Web/X、CoinGecko、Polymarket、ETF Flow、Dune 链上、COT 报告 |
+
+### TradingView MCP 权限边界（免费账号）
+
+- 只负责当前图表现场读取：D/4h/1h/15m/5m结构、POC/VAH/VAL/VWAP、FVG/OB/BRK/LV、行动格、Data Window、价格轴与全屏截图。
+- 不调用 TradingView 的回测、策略测试器、K线回放或复盘能力，也不把这些能力列为驾驶舱依赖。
+- 需要统计验证时，由本地 Python 使用独立历史数据完成；不得冒充 TradingView 免费账号能力。
 | 结构驾驶舱 | 定方向、价值区、关键位、扫线、VWAP/EMA/CVD、FVG/HTF FVG、MCP DW | TV主指标 SVP+ICT+VWAP+CVD（2026-07-02生产版） |
 | 订单流驾驶舱 | 验证现货/永续、OI、CVD、覆盖率、Composite、Taker、Funding、期权 PCR/MaxPain | TV副指标 Volume Aggregated、Binance OI/Taker/Funding、Deribit 期权 |
 | 执行驾驶舱 | A/B/C/X 状态机、确认入场、失效、目标 | auto_card、render_tv_card、render_v8 |

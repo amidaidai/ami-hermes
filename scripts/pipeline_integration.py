@@ -46,13 +46,14 @@ def _import_or_none(module_name):
 
 
 def fetch_binance_klines(symbol="BTCUSDT", interval="15m", limit=60):
-    """从Binance获取K线数据。"""
-    import urllib.request
+    """从Binance获取K线数据；主域失败时使用官方Vision市场数据域。"""
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        req = urllib.request.Request(url, headers={"User-Agent": "D/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.loads(resp.read())
+        from binance_public import fetch_spot
+        payload = fetch_spot(
+            "/api/v3/klines",
+            {"symbol": symbol, "interval": interval, "limit": limit},
+        )
+        return payload if isinstance(payload, list) else _read_json(os.path.join(DIR, "btc_klines_cache.json"))
     except Exception:
         return _read_json(os.path.join(DIR, "btc_klines_cache.json"))
 

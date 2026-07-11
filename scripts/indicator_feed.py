@@ -38,11 +38,16 @@ except Exception:
 
 
 def _binance_klines(symbol: str, interval: str = "15m", limit: int = 100) -> list[list]:
-    """Binance 公开 K 线（无需签名）。返回 [[open_time, o, h, l, c, vol, ...], ...]"""
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read())
+    """Binance公开K线；主域失败时使用官方Vision市场数据域。"""
+    from binance_public import fetch_spot
+    payload = fetch_spot(
+        "/api/v3/klines",
+        {"symbol": symbol, "interval": interval, "limit": limit},
+        timeout=10,
+    )
+    if not isinstance(payload, list):
+        raise RuntimeError("Binance K线源全部不可用")
+    return payload
 
 
 def _gold_klines(interval: str = "15m", limit: int = 100) -> list[list]:

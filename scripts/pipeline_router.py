@@ -103,13 +103,43 @@ STEPS = {
 
 # ===== cron_read 数据源映射（按资产类别） =====
 CRON_SOURCES = {
-    "crypto":  ["dune_cache", "deribit", "x_sentiment", "qlib", "liquidation", "stablecoin"],
-    "gold":    ["cot", "xau_macro", "x_sentiment"],
-    "forex":   ["cot", "x_sentiment"],
-    "stock":   ["cot", "fmp", "x_sentiment"],
-    "futures": ["cot", "x_sentiment"],
-    "other":   ["cot", "x_sentiment"],
+    # 这里只列真实落盘文件。仅推TG而没有本地JSON的采集器不得伪装成 cron_read 已消费。
+    "crypto":  ["dune_cache", "deribit_options", "x_sentiment", "qlib_factors", "liquidation_pressure"],
+    "gold":    ["cot_data", "xau_macro_context", "x_sentiment"],
+    "forex":   ["cot_data", "x_sentiment"],
+    "stock":   ["cot_data", "x_sentiment"],
+    "futures": ["cot_data", "x_sentiment"],
+    "other":   ["cot_data", "x_sentiment"],
 }
+
+
+ASSET_STEP_DESCRIPTIONS = {
+    "macro": {
+        "crypto": "SPX/VIX/DXY/US10Y + 金十日历 + Polymarket + 加密恐贪",
+        "gold": "DXY/US10Y/TIP/SPX/VIX + 金十黄金日历/快讯",
+        "forex": "DXY/利率/央行/经济日历 + 风险偏好",
+        "stock": "SPX/NDX/VIX/US10Y + 公司/行业/财报事件",
+        "futures": "DXY/利率/库存/经济日历 + 风险偏好",
+    },
+    "x_sent": {
+        "crypto": "x_search实时加密情绪 + 恐贪 + CoinGecko热度",
+        "gold": "x_search黄金/XAU实时情绪 + 金十/宏观交叉验证",
+        "forex": "x_search本货币对实时情绪 + 央行/宏观交叉验证",
+        "stock": "x_search公司/行业实时情绪 + 新闻催化剂",
+        "futures": "x_search对应期货实时情绪 + 库存/宏观交叉验证",
+    },
+    "corr": {
+        "crypto": "BTC-SPX-XAU-DXY滚动相关性",
+        "gold": "XAU-DXY-SPX-US10Y滚动相关性",
+        "forex": "本货币对-DXY-利差资产滚动相关性",
+        "stock": "AAPL-SPX-NDX-VIX同类矩阵（代码按标的替换）",
+        "futures": "本期货-SPX-DXY-相关商品滚动相关性",
+    },
+}
+
+
+def step_description(step: str, asset_class: str) -> str:
+    return str(ASSET_STEP_DESCRIPTIONS.get(step, {}).get(asset_class) or STEPS[step]["desc"])
 
 
 def cron_sources(symbol: str) -> list[str]:
@@ -180,7 +210,7 @@ def pipeline_summary(symbol: str, mode: str = "full") -> str:
     lines = [f"{symbol} [{ac}] {mode}模式 ({len(steps)}步) 主周期={tfinfo['main']}:"]
     for s in steps:
         info = STEPS[s]
-        lines.append(f"  {s:15s} → {info['label']}: {info['desc']}")
+        lines.append(f"  {s:15s} → {info['label']}: {step_description(s, ac)}")
     # 附加 cron 源
     if "cron_read" in steps:
         cs = cron_sources(symbol)

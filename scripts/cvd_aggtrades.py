@@ -26,11 +26,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-import requests
-
-
 NEUTRAL_BAND = 0.1   # |CVD| < total*0.1 判中性
-API = "https://api.binance.com/api/v3/aggTrades"
 
 
 def cvd_from_aggtrades(trades: list[dict]) -> dict:
@@ -81,13 +77,16 @@ def cvd_from_aggtrades(trades: list[dict]) -> dict:
 
 
 def fetch_aggtrades(symbol: str, limit: int = 1000, timeout: int = 6) -> list[dict]:
-    """拉取最近 limit 笔 aggTrades。失败返回空列表。"""
+    """拉取最近 limit 笔 aggTrades；主域失败时切换官方Vision市场数据域。"""
     try:
-        r = requests.get(API, params={"symbol": symbol, "limit": limit}, timeout=timeout)
-        r.raise_for_status()
-        return r.json()
-    except (requests.Timeout, requests.ConnectionError, requests.HTTPError,
-            ValueError, KeyError, TypeError):
+        from binance_public import fetch_spot
+        payload = fetch_spot(
+            "/api/v3/aggTrades",
+            {"symbol": str(symbol).upper(), "limit": int(limit)},
+            timeout=timeout,
+        )
+        return payload if isinstance(payload, list) else []
+    except (ValueError, KeyError, TypeError, OSError):
         return []
 
 

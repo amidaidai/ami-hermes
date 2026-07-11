@@ -104,13 +104,14 @@ class CVDAnalyzer:
             limit: K线数量
         """
         try:
-            r = requests.get(
-                "https://api.binance.com/api/v3/klines",
-                params={"symbol": symbol, "interval": interval, "limit": limit},
+            from binance_public import fetch_spot
+            klines = fetch_spot(
+                "/api/v3/klines",
+                {"symbol": symbol, "interval": interval, "limit": limit},
                 timeout=5,
             )
-            r.raise_for_status()
-            klines = r.json()
+            if not isinstance(klines, list):
+                raise RuntimeError("Binance K线不可用")
 
             closes = [float(k[4]) for k in klines]
             highs = [float(k[2]) for k in klines]
