@@ -34,8 +34,9 @@ WATCH_FILES = {
     "liquidation_pressure.json": {"threshold": 2, "paths": [HERMES_DATA / "liquidation_pressure.json", PROJECT_DATA / "liquidation_pressure.json"]},
     "stablecoin_snapshot.json": {"threshold": 6, "paths": [HERMES_DATA / "stablecoin_snapshot.json", PROJECT_DATA / "stablecoin_snapshot.json"]},
     "xau_macro_context.json": {"threshold": 24, "paths": [PROJECT_DATA / "xau_macro_context.json", HERMES_DATA / "xau_macro_context.json"]},
-    "oi_snapshot_BTCUSDT.json": {"threshold": 1, "paths": [HERMES_DATA / "oi_snapshot_BTCUSDT.json", PROJECT_DATA / "oi_snapshot_BTCUSDT.json"]},
-    "oi_snapshot_ETHUSDT.json": {"threshold": 1, "paths": [HERMES_DATA / "oi_snapshot_ETHUSDT.json", PROJECT_DATA / "oi_snapshot_ETHUSDT.json"]},
+    # 清算/OI任务每2小时运行；阈值需覆盖调度抖动，避免1小时阈值必然误报。
+    "oi_snapshot_BTCUSDT.json": {"threshold": 2.5, "paths": [HERMES_DATA / "oi_snapshot_BTCUSDT.json", PROJECT_DATA / "oi_snapshot_BTCUSDT.json"]},
+    "oi_snapshot_ETHUSDT.json": {"threshold": 2.5, "paths": [HERMES_DATA / "oi_snapshot_ETHUSDT.json", PROJECT_DATA / "oi_snapshot_ETHUSDT.json"]},
     "monitor_heartbeat.json": {"threshold": 0.3, "paths": [PROJECT_DATA / "monitor_heartbeat.json", HERMES_DATA / "monitor_heartbeat.json"]},
 }
 
