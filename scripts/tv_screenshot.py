@@ -147,7 +147,7 @@ def capture_analysis_setup(symbol: str, direction: str | None = None) -> str | N
                      if k.upper() not in ("PYTHONPATH", "PYTHONHOME")}
         r = subprocess.run(
             [str(venv_py), __file__, symbol],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=60,
             encoding="utf-8", errors="replace",
             env=clean_env,
         )

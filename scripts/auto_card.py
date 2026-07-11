@@ -2537,16 +2537,19 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     
     # ── K-lines (public, no sign needed) ──
     # v4.4: 拉长 15m/1h 回溯以支撑 FVG/OB 检测（lookback 50/100）
+    # v9.7: XAUUSDT 在 Binance 可能不存在/慢，限制 timeout 避免管线卡住
     klines = {}
     _raw_klines_multi = {}
     from binance_public import fetch_spot
-    for tf, limit in [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]:
+    _xau_tf_limit = [("15m", 100), ("1h", 100)] if is_xau else [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]
+    _xau_timeout = 3 if is_xau else 6
+    for tf, limit in _xau_tf_limit:
         _ok = False
         try:
             data = fetch_spot(
                 "/api/v3/klines",
                 {"symbol": sym, "interval": tf, "limit": limit},
-                timeout=6,
+                timeout=_xau_timeout,
             )
             if isinstance(data, list) and data:
                 _raw_klines_multi[tf] = data  # 原始已收/未收OHLCV；体制层会剔除末根未收K
@@ -3163,23 +3166,31 @@ def auto_card(symbol: str, push: bool = False) -> str:
         if _asset_class(symbol) == "gold":
             xau_env = os.environ.copy()
             xau_env["XAU_TV_NO_PUSH"] = "1"
-            xau_sync = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "xau_tv_sync.py")],
-                cwd=str(ROOT), capture_output=True, text=True, env=xau_env,
-                encoding="utf-8", errors="replace", timeout=180,
+            try:
+                xau_sync = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts" / "xau_tv_sync.py")],
+                    cwd=str(ROOT), capture_output=True, text=True, env=xau_env,
+                    encoding="utf-8", errors="replace", timeout=20,
+                )
+                if xau_sync.returncode != 0:
+                    print(f"  ⚠ XAU五层前置同步失败: {(xau_sync.stderr or xau_sync.stdout)[:160]}")
+            except subprocess.TimeoutExpired:
+                print(f"  ⚠ XAU五层前置同步超时20s，降级继续")
+            # XAU 已由 xau_tv_sync 完成TV同步，跳过 tv_live_dump 避免双倍等待
+            engine_tv_ready = True
+            tf_main = str(timeframe_info(symbol).get("main") or "5m")
+            print(f"  ✅ TV分析前置刷新: {symbol} {tf_main} (XAU专用路径)")
+        else:
+            tv_refresh = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py"),
+                 "--symbol", symbol, "--timeframe", tf_code, "--verbose"],
+                cwd=str(ROOT), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=45,
             )
-            if xau_sync.returncode != 0:
-                print(f"  ⚠ XAU五层前置同步失败: {(xau_sync.stderr or xau_sync.stdout)[:160]}")
-        tv_refresh = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py"),
-             "--symbol", symbol, "--timeframe", tf_code, "--verbose"],
-            cwd=str(ROOT), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=150,
-        )
-        engine_tv_ready = tv_refresh.returncode == 0
-        print(f"  {'✅' if engine_tv_ready else '⚠'} TV分析前置刷新: {symbol} {tf_main}")
-        if not engine_tv_ready:
-            print(f"  ⚠ TV前置详情: {(tv_refresh.stderr or tv_refresh.stdout)[:160]}")
+            engine_tv_ready = tv_refresh.returncode == 0
+            print(f"  {'✅' if engine_tv_ready else '⚠'} TV分析前置刷新: {symbol} {tf_main}")
+            if not engine_tv_ready:
+                print(f"  ⚠ TV前置详情: {(tv_refresh.stderr or tv_refresh.stdout)[:160]}")
     except Exception as exc:
         engine_tv_ready = False
         print(f"  ⚠ TV分析前置刷新异常: {str(exc)[:120]}")
@@ -4030,13 +4041,27 @@ def auto_card(symbol: str, push: bool = False) -> str:
     
     # ═══ Step 5: 双卡渲染 ═══
     # 主周期图表截图（BTC→15m / XAU→5m），失败降级为纯文字卡
+    # 用线程级超时保护：即使 _tv_screenshot 内部子进程卡住，最多等45s
     screenshot_path = None
     try:
-        screenshot_path = _tv_screenshot(symbol)
-        if screenshot_path:
-            print(f"  📸 主周期截图: {screenshot_path}")
+        import threading
+        _screenshot_result = [None]
+        def _do_screenshot():
+            try:
+                _screenshot_result[0] = _tv_screenshot(symbol)
+            except Exception:
+                _screenshot_result[0] = None
+        _t = threading.Thread(target=_do_screenshot, daemon=True)
+        _t.start()
+        _t.join(timeout=45)
+        if _t.is_alive():
+            print("  ⚠️ 主周期截图超时45s，降级为纯文字卡")
         else:
-            print("  ⚠️ 主周期截图返回空（TV MCP 可能不可用）")
+            screenshot_path = _screenshot_result[0]
+            if screenshot_path:
+                print(f"  📸 主周期截图: {screenshot_path}")
+            else:
+                print("  ⚠️ 主周期截图返回空（TV MCP 可能不可用）")
     except Exception as _se:
         print(f"  ⚠️ 主周期截图异常: {_se}")
     
@@ -4149,8 +4174,9 @@ def auto_card(symbol: str, push: bool = False) -> str:
         if not isinstance(tv_override_obj, dict):
             tv_override_obj = {}
         tv_active = bool(tv_override_obj.get("tv_active"))
+        _klines_for_audit = engine_data.get("klines", {}) or {}
         tf_coverage = sum(1 for tf in ("D", "4h", "1h", "15m", "5m")
-                          if isinstance(klines.get(tf), dict) and klines.get(tf))
+                          if isinstance(_klines_for_audit.get(tf), dict) and _klines_for_audit.get(tf))
         tv_usable = (tv_active or bool(tv_status_obj.get("usable"))) and tf_coverage == 5
         if tv_usable:
             completed_steps.add("tv")
