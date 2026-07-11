@@ -76,36 +76,37 @@ if alive:
 # ---- 守护失联：重启 ----
 log(f"行情守望失联({reason})，重启中...")
 
-# 清理可能残留的 lock
+# 杀掉旧的 python 行情守望.py 进程（兼容 start/B 启动方式）
+killed = "无"
+try:
+    # Windows 11常无wmic；统一用psutil按完整命令行精确找进程。
+    import psutil
+    pids = []
+    for proc in psutil.process_iter(["pid"]):
+        try:
+            cmdline = " ".join(proc.cmdline())
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if "行情守望.py" in cmdline:
+            pids.append(str(proc.pid))
+    for pid in pids:
+        psutil.Process(int(pid)).kill()
+        killed = pid
+except Exception:
+    pass
+
+# 进程终止后再清锁，禁止先删锁造成双实例竞态。
 try:
     if os.path.exists(LOCK):
         os.remove(LOCK)
 except Exception:
     pass
 
-# 杀掉旧的 python 行情守望.py 进程（兼容 start/B 启动方式）
-killed = "无"
-try:
-    # 用 wmic 精确匹配命令行含 行情守望.py 的 PID（GBK 解码）
-    wmic = subprocess.run(
-        ["wmic", "process", "where",
-         "name='python.exe' and commandline like '%行情守望.py%'",
-         "get", "processid"],
-        capture_output=True, timeout=10,
-    ).stdout.decode("gbk", errors="replace")
-    pids = [l.strip() for l in wmic.splitlines() if l.strip().isdigit()]
-    for pid in pids:
-        subprocess.run(["taskkill", "/F", "/PID", pid],
-                       capture_output=True, timeout=5)
-        killed = pid
-except Exception:
-    pass
-
-# 用 start /B 后台拉起（与 btc_watchdog 一致）
-cmd = f'start /B python "{DAEMON}" -s BTCUSDT XAUUSD'
+# 直接Popen拉起，避免shell/start产生无法追踪的中间进程。
 subprocess.Popen(
-    cmd, shell=True, cwd=WORKDIR,
+    [sys.executable, DAEMON, "-s", "BTCUSDT", "XAUUSD"], cwd=WORKDIR,
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
 )
 
 now_cn = time.strftime("%Y年%m月%d日%H：%M")

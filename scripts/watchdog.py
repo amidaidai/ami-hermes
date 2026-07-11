@@ -283,6 +283,12 @@ def start_monitor(emergency: bool = False) -> bool:
 
 
 def main():
+    # 生产环境唯一重启权威是 Hermes cron 的 monitor/market_watchdog.py。
+    # 旧常驻看门狗与cron同时运行会形成双控制器，互删锁、重复拉起并耗尽限速桶。
+    # 仅保留显式调试入口，避免历史启动项/残留命令再次接管生产进程。
+    if os.environ.get("TANGXI_ENABLE_LEGACY_WATCHDOG") != "1":
+        write_watchdog_state(status="retired", last_restart_reason="cron_watchdog_is_authority")
+        return
     if not acquire_watchdog_lock():
         return
     atexit.register(release_watchdog_lock)

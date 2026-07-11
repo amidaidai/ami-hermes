@@ -24,6 +24,19 @@ wd = _load_module("watchdog_p0p1", ROOT / "scripts" / "watchdog.py")
 watch_monitor = _load_module("watch_monitor_p0p1", ROOT / "scripts" / "行情守望.py")
 
 
+def test_legacy_watchdog_is_opt_in_only():
+    text = (ROOT / "scripts" / "watchdog.py").read_text(encoding="utf-8")
+    assert 'TANGXI_ENABLE_LEGACY_WATCHDOG' in text
+    assert 'cron_watchdog_is_authority' in text
+
+
+def test_market_watchdog_uses_psutil_and_removes_lock_after_kill():
+    text = (ROOT / "scripts" / "monitor" / "market_watchdog.py").read_text(encoding="utf-8")
+    assert 'import psutil' in text
+    assert '["wmic", "process"' not in text
+    assert text.index('psutil.Process(int(pid)).kill()') < text.index('os.remove(LOCK)')
+
+
 def _minimal_klines(price=64000.0):
     return {
         "5m": {"high": price + 80, "low": price - 80, "close": price, "atr": 100},
