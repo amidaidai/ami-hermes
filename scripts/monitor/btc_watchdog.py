@@ -16,11 +16,40 @@ DAEMON = Path("D:/Hermes agent/scripts/btc_daemon.py").resolve()
 HEARTBEAT = Path("D:/Hermes agent/data/.btc_daemon_heartbeat.json")
 PID_FILE = Path("D:/Hermes agent/data/.btc_daemon.pid")
 LOCK_FILE = Path("D:/Hermes agent/data/.btc_daemon.lock")
+WATCHDOG_LOG = Path("D:/Hermes agent/data/watchdog.log")
+WATCHDOG_STATE = Path("D:/Hermes agent/data/watchdog_state.json")
+WATCHDOG_GUARD = Path("D:/Hermes agent/data/watchdog_guard.json")
 WORKDIR = "D:/Hermes agent"
 
 
-def log(m):
-    return None
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
+def _now_cn() -> str:
+    return datetime.now().strftime("%Y年%m月%d日%H：%M")
+
+
+def _append_log(entry: str) -> None:
+    try:
+        with WATCHDOG_LOG.open("a", encoding="utf-8") as f:
+            f.write(f"[{_now_cn()}] {entry}\n")
+    except Exception:
+        pass
+
+
+def _write_state(status: str, detail: dict | None = None) -> None:
+    try:
+        payload = {
+            "schema": "btc_watchdog_state_v2",
+            "updated": _now_iso(),
+            "status": status,
+            "daemon_pid": (PID_FILE.read_text(encoding="utf-8").strip() if PID_FILE.exists() else None),
+            "detail": detail or {},
+        }
+        WATCHDOG_STATE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _now_ts() -> float:
@@ -124,12 +153,22 @@ def _send_report(reason: str, old_count: int, new_pid: int | None) -> None:
 
 def main() -> int:
     age = _heartbeat_age()
-    # 心跳新鲜 → 静默退出，不打扰
+    instances = _list_daemon_instances()
+    detail = {
+        "heartbeat_age_seconds": age,
+        "daemon_instances_before": len(instances),
+        "daemon_pids_before": instances,
+    }
+    _append_log(f"tick age={age if age is not None else 'None'} instances={len(instances)} pids={instances}")
+
+    # 心跳新鲜 → 静默退出，不打扰；但仍更新状态文件
     if age is not None and age < 120:
+        _write_state("healthy", {**detail, "action": "noop"})
+        _append_log("heartbeat fresh; no action")
         return 0
 
     reason = f"心跳失联 age={age:.0f}s" if age is not None else "心跳文件不存在"
-    old_pids = _list_daemon_instances()
+    old_pids = instances
     if old_pids:
         _kill_instances(old_pids)
         time.sleep(1)
@@ -139,6 +178,11 @@ def main() -> int:
             _kill_instances(remaining)
     _clean_locks()
     new_pid = _start_daemon()
+    detail["daemon_instances_after"] = len(_list_daemon_instances())
+    detail["new_pid"] = new_pid
+    detail["reason"] = reason
+    _write_state("restarted" if new_pid else "restart_failed", detail)
+    _append_log(f"restart reason={reason} old_count={len(old_pids)} new_pid={new_pid}")
     _send_report(reason, len(old_pids), new_pid)
     return 0
 

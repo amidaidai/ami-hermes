@@ -26,7 +26,7 @@ TIMEFRAMES = [("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
 SOURCE_SNAPSHOT = ROOT / "data" / "source_snapshot_XAUUSD.json"
 
 
-def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1200) -> None:
+def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1800) -> None:
     """Keep XAU's multi-source quality snapshot inside the 30-minute freshness gate."""
     try:
         if SOURCE_SNAPSHOT.exists() and time.time() - SOURCE_SNAPSHOT.stat().st_mtime <= max_age_seconds:
@@ -38,6 +38,23 @@ def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1200) -> None:
         source_snapshot("XAUUSD")
     except Exception as exc:
         print(f"⚠ XAU多源快照刷新失败: {exc}", file=sys.stderr)
+
+
+async def _run_with_retry(max_attempts: int = 3) -> int:
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            rc = await _run()
+            if rc == 0:
+                return 0
+        except Exception as exc:
+            last_exc = exc
+            print(f"⚠ XAU TV同步尝试 {attempt}/{max_attempts} 失败: {exc}", file=sys.stderr)
+        if attempt < max_attempts:
+            time.sleep(5)
+    if last_exc:
+        raise last_exc
+    return 1
 
 
 def _refresh_tv_live_cache() -> None:
@@ -178,17 +195,17 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
 def main() -> int:
     """Run the TV sync with a cron-safe three-level degradation path."""
     try:
-        rc = asyncio.run(_run())
+        rc = asyncio.run(_run_with_retry())
         if isinstance(rc, int) and rc != 0:
             raise RuntimeError(f"同步返回非零状态 {rc}")
         _refresh_tv_live_cache()
         return 0
     except Exception as e:
-        # 若旧文件15分钟内，保留旧数据，不让单次CDP抖动破坏有效缓存。
+        # 若旧文件30分钟内，保留旧数据，不让单次CDP抖动破坏有效缓存。
         if OUT.exists():
             try:
                 age = time.time() - OUT.stat().st_mtime
-                if age < 900:
+                if age < 1800:
                     print(f"⚠ XAU TV同步失败({e})，保留 {age:.0f}s 前旧数据")
                     return 0
             except OSError:
