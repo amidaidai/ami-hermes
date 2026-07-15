@@ -141,7 +141,9 @@ def _send_report(reason: str, old_count: int, new_pid: int | None) -> None:
 | 方向 | 触发 | 动作 |
 |:---:|:----|:----|
 | ○观察 | 2分钟后有心跳 | 无需操作 |
-| ×修复 | 继续失联 | 查daemon日志 |"""
+| ×修复 | 继续失联 | 查daemon日志 |
+
+**总体结论**: **{'↑BTC守护已自动恢复，观察后续心跳' if new_pid else '×BTC守护恢复失败，需立即检查daemon日志'}**。"""
     print(report)
     try:
         sys.path.insert(0, "D:/Hermes agent/scripts")

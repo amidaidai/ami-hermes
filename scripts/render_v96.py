@@ -179,27 +179,36 @@ def _vwap_pos(tf_data: dict, price: float | None) -> str:
     return "—"
 
 
-def _level_kind(name: str, side: str, level: float, price: float | None) -> tuple[str, str]:
+def _level_kind(name: str, side: str, level: float, price: float | None) -> tuple[str, str, str]:
     raw = f"{side} {name}".lower()
     cn = f"{side} {name}"
     if "fvg" in raw:
         label = "FVG"
+        use = "FVG缺口"
     elif "vwap" in raw:
         label = "VWAP"
+        use = "VWAP均价锚"
     elif "vah" in raw or "上沿" in cn:
         label = "VAH"
+        use = "VAH上沿阻力"
     elif "val" in raw or "下沿" in cn:
         label = "VAL"
+        use = "VAL下沿支撑"
     elif "poc" in raw:
         label = "POC"
+        use = "POC密集区"
     elif "npoc" in raw:
         label = "nPOC"
+        use = "nPOC裸区"
     elif "高" in cn or "res" in raw or "阻" in cn:
         label = "阻"
+        use = "阻力位"
     elif "低" in cn or "sup" in raw or "支" in cn:
         label = "支"
+        use = "支撑位"
     else:
         label = "位"
+        use = "关键位"
     if price is None:
         icon = "⚖"
     elif level > float(price):
@@ -208,7 +217,7 @@ def _level_kind(name: str, side: str, level: float, price: float | None) -> tupl
         icon = "🟢"
     else:
         icon = "⚖"
-    return label, icon
+    return label, icon, use
 
 
 def _klines_to_levels(klines: dict, price: float | None) -> list[dict]:
@@ -227,7 +236,7 @@ def _klines_to_levels(klines: dict, price: float | None) -> list[dict]:
             v = k.get(key)
             if v:
                 try:
-                    clean.append({"level": float(v), "side": typ, "name": f"{tf}{typ}"})
+                    clean.append({"level": float(v), "side": typ, "name": f"{tf} {typ}"})
                 except Exception:
                     pass
     return clean
@@ -250,13 +259,13 @@ def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> li
         seen.add(bucket)
         side = item.get("side", "level")
         name = item.get("display_name") or item.get("name") or side
-        kind, icon = _level_kind(str(name), str(side), lvl, price)
+        kind, icon, use = _level_kind(str(name), str(side), lvl, price)
         if price:
             dist = (lvl - float(price)) / float(price) * 100
             dist_txt = f"{dist:+.2f}%"
         else:
             dist_txt = "—"
-        clean.append({"level": lvl, "side": side, "name": name, "kind": kind, "icon": icon, "dist": dist_txt})
+        clean.append({"level": lvl, "side": side, "name": name, "kind": kind, "icon": icon, "dist": dist_txt, "use": use})
     clean.sort(key=lambda x: abs(x["level"] - float(price or 0)))
     return clean[:7]
 
@@ -285,25 +294,23 @@ def _dual_short(dual: dict | None, ac: str) -> tuple[str, str, str]:
         return "SVP/市场数据", "副驾驶不适用", "按本市场源验证"
     svp = dual.get("svp_state") or dual.get("svp_direction") or "SVP待判"
     hal = dual.get("haldro_direction") or "HALDRO待判"
+    # 精简 HALDRO：去掉冗余的"配合主指标"等前缀
+    hal = _cell(hal)[:24]
     verdict = dual.get("direction_verdict") or dual.get("flow_verdict") or "待裁决"
-    return _cell(svp)[:28], _cell(hal)[:34], _cell(verdict)[:18]
+    return _cell(svp)[:28], hal, _cell(verdict)[:18]
 
 
 def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual: dict | None) -> str:
     parts = []
     if cvd_dir:
         cvd_emoji = "🟢" if cvd_dir in ("买", "buy", "多", "long") else "🔴" if cvd_dir in ("卖", "sell", "空", "short") else "🔵"
-        parts.append(f"CVD{cvd_emoji}{cvd_dir}{cvd_quality or ''}")
+        parts.append(f"CVD{cvd_emoji}{cvd_dir}")
     if taker_dir:
-        parts.append(f"主动买卖{taker_dir} {taker_ratio or ''}")
+        parts.append(f"主动{taker_dir}")
     if funding_rate:
-        parts.append(f"Funding {funding_rate}")
-    if isinstance(dual, dict) and dual.get("haldro_confirm"):
-        parts.append(str(dual.get("haldro_confirm"))[:18])
+        parts.append(f"费{funding_rate}")
     if fg_v:
         parts.append(f"恐贪{fg_v}")
-    if kill_zone:
-        parts.append(f"时段{kill_zone}")
     return " · ".join(parts) if parts else "待采集"
 
 
@@ -427,8 +434,8 @@ def render_v96_card(
     lines.append("| 结构位 | 价格 | 用法 | 距现价 |")
     lines.append("|:---|:---:|:---|---:|")
     for item in levels_prepared[:6]:
-        use = item.get("name") or item.get("side") or "关键位"
-        lines.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)[:26]} | {item['dist']} |")
+        use = item.get("use") or item.get("name") or item.get("side") or "关键位"
+        lines.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)[:20]} | {item['dist']} |")
     if not levels_prepared:
         lines.append("| 待刷新 | `—` | TV结构位未注入，禁追 | — |")
     lines.append("")
@@ -477,8 +484,8 @@ def _tf_row(tf: str, k: dict, fallback: str = "") -> str:
 def _level_rows(levels: list[dict], price: float | None, klines: dict | None = None) -> list[str]:
     rows: list[str] = []
     for item in _prepare_levels(levels or [], klines or {}, price)[:6]:
-        use = item.get("name") or item.get("side") or "关键位"
-        rows.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)} | {_cell(item['dist'])} |")
+        use = item.get("use") or item.get("name") or item.get("side") or "关键位"
+        rows.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)[:20]} | {_cell(item['dist'])} |")
     if not rows:
         rows.append("| 待刷新 | `—` | TV/数据桥 | 无关键位则禁追 |")
     return rows

@@ -132,6 +132,8 @@ def main():
         lines.append(f"| 价格 | `{result.get('price', 0):,.0f}` |")
         lines.append("")
         lines.append("✅ 已记录 trade_events.jsonl")
+        lines.append("")
+        lines.append(f"**总体结论**: **↑执行事件已落盘**；当前阶段`{stage}`、因子偏置`{bias}`，后续只按风控闸门执行。")
         output = "\n".join(lines)
         print(output)
         # v9.8: 推 TG 真表格（原本只 print 退化文本）

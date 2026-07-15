@@ -1,6 +1,6 @@
-# 棠溪分析卡 · 主模板 v9.9（手机驾驶舱 · 结构位前置 · 双指标全用 · 唯一主推裁决）
+# 棠溪分析卡 · 主模板 v9.10（手机驾驶舱 · 结构位前置 · 双指标全用 · 唯一主推裁决 · 排版精简）
 
-定位：这是棠溪 Telegram 交易驾驶舱的权威输出模板。v9.9 修正 v9.8 过度压缩问题：手机端仍要好看，但不能牺牲主指标/副指标、多周期、结构位和多源验证。
+定位：这是棠溪 Telegram 交易驾驶舱的权威输出模板。v9.10 在 v9.9 基础上精简排版：结构位用法去内部ID、订单流压缩、HALDRO精简、快速卡加裁决收尾。
 
 ## 权威铁律
 
@@ -63,7 +63,7 @@
 失效 `{INV_LINE}` · 数据{DATA_GRADE} · 主副指标已纳入
 ```
 
-## 快速更新模板（v9.9 · 12行左右）
+## 快速更新模板（v9.10 · 11行左右）
 
 ```markdown
 📊 {SHORT_SYMBOL} · {TIME_CN}
@@ -77,9 +77,9 @@ D{D_EMOJI} · 4h{4H_EMOJI} · 1h{1H_EMOJI} · 15m{15M_EMOJI} · 5m{5M_EMOJI}
 | 🔁备选 {REV_DIR} | {MAGNET} | 主推失效后再看 |
 | ⚠️禁止 | 追单/冲突 | 主副不共振不做 |
 
-SVP {SVP_ACTION}
-HALDRO {HALDRO_ACTION} · {DUAL_VERDICT}
+SVP {SVP_ACTION} · HALDRO {HALDRO_ACTION} · {DUAL_VERDICT}
 持仓{OI} · CVD{CVD} · 量{VOLUME} · 覆盖{COVERAGE}
+【裁决】{DIR_EMOJI}{DIRECTION} · 主副指标已纳入 · 不追单
 ```
 
 ## 社区对标结论
@@ -96,6 +96,6 @@ HALDRO {HALDRO_ACTION} · {DUAL_VERDICT}
 
 | 场景 | 渲染器 | 要求 |
 |:---|:---|:---|
-| 完整卡 | `render_v96_card()` | 4表：多周期/结构位/双指标/最推荐 |
-| 快速卡 | `render_tv_card(..., mode="push")` | 结构位前置 + 五周期行 + 1张执行表 + 双指标三行 |
+| 完整卡 | `render_v96_card()` | 4表：多周期/结构位/双指标/最推荐 · 结构位用法去内部ID · 订单流精简 |
+| 快速卡 | `render_tv_card(..., mode="push")` | 结构位前置 + 五周期行 + 1张执行表 + 双指标合并一行 + 裁决收尾 |
 | 推送通道 | `send_telegram_reliable(parse_mode='RichMarkdown')` / `telegram_reliable.send_telegram_reliable(parse_mode="RichMarkdown")` | 必须 RichMarkdown 真表格 |

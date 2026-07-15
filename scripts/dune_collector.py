@@ -159,7 +159,10 @@ if __name__ == "__main__":
                 lines.append("")
                 # 决策总结
                 verdict = "🟢交易所净流出(积累)" if nf < 0 else "🔴交易所净流入(抛压)"
-                lines.append(f"**链上结论**: **{verdict}**")
+                lines.append(f"**总体结论**: **{verdict}**；{'不追多，等待抛压释放' if nf >= 0 else '回踩结构支撑可关注短多'}。")
+
+        if not any("**总体结论**" in line for line in lines):
+            lines.append("**总体结论**: **○链上数据不足或中性，暂不据此开仓**。")
 
         output = "\n".join(lines)
         print(output)

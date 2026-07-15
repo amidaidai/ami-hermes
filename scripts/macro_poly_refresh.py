@@ -57,7 +57,7 @@ def _push(text):
 if errors:
     safe = "; ".join(str(e) for e in errors)
     print(f"ERROR: {safe}")
-    _push(f"⚠ 宏观Poly刷新异常 · {ts}\n\n| 模块 | 状态 |\n|:----|:----|\n" + "\n".join(f"| {e.split(':')[0]} | ❌ {e} |" for e in errors))
+    _push(f"× 宏观Poly刷新异常 · {ts}\n\n| 模块 | 状态 |\n|:----|:----|\n" + "\n".join(f"| {e.split(':')[0]} | ❌ {e} |" for e in errors) + "\n\n**总体结论**: **×宏观数据不完整，禁止据此追单**。")
     sys.exit(1)
 
 # success: 推宏观面板
@@ -82,10 +82,15 @@ lines.append(f"Polymarket: {poly_icon}{poly_bias}")
 # 决策：综合宏观与Poly
 if risk == "risk_off":
     lines.append("📉 宏观避险→BTC承压，减仓/观望为主")
+    conclusion = "🔴宏观风险偏空，BTC以减仓或观望为主"
 elif risk == "risk_on":
     lines.append("📈 宏观风险偏好→BTC偏多环境")
+    conclusion = "🟢宏观风险偏多，BTC回踩结构支撑可关注短多"
 else:
     lines.append("⚪ 宏观中性，按结构交易")
+    conclusion = "⚪宏观中性，只按技术结构交易，不追价"
+lines.append("")
+lines.append(f"**总体结论**: **{conclusion}**。")
 
 output = "\n".join(lines)
 print(output)

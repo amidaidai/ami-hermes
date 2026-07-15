@@ -65,10 +65,11 @@ def main():
     fomo_text = "FOMO高热" if fomo >= 4 else "温和关注" if fomo >= 2 else "冷清"
     
     # 表格化输出
-    lines = [f"市场情绪 {ts}"]
+    direction = "×高风险" if fg_val > 75 else "↑反弹观察" if fg_val <= 25 else "○中性"
+    lines = [f"{direction} · 市场情绪 · {ts}"]
     lines.append("")
     lines.append("| 指标 | 数值 | 解读 |")
-    lines.append("|------|------|------|")
+    lines.append("|:----|:----:|:----|")
     lines.append(f"| 恐惧贪婪 | {fg_val} | {mood}（{fg_note}） |")
     lines.append(f"| 搜索热度 | {fomo}/5 | {fomo_text} |")
     
@@ -76,10 +77,18 @@ def main():
     if top:
         lines.append("")
         lines.append("| 热门币种 | 市值排名 | 热度评分 |")
-        lines.append("|----------|----------|----------|")
+        lines.append("|:----|:----:|:----:|")
         for c in top:
             rank = f"#{c['rank']}" if c['rank'] and c['rank'] < 9999 else "未入榜"
             lines.append(f"| {c['symbol']} | {rank} | {c['score']} |")
+    lines.append("")
+    if fg_val > 75 or fomo >= 4:
+        verdict = "×情绪过热，禁止追涨，防回调"
+    elif fg_val <= 25:
+        verdict = "↑极度恐惧区，仅等结构确认后小仓试多"
+    else:
+        verdict = "○情绪未给出单边优势，按结构交易"
+    lines.append(f"**总体结论**: **{verdict}**。")
     
     output = "\n".join(lines)
     # 降噪：去重时不要把时间戳纳入 hash；同一情绪结构最多 2 小时强制推一次。

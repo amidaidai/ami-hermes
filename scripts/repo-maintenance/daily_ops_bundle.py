@@ -48,11 +48,14 @@ def main() -> int:
         f"| {label} | {'✅ OK' if 'OK' in r and 'ERROR' not in r else '❌ 异常'} | {r.split('] ',1)[-1]} |"
         for label, r in results
     )
-    report = f"""🛠 每日运维聚合报告 · {ts}
+    healthy = all("ERROR" not in r for _, r in results)
+    report = f"""{'↑' if healthy else '×'} 每日运维聚合 · {'全部正常' if healthy else '存在异常'} · {ts}
 
 | 模块 | 状态 | 详情 |
 |:----|:----:|:----|
-{rows}"""
+{rows}
+
+**总体结论**: **{'四项维护全部完成，系统可继续运行' if healthy else '存在失败模块，优先检查异常详情，不执行盲目重启'}**。"""
     print(report)
     # v9.7: 统一走 RichMarkdown 真表格通道推 TG
     try:
@@ -61,7 +64,7 @@ def main() -> int:
         push_tg_rich("telegram:-1003733144325:846", report)
     except Exception as _te:
         print(f"⚠ 运维聚合RichMarkdown推送失败: {_te}", file=sys.stderr)
-    return 0 if all("ERROR" not in r for _, r in results) else 1
+    return 0 if healthy else 1
 
 
 if __name__ == "__main__":

@@ -224,18 +224,25 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
         lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/冲突 | 主副不共振不做 |")
     lines.append("")
-    lines.append(f"SVP {_clean_text(str(grade) + ' ' + (treatment or operation or ''), 34)}")
-    lines.append(f"HALDRO {_clean_text((signal or '') + ' ' + (operation or ''), 38)} · {dual_verdict}")
+    # SVP + HALDRO 双指标行（精简合并为一行）
+    svp_line = _clean_text(str(grade) + ' ' + (treatment or ''), 28)
+    hal_line = _clean_text((signal or ''), 24)
+    lines.append(f"SVP {svp_line} · HALDRO {hal_line} · {dual_verdict}")
+    # 订单流一行
     verify_parts = []
     if oi_status:
-        verify_parts.append(f"持仓{_clean_text(oi_status, 12)}")
+        verify_parts.append(f"持仓{_clean_text(oi_status, 10)}")
     if cvd_flow:
-        verify_parts.append(f"CVD{_clean_text(cvd_flow, 12)}")
+        verify_parts.append(f"CVD{_clean_text(cvd_flow, 10)}")
     if vol_status:
-        verify_parts.append(f"量{_clean_text(vol_status, 10)}")
+        verify_parts.append(f"量{_clean_text(vol_status, 8)}")
     if share_data:
-        verify_parts.append(f"覆盖{_clean_text(share_data, 12)}")
-    lines.append(" · ".join(verify_parts[:4]) if verify_parts else "订单流待采集")
+        verify_parts.append(f"覆盖{_clean_text(share_data, 10)}")
+    if verify_parts:
+        lines.append(" · ".join(verify_parts[:4]))
+    # 裁决收尾
+    verdict_text = f"{_dir_icon(direction)}{direction}" if direction != "观望" else "🔵等确认"
+    lines.append(f"【裁决】{verdict_text} · 主副指标已纳入 · 不追单")
     return "\n".join(lines) + "\n"
 
 
