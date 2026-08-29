@@ -1111,7 +1111,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     except Exception:
         risk_pct_limit = 1
     priority = meta.get("priority_plan", "无")
-    levels = engine_data.get("monitor_levels", {}).get("symbols", {}).get(symbol, {})
+    levels = _approved_monitor_levels(symbol)
 
     # ── 衍生数据推算 ──
     funding_rate = funding.get("rate_pct") or "N/A"
@@ -1321,7 +1321,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
 
     # v8.0: 叙事模板渲染
     from render_v96 import render_v96_card
-    monitor_levels = engine_data.get("monitor_levels", {}).get("symbols", {}).get(symbol, {})
+    monitor_levels = _approved_monitor_levels(symbol)
     all_levels_list = monitor_levels.get("levels", [])
     
     # v8.0 需要的上下文变量
@@ -2521,6 +2521,30 @@ def _inject_orion_derivatives_fallback(engine_data: dict, symbol: str) -> None:
         }
 
 
+def _per_tf_cvd(closes: list, highs: list, lows: list, volumes: list) -> dict:
+    """逐周期CVD近似（v9.7）。
+
+    用该周期的真实 OHLCV 合成累积买卖压力，使多周期定位表的 CVD 列五层各自独立，
+    不再共用一个主执行周期值。这是时序近似值，精度低于 TV tick级CVD，故带
+    ``approx`` 标注，供渲染器显示、供裁决作弱确认（与全局 HALDRO CVD 双轨并行）。
+    返回: {"value": float, "direction": "买"/"卖"/"?}
+    """
+    if not closes:
+        return {"value": 0.0, "direction": "?"}
+    total = 0.0
+    n = len(closes)
+    for i in range(n):
+        c = closes[i]
+        o = (closes[i - 1] if i > 0 else c)
+        # 每根K的"实体方向"：实体为正=买方占优，实体为负=卖方占优
+        body = c - o
+        vol = volumes[i] if i < len(volumes) else 0.0
+        # 权重：实体幅度 + 成交量；越放大成交量，方向信号越强
+        total += body * (1.0 + (0.5 * (float(vol) / 1000.0)))
+    direction = "买" if total > 0 else "卖" if total < 0 else "?"
+    return {"value": round(total, 2), "direction": direction}
+
+
 def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     """Fetch Binance futures data with HMAC signing for authenticated endpoints."""
     import requests, time as _time, hmac, hashlib, urllib.parse
@@ -2542,8 +2566,10 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     _raw_klines_multi = {}
     from binance_public import fetch_spot, fetch_futures
     # XAUUSDT 在 Binance 现货不存在，只能走 U 本位期货 public K线
-    _kl_fetcher = fetch_futures if is_xau else fetch_spot
-    _kl_path = "/fapi/v1/klines" if is_xau else "/api/v3/klines"
+    # 加密执行数据也必须走 U 本位期货；此前非 XAU 分支误用现货 klines，
+    # 会把 futures symbol、OI 和 spot K 线混在同一套结构引擎里。
+    _kl_fetcher = fetch_futures
+    _kl_path = "/fapi/v1/klines"
     _xau_tf_limit = [("15m", 100), ("1h", 100)] if is_xau else [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]
     _xau_timeout = 4 if is_xau else 6
     for tf, limit in _xau_tf_limit:
@@ -2574,6 +2600,9 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
                     "poc": round(poc, 2), "vah": round(max(highs), 2), "val": round(min(lows), 2),
                     "direction": direction,
                     "description": _kl_desc(tf, closes, highs, lows, volumes),
+                    # v9.7: 逐层CVD近似——用该周期真实OHLCV合成累积买卖压力，
+                    # 使多周期定位表的CVD列不再五层共用一个主执行周期值。
+                    "cvd": _per_tf_cvd(closes, highs, lows, volumes),
                 }
                 _ok = True
         except Exception:
@@ -2863,17 +2892,27 @@ def append_trade_plan(meta: dict, card: str) -> None:
         f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 def update_monitor_metadata(symbol: str, meta: dict) -> None:
-    path = DATA / "monitor_levels.json"
-    if not path.exists():
-        return
+    # monitor_levels.json 是历史兼容缓存，不再作为批准监测位真相源。
+    # 分析结果只写 setup 审计文件，避免 auto_card 覆盖 keylevels_config 的人工批准位。
+    path = DATA / f"analysis_setup_{symbol.replace('/', '_')}.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        sym = data.setdefault("symbols", {}).setdefault(symbol, {})
-        sym["latest_setup"] = {k: meta.get(k) for k in ("setup_id", "model_id", "entry_tag", "exit_tag", "direction", "status", "priority_plan", "data_grade", "level_confidence", "engine_confidence", "confidence_5", "expires_at", "monitor_write")}
-        sym["updated"] = datetime.now(TZ).isoformat(); data["updated"] = datetime.now(TZ).isoformat()
+        data = {
+            "symbol": symbol,
+            "updated": datetime.now(TZ).isoformat(),
+            "latest_setup": {k: meta.get(k) for k in ("setup_id", "model_id", "entry_tag", "exit_tag", "direction", "status", "priority_plan", "data_grade", "level_confidence", "engine_confidence", "confidence_5", "expires_at", "monitor_write")},
+        }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"  ⚠ monitor metadata skipped: {e}")
+
+
+def _approved_monitor_levels(symbol: str) -> dict:
+    """读取唯一批准监测配置；历史 monitor_levels 只保留兼容，不参与分析。"""
+    try:
+        config = json.loads((DATA / "keylevels_config.json").read_text(encoding="utf-8"))
+        return (config.get("symbols", {}) or {}).get(symbol, {})
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
 
 
 def _safe_import(module, func):
@@ -3140,25 +3179,48 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
     return out
 
 
-def auto_card(symbol: str, push: bool = False) -> str:
-    """一键出卡"""
+def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
+    """一键出卡。
+
+    mode 支持 full/quick/inherit。路由和上下文由 pipeline_router 统一管理；
+    quick/inherit 的高周期结论由最近一次完整卡继承，执行器只应刷新主执行/触发周期。
+    """
+    if mode not in {"full", "quick", "inherit"}:
+        raise ValueError(f"unsupported analysis mode: {mode}")
     print(f"\n{'='*60}")
-    print(f"  棠溪 · 一键分析卡 · {symbol}")
+    print(f"  棠溪 · 一键分析卡 · {symbol} · {mode}")
     print(f"  {datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}\n")
     
     asset_class = _asset_class(symbol)
     asset = "crypto" if asset_class == "crypto" else "metal" if asset_class == "gold" else asset_class
     
+    # inherit 必须有新鲜上下文；没有则自动升级 full，避免用空背景冒充继承。
+    context = None
+    effective_mode = mode
+    try:
+        from pipeline_router import load_analysis_context
+        if mode == "inherit":
+            context = load_analysis_context(symbol)
+            if context is None:
+                effective_mode = "full"
+                print("  ⚠ inherit上下文缺失/过期 → 升级full，避免空背景继承")
+            else:
+                print(f"  ✅ 继承高周期上下文: {context.get('updated_at', '?')}")
+    except Exception as exc:
+        if mode == "inherit":
+            effective_mode = "full"
+            print(f"  ⚠ inherit上下文读取失败 → 升级full: {str(exc)[:100]}")
+
     # 管线路由：确定应该执行的步骤
     pipeline_steps = []
     try:
         from pipeline_router import route_pipeline
-        pipeline_steps = route_pipeline(symbol, "full")
+        pipeline_steps = route_pipeline(symbol, effective_mode)
         print(f"📋 管线路由：{len(pipeline_steps)}步 → {' → '.join(pipeline_steps)}")
     except Exception as e:
         print(f"⚠️ 管线路由不可用({e})·使用默认步骤")
-        pipeline_steps = ["tv","macro","x_sent","card"]
+        pipeline_steps = ["tv","binance","card"] if mode != "full" else ["tv","macro","x_sent","card"]
     completed_steps = set()
 
     # TV MCP是分析前提：先切目标品种+主周期并刷新Data Window，再进入任何指标/体制引擎。
@@ -3201,7 +3263,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # ═══ Step 1: 数据采集 ═══
     print("① 数据采集...")
     
-    engine_data = {"symbol": symbol, "quality": "B", "asset_class": asset_class}
+    engine_data = {"symbol": symbol, "quality": "B", "asset_class": asset_class,
+                   "analysis_mode": effective_mode,
+                   "context_inherited": bool(context),
+                   "inherited_context": context or {}}
     _refresh_and_mark_snapshot(symbol, engine_data)
     _snap_status = engine_data.get("_snapshot_status") or {}
     if not isinstance(_snap_status, dict):
@@ -3212,18 +3277,23 @@ def auto_card(symbol: str, push: bool = False) -> str:
         # 期货价格优先（TV/Binance Perp），CMC现货作 backup
         futures_price = None
         try:
-            from binance_public import orion_derivatives_snapshot
+            from binance_public import fetch_futures, orion_derivatives_snapshot
             sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
-            snap = orion_derivatives_snapshot(sym)
-            futures_price = float(snap.get("mark_price") or 0) if snap.get("ok") else None
+            # BTC 的执行价格必须优先来自 U 本位期货；Orion 只作后备，
+            # 不能让 CMC 现货价格悄悄成为合约主价格。
+            ticker = fetch_futures("/fapi/v1/ticker/price", {"symbol": sym}, timeout=6)
+            futures_price = float(ticker.get("price") or 0) if isinstance(ticker, dict) else None
+            if not futures_price:
+                snap = orion_derivatives_snapshot(sym)
+                futures_price = float(snap.get("mark_price") or 0) if snap.get("ok") else None
         except Exception:
-            pass
+            futures_price = None
         
         try:
             from multi_source_collector import cmc_quote, cmc_global, cmc_fear_greed
             cmc = cmc_quote(symbol[:3])
             spot_price = cmc.get("price", 0)
-            # 优先期货价，CMC现货为备用
+            # 优先 Binance U 本位期货价，CMC 仅保留为现货交叉验证/备用
             primary_price = futures_price or spot_price
             engine_data["binance_spot"] = {"price": spot_price, 
                                            "24h_high": spot_price * 1.03,
@@ -3249,30 +3319,30 @@ def auto_card(symbol: str, push: bool = False) -> str:
             engine_data["cmc_global"] = glob
             
             # F&G
-            fg = cmc_fear_greed()
+            fg = cmc_fear_greed() if "macro" in pipeline_steps else {}
             engine_data["fear_greed"] = fg
             print(f"  ✅ 恐慌贪婪: {fg.get('value','?')} ({fg.get('classification','?')})")
             
-            # CoinGecko top coins → 板块轮动检测
+            # CoinGecko top coins → 板块轮动检测（仅full）
             try:
                 from multi_source_collector import cg_top_coins, cg_trending
-                top = cg_top_coins(10)
+                top = cg_top_coins(10) if "cg_pro" in pipeline_steps else {}
                 engine_data["cg_top"] = top
                 print(f"  ✅ CoinGecko Top10: {top.get('rotation','?')} | BTC {top.get('btc_change_24h',0):+.1f}% vs Alt {top.get('avg_alt_change_24h',0):+.1f}%")
             except Exception:
                 pass
             try:
-                trend = cg_trending()
+                trend = cg_trending() if "cg_pro" in pipeline_steps else {}
                 engine_data["cg_trending"] = trend
                 hot = ", ".join(c["symbol"] for c in trend.get("trending", [])[:3]) or "无"
                 print(f"  🔥 Trending: {hot}")
             except Exception:
                 pass
             
-            # Macro overview (SPX/VIX/US10Y/DXY)
+            # Macro overview (SPX/VIX/US10Y/DXY) — full模式才刷新
             try:
                 from multi_source_collector import macro_overview
-                macro = macro_overview()
+                macro = macro_overview() if "macro" in pipeline_steps else {}
                 engine_data["macro"] = macro
                 print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
             except Exception:
@@ -3356,10 +3426,10 @@ def auto_card(symbol: str, push: bool = False) -> str:
                 engine_data["dxy"] = None
                 engine_data["_dxy_error"] = "DXY实时源不可用"
             
-            # ── FMP macro: SPX/VIX/US10Y + EURUSD ──
+            # ── FMP macro: SPX/VIX/US10Y + EURUSD（full模式才刷新）──
             try:
                 from multi_source_collector import macro_overview, fmp_forex
-                macro = macro_overview()
+                macro = macro_overview() if "macro" in pipeline_steps else {}
                 engine_data["macro"] = macro
                 print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | US10Y {macro.get('us10y',{}).get('price','?')}% | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
             except Exception:
@@ -3392,15 +3462,18 @@ def auto_card(symbol: str, push: bool = False) -> str:
                     for tf in ["5m", "15m", "1h", "4h"]:
                         tvd = (tv_xau.get("timeframes") or {}).get(tf) or {}
                         if tvd.get("high") and tvd.get("low"):
+                            _cp = tvd.get("change_pct", 0)
+                            _dir = "偏多" if _cp > 0.3 else "偏空" if _cp < -0.3 else "震荡"
                             klines_dict[tf] = {
                                 "close": tvd.get("close", price),
                                 "high": tvd["high"], "low": tvd["low"],
                                 "open": tvd.get("open", price),
-                                "change_pct": tvd.get("change_pct", 0),
+                                "change_pct": _cp,
                                 "poc": tvd.get("poc", price),
                                 "vah": tvd.get("vah", price), "val": tvd.get("val", price),
-                                "direction": tvd.get("direction", "TV现场"),
-                                "description": f"TV MCP·OANDA:XAUUSD {tf} 现场读取",
+                                # v9.7: XAU TV现场真实方向（用 change_pct 合成，语义与BTC _kl_desc一致）
+                                "direction": _dir,
+                                "description": f"TV现场·XAU {tf} {_dir}·{_cp:+.1f}%",
                             }
                     print(f"  📊 XAU K线: TV MCP现场读取 {int(price)} · 真实结构覆盖占位")
                 else:
@@ -3646,13 +3719,14 @@ def auto_card(symbol: str, push: bool = False) -> str:
     except Exception as _ce:
         print(f"  ⚠️ COT黄金持仓桥接: {_ce}")
 
-    # ═══ Step 3: Grok催化剂验证 ═══
+    # ═══ Step 3: Grok催化剂验证（quick/inherit跳过）═══
     print("③ Grok催化剂...")
     grok = {}
     try:
-        grok = call_grok_validation(symbol, merged, results, 
+        grok = (call_grok_validation(symbol, merged, results,
                                      price=engine_data.get("prices", {}).get("primary", 0),
                                      data=engine_data)
+                if mode == "full" else {"skipped": f"{mode}模式"})
         if grok.get("agree"):
             merged["global_confidence"] = round(merged["global_confidence"] + 0.05, 3)
             print(f"  ✅ Grok: 催化剂已验证 | 置信+0.05")
@@ -3673,7 +3747,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
     search_sent = ""
     try:
         from sentiment_search import sentiment_line
-        search_sent = sentiment_line(symbol)
+        search_sent = sentiment_line(symbol) if "x_sent" in pipeline_steps else ""
         print(f"  ✅ {search_sent}")
     except Exception as e:
         print(f"  ⚠️ 搜索: {e}")
@@ -3681,7 +3755,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # ═══ Step 5: 社区情绪 ═══
     print("⑤ 社区情绪...")
     community = ""
-    if asset == "crypto":
+    if asset == "crypto" and "cg_pro" in pipeline_steps:
         try:
             from coingecko_collector import community_dashboard
             community = community_dashboard()
@@ -3693,7 +3767,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print("  ℹ️ 社区: 非加密跳过CoinGecko加密社区面板·使用本品种热点")
 
     # v2.1: Polymarket 预测市场情绪（当前桥接源只采 BTC/crypto，非加密禁用，避免跨资产误导）
-    if asset == "crypto":
+    if asset == "crypto" and "macro" in pipeline_steps:
         try:
             import importlib, sys as _sys
             _sys.path.insert(0, str(ROOT / "scripts"))
@@ -3768,7 +3842,7 @@ def auto_card(symbol: str, push: bool = False) -> str:
     # ═══ 深度数据采集（仅加密品种）═══
     try:
         _sym = symbol.upper().replace(".P", "").split("-")[0].split(" ")[0]
-        if not _sym.endswith("USDT"):
+        if not _sym.endswith("USDT") or "depth" not in pipeline_steps:
             print(f"  ℹ️ 深度: {_sym} 非加密品种·跳过")
             engine_data["depth"] = {"note": f"{_sym}非加密"}
         else:
@@ -4099,6 +4173,17 @@ def auto_card(symbol: str, push: bool = False) -> str:
         print(f"  ⚠ GO/NO-GO跳过: {_ge}")
     append_trade_plan(meta, full_card)
     update_monitor_metadata(symbol, meta)
+    # 保存轻量继承上下文：后续“现在呢/继续”不必重新扫描全部高周期。
+    try:
+        from pipeline_router import save_analysis_context
+        save_analysis_context(
+            symbol,
+            mode=effective_mode,
+            price=engine_data.get("prices", {}).get("primary"),
+            levels=meta.get("key_levels", []) if isinstance(meta, dict) else [],
+        )
+    except Exception as _ctxe:
+        print(f"  ⚠ 分析上下文保存失败: {_ctxe}")
 
     # Card B: 极简决策卡（仅当价格锚定关键位时）
     card = render_card_locked(
@@ -4709,4 +4794,10 @@ def _vwap_structure_line(vwap_ema: dict) -> str:
 if __name__ == "__main__":
     sym = _parse_cli_symbol()
     do_push = "--push" in sys.argv
-    auto_card(sym, push=do_push)
+    # 日常默认快速；完整扫描必须显式 --full，避免裸跑误触发重管线。
+    _mode = "quick"
+    if "--full" in sys.argv:
+        _mode = "full"
+    elif "--inherit" in sys.argv or "--now" in sys.argv:
+        _mode = "inherit"
+    auto_card(sym, push=do_push, mode=_mode)

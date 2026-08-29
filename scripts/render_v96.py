@@ -151,6 +151,13 @@ def _short_tf_text(tf_data: dict) -> str:
 def _sub_tf_text(tf_data: dict) -> str:
     if not isinstance(tf_data, dict) or not tf_data:
         return "待刷新"
+    # v9.7: 优先读逐层CVD（_collect_binance_data 注入的独立值），使五层CVD各自不同
+    cvd = tf_data.get("cvd")
+    if isinstance(cvd, dict) and cvd.get("value") is not None:
+        _dir = cvd.get("direction") or "?"
+        _val = cvd.get("value") or 0
+        _emoji = "🟢" if _dir == "买" else "🔴" if _dir == "卖" else "🔵"
+        return f"CVD{_emoji}{_dir} {_val:,.0f}·近≈"
     for key in ("sub_indicator", "sub", "volume_agg", "oi", "sub_composite", "composite"):
         v = tf_data.get(key)
         if v:
