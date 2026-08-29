@@ -3458,13 +3458,15 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 if tv_xau:
                     xau_tv_note = "XAU TV MCP现场读取(OANDA:XAUUSD 5/15/1h/4h真实结构)"
                     engine_data["_xau_tv_limitation"] = xau_tv_note
-                    # 用 TV 真实高低覆盖占位
-                    for tf in ["5m", "15m", "1h", "4h"]:
+                    # 用 TV 真实高低覆盖占位（v9.7: 加入1D日线背景，供"自上而下确认"；
+                    # state用key"1D"，引擎层统一建为渲染器期望的"D"键）
+                    for tf in ["1D", "4h", "1h", "15m", "5m"]:
                         tvd = (tv_xau.get("timeframes") or {}).get(tf) or {}
                         if tvd.get("high") and tvd.get("low"):
                             _cp = tvd.get("change_pct", 0)
                             _dir = "偏多" if _cp > 0.3 else "偏空" if _cp < -0.3 else "震荡"
-                            klines_dict[tf] = {
+                            _k = "D" if tf == "1D" else tf
+                            klines_dict[_k] = {
                                 "close": tvd.get("close", price),
                                 "high": tvd["high"], "low": tvd["low"],
                                 "open": tvd.get("open", price),

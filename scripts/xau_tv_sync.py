@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TZ = timezone(timedelta(hours=8))
 OUT = ROOT / "data" / "xau_tv_state.json"
 SYMBOL = "OANDA:XAUUSD"
-TIMEFRAMES = [("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
+# v9.7: 补 D 层日线，使"自上而下确认"有大背景（原只同步 5m/15m/1h/4h）
+TIMEFRAMES = [("1D", "D"), ("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
 SOURCE_SNAPSHOT = ROOT / "data" / "source_snapshot_XAUUSD.json"
 
 
@@ -141,7 +142,7 @@ async def _run():
                     lines.append("")
                     lines.append("| 周期 | 高 | 低 | 收 | 振幅 |")
                     lines.append("|:----|:----:|:----:|:----:|:----:|")
-                    for tf in ["5m", "15m", "1h", "4h"]:
+                    for tf in ["1D", "4h", "1h", "15m", "5m"]:
                         d = tfs.get(tf)
                         if d:
                             rng = (d["high"] - d["low"]) / d["low"] * 100 if d.get("low") else 0
