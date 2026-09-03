@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from tv_data_bridge import collect_and_cache  # noqa: E402
+from atomic_json import atomic_write_json  # noqa: E402
 
 
 TV_SYMBOL_ALIASES = {
@@ -45,6 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--alert", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--timeframe", default="", help="主周期代码，例如 5/15/60/240")
+    parser.add_argument("--batch-id", default="", help="可选采集批次标识，用于XAU双缓存原子配对")
     args = parser.parse_args()
     expected_symbol = resolve_tv_symbol(args.symbol)
     if args.timeframe:
@@ -67,11 +69,11 @@ if __name__ == "__main__":
 
     live_payload = dict(result)
     live_payload["source"] = "tv_live_dump"
-    payload_text = __import__("json").dumps(live_payload, indent=2, ensure_ascii=False)
+    if args.batch_id:
+        live_payload["batch_id"] = args.batch_id
     live_paths = cache_paths_for_symbol(str(result.get("symbol") or args.symbol))
     for live_path in live_paths:
-        live_path.parent.mkdir(parents=True, exist_ok=True)
-        live_path.write_text(payload_text, encoding="utf-8")
+        atomic_write_json(live_path, live_payload)
 
     # 默认静默成功，避免 no_agent cron 噪音；--verbose 才输出摘要。
     if args.verbose:

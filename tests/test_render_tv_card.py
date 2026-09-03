@@ -17,6 +17,17 @@ def _load(path: Path, name: str):
     return mod
 
 
+def test_renderer_fails_closed_without_final_verdict_even_with_legacy_order_fields():
+    render = _load(RENDER, "render_tv_card_missing_final_verdict")
+    card = render.render_tv_card(
+        {"grade": "A多", "entry": 100, "stop": 98, "target": 105},
+        {}, "BTCUSDT", 100, mode="push",
+    )
+    assert "⭐主推" not in card
+    assert "多 损98 标105" not in card
+    assert "WAIT" in card or "等待" in card or "禁做" in card
+
+
 def test_push_card_uses_phone_friendly_one_table_format():
     render = _load(RENDER, "render_tv_card_under_test")
     card = render.render_tv_card(
@@ -29,6 +40,11 @@ def test_push_card_uses_phone_friendly_one_table_format():
             "entry": "扫低收回 62,480",
             "stop": "61,950 (1.8ATR)",
             "target": "POC 63,820 R:R 2.5R",
+            "_final_verdict": {
+                "state": "GO-A", "executable": True, "side": "long",
+                "grade": "A多", "entry": "扫低收回 62,480",
+                "stop": "61,950 (1.8ATR)", "target": "POC 63,820 R:R 2.5R",
+            },
             "magnet_up": "前高 64,120 分82",
             "magnet_down": "VAL 61,950 分76",
         },
@@ -180,3 +196,121 @@ def test_renderer_surfaces_regime_model_and_final_state_once():
         }, {"signal": "偏多"}, "BTCUSDT", 100, mode="push",
     )
     assert card.count("体制趋势 · 模型fvg_pullback · GO-A") == 1
+
+
+def test_no_go_card_never_claims_dual_alignment_when_final_verdict_blocks_conflict():
+    render = _load(RENDER, "render_tv_card_no_go_dual_conflict")
+    card = render.render_tv_card(
+        {
+            "grade": "A空", "entry": 100, "stop": 102, "target": 96,
+            "_final_verdict": {
+                "state": "NO-GO", "executable": False, "side": "neutral",
+                "grade": "X禁做", "entry": None, "stop": None, "target": None,
+                "reason": "硬闸门：dual_indicator",
+            },
+            "_dual": {"direction_verdict": "主副同向", "hard_conflict": True},
+        },
+        {"signal": "S3冲突"}, "BTCUSDT", 100, mode="push",
+    )
+    assert "主副同向" not in card
+    assert "主副强冲突" in card
+
+
+def test_wait_card_does_not_leak_raw_entry_as_a_trigger_price():
+    render = _load(RENDER, "render_tv_card_wait_without_raw_entry")
+    card = render.render_tv_card(
+        {
+            "grade": "A空", "entry": 100, "stop": 102, "target": 96,
+            "_final_verdict": {
+                "state": "WAIT", "executable": False, "side": "neutral",
+                "grade": "C等待", "entry": None, "stop": None, "target": None,
+                "reason": "等待：trigger/未收线",
+            },
+        },
+        {"signal": "等待确认"}, "BTCUSDT", 99, mode="push",
+    )
+    assert "| 🔵主推 等 | — | 等结构位确认 |" in card
+    assert "| 🔵主推 等 | 100 |" not in card
+
+
+def test_v96_missing_final_verdict_fails_closed_even_with_legacy_go_status():
+    render = _load(ROOT / "scripts" / "render_v96.py", "render_v96_missing_final")
+    card = render.render_v96_card(
+        "BTCUSDT", "GO-A", "long", 100, 110, 90, 0, "", "买", "A", "买", 2.5,
+        "0.01%", "纽约", {}, "25", [], False,
+        {"entry": 100, "stop": 98, "target": 105}, {"entry": 100, "stop": 98, "target": 105},
+        2.5, 2.0, "", "", risk_amt=1, leverage_text="", inv_line="—",
+        prot_status="A", data_grade="A", sweep_state="", displacement="", one_reason="",
+        model_id="legacy", n5=5, eng_conf=0.9, klines={}, final_verdict=None,
+    )
+    assert "⭐主推" not in card
+    assert "损98" not in card and "标105" not in card
+    assert "禁做" in card or "等确认" in card
+
+
+def test_v96_card_uses_final_verdict_for_conflict_and_never_leaks_prices():
+    render = _load(ROOT / "scripts" / "render_v96.py", "render_v96_final_verdict")
+    card = render.render_v96_card(
+        "BTCUSDT", "A多", "long", 100, 110, 90, 0, "", "买", "A", "买", 1.1,
+        "0.01%", "纽约", {}, "25", [], False,
+        {"stop": 98, "target": 105}, {"stop": 98, "target": 105}, 2.5, 2.0, "", "",
+        risk_amt=10, leverage_text="", inv_line="—", prot_status="C",
+        data_grade="", sweep_state="", displacement="", one_reason="",
+        model_id="model", n5=0, eng_conf=0,
+        klines={}, dual_indicator={"direction_verdict": "主副同向", "hard_conflict": True},
+        final_verdict={"state": "NO-GO", "executable": False, "reason": "dual_indicator"},
+    )
+    assert "主副同向" not in card
+    assert "主副强冲突" in card
+    assert "损98" not in card and "标105" not in card
+
+
+def test_v96_non_crypto_card_does_not_show_crypto_flow_fields():
+    render = _load(ROOT / "scripts" / "render_v96.py", "render_v96_non_crypto")
+    card = render.render_v96_card(
+        "XAUUSD", "WAIT", "neutral", 100, 110, 90, 0, "", "N/A", "C", "buy", "1.2",
+        "0.01%", "纽约", {}, "—", [], False,
+        {}, {}, 0, 0, "", "", risk_amt=1, leverage_text="", inv_line="—",
+        prot_status="C", data_grade="B", sweep_state="", displacement="", one_reason="",
+        model_id="model", n5=0, eng_conf=0, dual_indicator={"asset_is_crypto": False},
+        final_verdict={"state": "WAIT", "executable": False},
+    )
+    assert "Funding" not in card and "Taker" not in card and "恐贪" not in card
+
+
+def test_v96_card_renders_source_status_and_final_verdict_usage():
+    render = _load(ROOT / "scripts" / "render_v96.py", "render_v96_source_matrix")
+    card = render.render_v96_card(
+        "BTCUSDT", "WAIT", "neutral", 100, 110, 90, 0, "", "买", "A", "买", 1.1,
+        "0.01%", "纽约", {}, "25", [], False,
+        {}, {}, 0, 0, "", "", risk_amt=1, leverage_text="", inv_line="—",
+        prot_status="C", data_grade="B", sweep_state="", displacement="", one_reason="",
+        model_id="model", n5=0, eng_conf=0, klines={},
+        source_matrix=[
+            {"label": "TV五周期", "status": "live", "entered_final_verdict": True, "impact": "五层硬闸", "evidence": "覆盖5/5"},
+            {"label": "X情绪", "status": "stale_cache", "entered_final_verdict": False, "impact": "催化剂盲点", "evidence": "过期"},
+        ],
+        final_verdict={"state": "WAIT", "executable": False},
+    )
+
+    assert "③ 多源验证 / 双指标" in card
+    assert "TV五周期" in card and "live" in card
+    assert "X情绪" in card and "stale_cache" in card
+    assert "已入FinalVerdict" in card
+    assert "仅展示/辅助" in card
+
+
+def test_push_card_shows_compact_source_status_summary():
+    render = _load(ROOT / "scripts" / "render_tv_card.py", "render_tv_card_source_summary")
+    card = render.render_tv_card(
+        {
+            "grade": "C等待",
+            "_source_matrix": [
+                {"label": "TV五周期", "status": "live", "entered_final_verdict": True},
+                {"label": "X情绪", "status": "stale_cache", "entered_final_verdict": False},
+            ],
+        },
+        {"signal": "等待"}, "BTCUSDT", 100, mode="push",
+    )
+
+    assert "来源 TV五周期:live·裁决 / X情绪:stale_cache·辅助" in card

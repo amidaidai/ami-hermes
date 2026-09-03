@@ -119,9 +119,12 @@ def run_meta_label_gate(
     except Exception as e:
         logger.warning(f"[{source_tag}] 门控调用失败: {e}")
         return {
-            "execute": True,
-            "confidence": 0.5,
-            "reason": f"门控调用失败({e})·默认放行",
+            # A failed execution gate is unknown, not approval.  Keep the
+            # decision loop fail-closed so a broken optional module cannot
+            # silently turn into an executable signal.
+            "execute": False,
+            "confidence": 0.0,
+            "reason": f"门控不可用({e})·默认拒绝",
             "_source": source_tag,
             "_error": str(e),
         }

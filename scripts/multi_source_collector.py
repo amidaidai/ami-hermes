@@ -14,9 +14,19 @@
 """
 
 import json, time, os, re, urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
+
+from source_contract import (
+    SOURCE_CONTRACT_VERSION,
+    attach_source_contract,
+    get_source_contract,
+    source_record,
+)
+from source_health import payload_timestamp
+from atomic_json import atomic_update_json
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 TZ = timezone(timedelta(hours=8))
@@ -25,6 +35,8 @@ SECRETS = ROOT / "hermes" / "secrets"
 DATA = ROOT / "data"
 CACHE = DATA / "api_cache.json"
 CACHE_TTL = 120  # 2分钟通用缓存
+SOURCE_STATE = DATA / "source_circuit_state.json"
+SOURCE_COOLDOWN_SECONDS = 900
 
 # ═══════════════════ Keys ═══════════════════
 def _read_secret(name: str) -> str:
@@ -42,7 +54,7 @@ MASSIVE_KEY = _read_secret("massive_api_key.txt")
 CG_KEY = os.environ.get("CG_API_KEY", "") or _read_secret("coingecko_api_key.txt")
 
 
-def _fetch(url: str, headers: dict = None, timeout: int = 10) -> dict:
+def _fetch(url: str, headers: dict[str, str] | None = None, timeout: int = 10) -> Any:
     h = {"User-Agent": UA}
     if headers:
         h.update(headers)
@@ -60,17 +72,112 @@ def _cached(key: str, fetcher, ttl: int = CACHE_TTL):
             pass
     entry = cache.get(key, {})
     if entry and time.time() - entry.get("ts", 0) < ttl:
-        return entry.get("data", {})
+        return _source_status(
+            entry.get("data", {}),
+            "cache",
+            cached=True,
+            source_id=key,
+            captured_at=entry.get("captured_at"),
+        )
+    circuit = _read_source_state().get(key, {})
+    if circuit.get("blocked_until", 0) > time.time():
+        return _source_status(
+            entry.get("data", {}) if entry else {},
+            "quota_cooldown",
+            cached=bool(entry),
+            error=RuntimeError("quota cooldown"),
+            source_id=key,
+            captured_at=entry.get("captured_at") if entry else None,
+        )
     try:
         data = fetcher()
-        cache[key] = {"ts": time.time(), "data": data}
-        DATA.mkdir(parents=True, exist_ok=True)
-        CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-        return data
+        fetched_at = time.time()
+        captured_at = payload_timestamp(data) if isinstance(data, dict) else None
+
+        def merge_cache(current: Any) -> dict[str, Any]:
+            merged = current if isinstance(current, dict) else {}
+            merged[key] = {
+                "ts": fetched_at,
+                "captured_at": captured_at.isoformat() if captured_at else None,
+                "data": data,
+            }
+            return merged
+
+        atomic_update_json(CACHE, merge_cache, default={})
+        return _source_status(
+            data,
+            "live" if captured_at is not None else "unavailable",
+            source_id=key,
+            captured_at=captured_at,
+            error=None if captured_at is not None else "missing_timestamp",
+        )
     except Exception as e:
+        if _classify_source_error(e) == "quota_or_rate_limited":
+            _write_source_state(key, time.time() + SOURCE_COOLDOWN_SECONDS)
         if entry:
-            return entry.get("data", {})
-        return {"_error": str(e)[:100]}
+            return _source_status(
+                entry.get("data", {}),
+                "stale_cache",
+                cached=True,
+                error=e,
+                source_id=key,
+                captured_at=entry.get("captured_at"),
+            )
+        return _source_status(
+            {},
+            "unavailable",
+            error=e,
+            source_id=key,
+        )
+
+
+def _source_status(
+    data: Any,
+    status: str,
+    *,
+    cached: bool = False,
+    error: Any = None,
+    source_id: str = "unknown",
+    captured_at: Any = None,
+) -> dict[str, Any]:
+    """Attach observable source state without making a failed source fatal."""
+    return attach_source_contract(
+        data,
+        source_id,
+        status=status,
+        captured_at=captured_at,
+        error=error,
+        cached=cached,
+    )
+
+
+def _read_source_state() -> dict:
+    try:
+        return json.loads(SOURCE_STATE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_source_state(key: str, blocked_until: float) -> None:
+    try:
+        def merge_state(current: Any) -> dict[str, Any]:
+            state = current if isinstance(current, dict) else {}
+            state[key] = {"blocked_until": blocked_until, "reason": "quota_or_rate_limited"}
+            return state
+        atomic_update_json(SOURCE_STATE, merge_state, default={})
+    except Exception:
+        pass
+
+
+def _classify_source_error(error: Exception) -> str:
+    text = str(error).lower()
+    if any(token in text for token in ("429", "rate limit", "quota", "too many")):
+        return "quota_or_rate_limited"
+    if any(token in text for token in ("401", "403", "unauthorized", "forbidden", "api key")):
+        return "credential_or_plan_blocked"
+    if "timed out" in text or "timeout" in text:
+        return "timeout"
+    return "request_failed"
 
 
 # ═══════════════════ CoinMarketCap ═══════════════════
@@ -408,10 +515,12 @@ def massive_aggs(symbol: str = "AAPL", asset: str = "stock") -> dict:
                                   from_="2026-06-17", to="2026-06-18", limit=2)
         if isinstance(result, list) and len(result) > 0:
             r = result[-1]
+            def _to_float(value: Any) -> float:
+                return float(value or 0)
             return {
-                "open": float(r.open), "high": float(r.high),
-                "low": float(r.low), "close": float(r.close),
-                "volume": float(r.volume), "vwap": float(r.vwap),
+                "open": _to_float(getattr(r, "open", 0)), "high": _to_float(getattr(r, "high", 0)),
+                "low": _to_float(getattr(r, "low", 0)), "close": _to_float(getattr(r, "close", 0)),
+                "volume": _to_float(getattr(r, "volume", 0)), "vwap": _to_float(getattr(r, "vwap", 0)),
                 "timestamp": r.timestamp,
             }
     except Exception as e:
@@ -505,46 +614,101 @@ def tushare_daily(symbol: str = "600519.SH") -> dict:
     return _cached(f"tushare_{raw}", fetch, ttl=300)
 
 
-def gather_all(asset_class: str = "crypto", symbol: str = "BTC") -> dict:
+def _collect_routed_source(
+    records: dict[str, dict[str, Any]],
+    key: str,
+    fetcher,
+    *,
+    symbol: str,
+) -> dict[str, Any]:
+    """Run one optional source and always return a structured record."""
+    observed_at = datetime.now(TZ)
+    try:
+        value = fetcher()
+        existing = get_source_contract(value)
+        if existing:
+            decorated = value if isinstance(value, dict) else attach_source_contract(
+                value,
+                key,
+                status=existing.get("status"),
+                captured_at=existing.get("timestamp"),
+                observed_at=observed_at,
+                error=existing.get("error"),
+                cached=bool(existing.get("cached")),
+                symbol=symbol,
+            )
+        else:
+            has_payload = value not in (None, "", False, {}, [])
+            captured_at = payload_timestamp(value) if isinstance(value, dict) else None
+            decorated = attach_source_contract(
+                value,
+                key,
+                status=("live" if captured_at is not None else "unavailable") if has_payload else "not_run",
+                captured_at=captured_at,
+                observed_at=observed_at,
+                error=None if not has_payload or captured_at is not None else "missing_timestamp",
+                symbol=symbol,
+            )
+    except Exception as exc:
+        decorated = attach_source_contract(
+            {},
+            key,
+            status="unavailable",
+            observed_at=observed_at,
+            error=exc,
+            symbol=symbol,
+        )
+        decorated["_error"] = decorated["_source_contract"].get("error")
+
+    contract = source_record(key, decorated, symbol=symbol)
+    records[key] = contract
+    return decorated
+
+
+def _has_source_payload(value: Any) -> bool:
+    contract = get_source_contract(value)
+    if contract is not None:
+        return bool(contract.get("payload_present"))
+    return value not in (None, "", False, {}, [])
+
+
+def gather_all(asset_class: str = "crypto", symbol: str = "BTC") -> dict[str, Any]:
     """
     统一采集入口
     asset_class: crypto | stock | forex | metal
+
+    Every routed provider is represented under ``_source_records`` with the
+    versioned source contract.  Legacy flat provider keys remain available only
+    when the provider returned a payload or an explicit failure.
     """
-    result: dict[str, object] = {"symbol": symbol, "asset_class": asset_class, "time": datetime.now(TZ).isoformat()}
-    
+    result: dict[str, Any] = {
+        "symbol": symbol,
+        "asset_class": asset_class,
+        "time": datetime.now(TZ).isoformat(),
+        "_source_contract_version": SOURCE_CONTRACT_VERSION,
+        "_source_records": {},
+    }
+    records = result["_source_records"]
+
+    def collect(key: str, fetcher) -> None:
+        value = _collect_routed_source(records, key, fetcher, symbol=symbol)
+        contract = records[key]
+        if _has_source_payload(value) or contract.get("error"):
+            result[key] = value
+
+    collectors: dict[str, Any] = {}
     if asset_class == "crypto":
-        try:
-            result["cmc"] = cmc_quote(symbol)
-        except Exception as e:
-            result["cmc"] = {"_error": str(e)[:80]}
-        try:
-            result["cmc_global"] = cmc_global()
-        except Exception:
-            pass
-        try:
-            result["fear_greed"] = cmc_fear_greed()
-        except Exception:
-            pass
-        try:
-            result["cg_top"] = cg_top_coins(10)
-        except Exception:
-            pass
-        try:
-            result["cg_trending"] = cg_trending()
-        except Exception:
-            pass
-        try:
-            result["cg_detail"] = cg_coin_detail("bitcoin" if symbol.upper() == "BTC" else symbol.lower())
-        except Exception:
-            pass
-        try:
-            result["cg_categories"] = cg_categories()
-        except Exception:
-            pass
-        try:
-            result["macro"] = macro_overview()
-        except Exception:
-            pass
+        collectors = {
+            "cmc": lambda: cmc_quote(symbol),
+            "cmc_global": cmc_global,
+            "fear_greed": cmc_fear_greed,
+            "cg_top": lambda: cg_top_coins(10),
+            "cg_trending": cg_trending,
+            "cg_detail": lambda: cg_coin_detail("bitcoin" if symbol.upper() == "BTC" else symbol.lower()),
+            "cg_categories": cg_categories,
+            "macro": macro_overview,
+        }
+        pass
     elif asset_class == "stock":
         collectors = {
             "av": lambda: av_quote(symbol),
@@ -555,36 +719,31 @@ def gather_all(asset_class: str = "crypto", symbol: str = "BTC") -> dict:
             "tushare": lambda: tushare_daily(symbol),
             "macro": macro_overview,
         }
-        for key, fetcher in collectors.items():
-            try:
-                value = fetcher()
-                if value:
-                    result[key] = value
-            except Exception as exc:
-                result[key] = {"_error": str(exc)[:80]}
+        pass
     elif asset_class == "forex":
-        for key, fetcher in {
+        collectors = {
             "fmp": lambda: fmp_forex(symbol),
             "td": lambda: td_quote(symbol),
             "td_tech": lambda: td_technical(symbol),
             "macro": macro_overview,
-        }.items():
-            try:
-                value = fetcher()
-                if value:
-                    result[key] = value
-            except Exception as exc:
-                result[key] = {"_error": str(exc)[:80]}
+        }
+        pass
     elif asset_class == "futures":
-        try:
-            result["massive"] = massive_futures_snapshot(symbol)
-        except Exception as exc:
-            result["massive"] = {"_error": str(exc)[:80]}
-        try:
-            result["macro"] = macro_overview()
-        except Exception:
-            pass
-    
+        collectors = {
+            "massive": lambda: massive_futures_snapshot(symbol),
+            "macro": macro_overview,
+        }
+        pass
+
+    if collectors:
+        with ThreadPoolExecutor(max_workers=min(8, len(collectors))) as pool:
+            futures = {
+                pool.submit(collect, key, fetcher): key
+                for key, fetcher in collectors.items()
+            }
+            for future in as_completed(futures):
+                future.result()
+
     return result
 
 

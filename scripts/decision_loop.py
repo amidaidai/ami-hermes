@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from typing import Any
 
 from decision_regime import DecisionRegime
@@ -37,7 +38,8 @@ class FinalVerdict:
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
-        return float(str(value).replace("−", "-").replace("%", ""))
+        number = float(str(value).replace("−", "-").replace("%", ""))
+        return number if math.isfinite(number) else default
     except (TypeError, ValueError):
         return default
 
@@ -75,6 +77,23 @@ def _model_id(main: dict[str, Any]) -> str:
     return normalized
 
 
+def _svp_requires_wait(main: dict[str, Any]) -> bool:
+    """Treat SVP's explicit waiting language as a decision contract.
+
+    The action grid is human-readable, but legacy callers may still pass an
+    A-grade alongside an unclosed candle or a conflict. Those states must not
+    be upgraded into an executable order by a stale numeric grade.
+    """
+    fields = (
+        "conclusion", "结论", "treatment", "action", "路径", "path",
+        "direction", "direction_text", "现位", "risk", "风控",
+    )
+    text = " ".join(str(main.get(field) or "") for field in fields)
+    return any(token in text for token in (
+        "⚠冲突", "未收线", "等收线", "等解除", "C等待", "观望",
+    ))
+
+
 def _zone_quality(main: dict[str, Any], model_id: str) -> float | None:
     key = None
     if "fvg" in model_id:
@@ -93,10 +112,12 @@ def resolve_final_verdict(
     *,
     regime: DecisionRegime | None = None,
     risk: dict[str, Any] | None = None,
+    advanced: dict[str, Any] | None = None,
 ) -> FinalVerdict:
     """把SVP候选、HALDRO、体制和风控合并为唯一可执行裁决。"""
     dual = dual or {}
     risk = risk or {}
+    advanced = advanced or {}
     grade = str(main.get("grade") or "C等待")
     side = _side(main)
     model_id = _model_id(main)
@@ -115,12 +136,31 @@ def resolve_final_verdict(
     snapshot_age_sec = _number(main.get("snapshot_age_sec"), 0.0)
     if data_grade not in ("A", "A-", "B") or snapshot_age_sec > 60:
         hard.append("data")
+    # X禁做 硬阻断（2026-08-31 硬化：旧逻辑X会走WAIT被覆盖成C等待，丢失禁止语义）
+    if grade.startswith("X"):
+        hard.append("x_forbidden")
+        warnings.append("x_forbidden")
     if bool(main.get("mtf_conflict")):
         hard.append("background")
+    # TV cache status is produced by the data boundary.  Once a caller has
+    # explicitly marked the snapshot unusable, stale/invalid TV data must be
+    # a hard blocker rather than a decorative warning.
+    if main.get("tv_live_verified") is False:
+        hard.append("tv_live")
+    if main.get("tv_five_tf_required") and main.get("tv_five_tf_verified") is not True:
+        hard.append("tv_five_tf")
+    cross_source_hard = main.get("cross_source_hard_blockers")
+    if isinstance(cross_source_hard, (list, tuple)) and cross_source_hard:
+        hard.append("cross_source")
+    cross_source_warnings = main.get("cross_source_warnings")
+    if isinstance(cross_source_warnings, (list, tuple)):
+        warnings.extend(f"cross_source:{item}" for item in cross_source_warnings if item)
     if main.get("location_valid") is False:
         wait.append("location")
     if main.get("trigger_confirmed") is False:
         wait.append("trigger")
+    if _svp_requires_wait(main):
+        wait.append("svp_wait_language")
 
     is_crypto = bool(dual.get("asset_is_crypto", str(symbol).upper().endswith("USDT")))
     valid_code = int(_number(dual.get("valid_code"), 0.0))
@@ -154,16 +194,51 @@ def resolve_final_verdict(
 
     is_a = grade.startswith("A")
     is_bc = grade.startswith(("B", "C反"))
-    min_rr = 2.0 if is_a else 1.5 if is_bc else 2.0
+    min_rr = 2.0  # P0-3 (2026-08-31): R:R 硬底线统一 1:2，删除 B 级 1.5 豁免
+    execution_complete = all(value is not None for value in (entry, stop, target))
+    execution_geometry_valid = False
+    if entry is not None and stop is not None and target is not None:
+        execution_geometry_valid = (
+            (side == "long" and stop < entry < target)
+            or (side == "short" and stop > entry > target)
+        )
+        if execution_geometry_valid:
+            # The execution source owns the actual geometry.  Never trust a
+            # claimed upstream RR when Entry/Stop/Target imply a different value.
+            stop_distance = abs(entry - stop)
+            if stop_distance > 0:
+                rr = abs(target - entry) / stop_distance
+    if is_a and not execution_complete:
+        # A numeric grade/R:R is not enough to authorize execution.  Keep the
+        # result in WAIT so the single execution source itself cannot leak a
+        # GO-A with an incomplete Entry/Stop/Target contract.
+        wait.append("execution_contract")
+    elif is_a and not execution_geometry_valid:
+        wait.append("execution_contract")
     if rr < min_rr:
         wait.append("rr_ratio")
     if side == "neutral" or grade.startswith(("X", "C等待")):
         wait.append("no_direction")
+    # P0-1 (2026-08-31): B/C反 一律视为等待触发，不产生自动执行权（GO-B 取消）
+    if is_bc:
+        wait.append("b_wait")
 
     risk_usd = _number(risk.get("risk_usd"), 0.0)
     if risk and not bool(risk.get("allowed", False)):
         hard.append("risk_constitution")
         warnings.extend(str(v) for v in risk.get("violations", []) if v)
+    if risk and risk_usd <= 0:
+        hard.append("risk_constitution")
+        warnings.append("risk_usd_invalid")
+
+    # Advanced order-flow/meta-label checks are decision gates, not merely
+    # explanatory card text.  Only an explicit denial is actionable here;
+    # missing/legacy data remains handled by the ordinary dual-indicator gate.
+    advanced_gate = advanced.get("gate") if isinstance(advanced, dict) else None
+    if isinstance(advanced_gate, dict) and advanced_gate.get("execute") is False:
+        hard.append("advanced_confluence")
+        gate_reason = str(advanced_gate.get("reason") or "高级订单流门控否决")
+        warnings.append(f"advanced_confluence:{gate_reason}")
 
     hard = list(dict.fromkeys(hard))
     wait = list(dict.fromkeys(wait))
@@ -173,14 +248,13 @@ def resolve_final_verdict(
     if hard:
         state = "NO-GO"
         executable = False
-    elif wait:
+    elif wait or is_bc:
+        # P0-1 (2026-08-31): B/C反 一律 WAIT 不执行——等触发/确认，无自动授权；
+        # 候选价经 watch_side/watch_entry 保留供人工判断。
         state = "WAIT"
         executable = False
     elif is_a and not weak_haldro:
         state = "GO-A"
-        executable = True
-    elif is_a or is_bc:
-        state = "GO-B"
         executable = True
     else:
         state = "WAIT"
@@ -189,11 +263,18 @@ def resolve_final_verdict(
     if not executable:
         final_side = "neutral"
         final_entry = final_stop = final_target = None
-        final_grade = "X禁做" if state == "NO-GO" else "C等待"
+        if state == "NO-GO":
+            final_grade = "X禁做"
+        elif is_bc:
+            # 保留 B多/B空/C反多/C反空 供渲染层显示“等触发+候选”，不覆盖成 C等待
+            final_grade = grade
+            wait = list(dict.fromkeys([*wait, "b_wait"]))
+        else:
+            final_grade = "C等待"
     else:
         final_side = side
         final_entry, final_stop, final_target = entry, stop, target
-        final_grade = grade if state == "GO-A" else ("B多" if side == "long" else "B空")
+        final_grade = grade
 
     reason = (
         "硬闸门：" + "/".join(hard)
@@ -209,10 +290,23 @@ def resolve_final_verdict(
         "regime": gate("red" if regime_blocked else "green", "模型不适配当前体制" if regime_blocked else "体制允许模型"),
         "location": gate("yellow" if any(item in wait for item in ("location", "zone_quality")) else "green", "位置/区域质量不足" if any(item in wait for item in ("location", "zone_quality")) else "位置有效"),
         "trigger": gate("yellow" if any(item in wait for item in ("trigger", "no_direction")) else "green", "等待闭柱触发" if any(item in wait for item in ("trigger", "no_direction")) else "触发确认"),
-        "orderflow": gate("red" if "dual_indicator" in hard else "yellow" if orderflow_yellow else "green", "主副强冲突" if "dual_indicator" in hard else "副驾驶弱/回退" if orderflow_yellow else "订单流允许"),
+        "orderflow": gate(
+            "red" if "dual_indicator" in hard or "advanced_confluence" in hard else "yellow" if orderflow_yellow else "green",
+            "主副强冲突" if "dual_indicator" in hard else "高级订单流门控否决" if "advanced_confluence" in hard else "副驾驶弱/回退" if orderflow_yellow else "订单流允许",
+        ),
         "rr": gate("yellow" if "rr_ratio" in wait else "green", "R:R不足" if "rr_ratio" in wait else "R:R通过"),
         "risk": gate("red" if "risk_constitution" in hard else "green", "风控宪法拦截" if "risk_constitution" in hard else "风控通过"),
     }
+    if main.get("tv_five_tf_required"):
+        gates["tv_five_tf"] = gate(
+            "green" if "tv_five_tf" not in hard else "red",
+            "TV五周期通过" if "tv_five_tf" not in hard else "TV五周期缺失/过期/身份不符",
+        )
+    if main.get("cross_validation") is not None or isinstance(cross_source_hard, (list, tuple)):
+        gates["cross_source"] = gate(
+            "red" if "cross_source" in hard else "yellow" if cross_source_warnings else "green",
+            "核心来源失效" if "cross_source" in hard else "可选来源降级" if cross_source_warnings else "来源矩阵通过",
+        )
     return FinalVerdict(
         state=state,
         executable=executable,

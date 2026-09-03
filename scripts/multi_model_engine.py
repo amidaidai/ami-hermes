@@ -459,13 +459,40 @@ ALL_MODELS = [
     ("关联套利", model_correlation_arb),
 ]
 
+EXECUTION_MODEL_NAMES = (
+    "VWAP反抽", "VAL回收", "POC拒绝", "扫流动性回收", "突破接受", "EMA趋势",
+)
+
+
+def model_scope(mode: str = "full") -> tuple[str, ...]:
+    """Return models allowed for a pipeline mode.
+
+    Quick/Inherit use execution-local price/value models only.  Full retains
+    the complete model registry, including derivatives and cross-market
+    context models.
+    """
+    if str(mode or "full").lower() in {"quick", "inherit"}:
+        return EXECUTION_MODEL_NAMES
+    return tuple(name for name, _fn in ALL_MODELS)
+
 # ═══════════════════════════════════════
 # 合并引擎
 # ═══════════════════════════════════════
 
-def run_all_models(data: dict, symbol: str = "BTCUSDT") -> List[dict]:
-    """运行所有模型，返回结果列表。应用session策略过滤 + 三层确认 + 资产权重。"""
+def run_all_models(
+    data: dict,
+    symbol: str = "BTCUSDT",
+    *,
+    model_names: List[str] | tuple[str, ...] | None = None,
+    include_confirmations: bool = True,
+) -> List[dict]:
+    """Run the selected model scope with optional full-only confirmations."""
     results = []
+    selected_names = set(model_names) if model_names is not None else None
+    selected_models = [
+        (name, fn) for name, fn in ALL_MODELS
+        if selected_names is None or name in selected_names
+    ]
     
     # v2.1: Session策略 — 按KillZone动态激活模型
     try:
@@ -475,7 +502,7 @@ def run_all_models(data: dict, symbol: str = "BTCUSDT") -> List[dict]:
         session = {"key": "default", "priority_models": [], "avoid_models": [], "confidence_bonus": 0.0}
     session_bonus = session.get("confidence_bonus", 0.0)
     
-    for name, fn in ALL_MODELS:
+    for name, fn in selected_models:
         try:
             # Session过滤：不活跃时段的模型直接跳过
             active, weight = model_priority_filter(name, session) if session["key"] != "default" else (True, 1.0)
@@ -503,41 +530,54 @@ def run_all_models(data: dict, symbol: str = "BTCUSDT") -> List[dict]:
         except Exception as e:
             results.append({"name": name, "direction": "error", "confidence": 0, "strength": "错误", "error": str(e)[:50]})
     
-    # v2.1: 三层确认模型（FVG+OB+Sweep）
-    try:
-        from triple_confirm import triple_confirmation_score
-        ohlcv = data.get("klines", {}).get("15m", [])
-        tv_data = data.get("tv", {})
-        price = data.get("binance_spot", {}).get("price", 0)
-        tc_dir, tc_conf, tc_reason = triple_confirmation_score(price, ohlcv or [], tv_data, session)
-        if tc_dir != "null" and tc_conf > 0.30:
+    if include_confirmations:
+        # v2.1: 三层确认模型（FVG+OB+Sweep）
+        try:
+            from triple_confirm import triple_confirmation_score
+            ohlcv = data.get("klines", {}).get("15m", [])
+            tv_data = data.get("tv", {})
+            price = data.get("binance_spot", {}).get("price", 0)
+            tc_dir, tc_conf, tc_reason = triple_confirmation_score(price, ohlcv or [], tv_data, session)
+            if tc_dir != "null" and tc_conf > 0.30:
+                results.append({
+                    "name": "三层确认(OB+FVG+Sweep)",
+                    "direction": tc_dir,
+                    "confidence": round(tc_conf, 3),
+                    "strength": "强" if tc_conf >= 0.6 else "中等",
+                    "triple_reason": tc_reason,
+                })
+        except Exception as exc:
             results.append({
                 "name": "三层确认(OB+FVG+Sweep)",
-                "direction": tc_dir,
-                "confidence": round(tc_conf, 3),
-                "strength": "强" if tc_conf >= 0.6 else "中等",
-                "triple_reason": tc_reason,
+                "direction": "null",
+                "confidence": 0,
+                "strength": "不可用",
+                "error": f"{type(exc).__name__}: {str(exc)[:80]}",
             })
-    except Exception:
-        pass
-    
-    # v2.1: Silver Bullet 检测
-    try:
-        from triple_confirm import detect_silver_bullet
-        ohlcv = data.get("klines", {}).get("15m", [])
-        tv_data = data.get("tv", {})
-        price = data.get("binance_spot", {}).get("price", 0)
-        sb_dir, sb_conf, sb_reason = detect_silver_bullet(price, ohlcv or [], tv_data, session)
-        if sb_dir != "null" and sb_conf > 0.40:
+
+        # v2.1: Silver Bullet 检测
+        try:
+            from triple_confirm import detect_silver_bullet
+            ohlcv = data.get("klines", {}).get("15m", [])
+            tv_data = data.get("tv", {})
+            price = data.get("binance_spot", {}).get("price", 0)
+            sb_dir, sb_conf, sb_reason = detect_silver_bullet(price, ohlcv or [], tv_data, session)
+            if sb_dir != "null" and sb_conf > 0.40:
+                results.append({
+                    "name": "★Silver Bullet",
+                    "direction": sb_dir,
+                    "confidence": round(sb_conf, 3),
+                    "strength": "强" if sb_conf >= 0.65 else "中等",
+                    "silver_bullet_reason": sb_reason,
+                })
+        except Exception as exc:
             results.append({
                 "name": "★Silver Bullet",
-                "direction": sb_dir,
-                "confidence": round(sb_conf, 3),
-                "strength": "强" if sb_conf >= 0.65 else "中等",
-                "silver_bullet_reason": sb_reason,
+                "direction": "null",
+                "confidence": 0,
+                "strength": "不可用",
+                "error": f"{type(exc).__name__}: {str(exc)[:80]}",
             })
-    except Exception:
-        pass
     
     return results
 
@@ -637,8 +677,8 @@ def call_grok_validation(
     
     token = _read_grok_token()
     if not token:
-        return {"agree": True, "divergence": "", "blindspot": "",
-                "grok_direction": "", "grok_confidence": 0, "error": "无token"}
+        return {"agree": False, "divergence": "", "blindspot": "",
+                "grok_direction": "", "grok_confidence": 0, "skipped": "无token"}
     
     # 构建 prompt
     model_summary = ", ".join(
@@ -714,7 +754,7 @@ def call_grok_validation(
         }
     
     except Exception as e:
-        return {"agree": True, "divergence": "", "blindspot": "",
+        return {"agree": False, "divergence": "", "blindspot": "",
                 "grok_direction": "", "grok_confidence": 0, "error": str(e)[:100]}
 
 

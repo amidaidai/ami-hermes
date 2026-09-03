@@ -8,6 +8,7 @@
 """
 
 import json, time, os, urllib.request
+from typing import Any
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -16,10 +17,11 @@ TZ = timezone(timedelta(hours=8))
 CACHE_FILE = Path("D:/Hermes agent/data/coingecko_cache.json")
 CACHE_TTL = 300  # 5分钟缓存
 from credential_store import read_secret
+from atomic_json import atomic_write_json
 
 CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
 
-def _fetch(url: str) -> dict:
+def _fetch(url: str) -> Any:
     headers = {"User-Agent": UA}
     if CG_KEY and "coingecko.com" in url:
         headers["x-cg-pro-api-key"] = CG_KEY
@@ -35,7 +37,7 @@ def _fetch(url: str) -> dict:
         return json.loads(raw.decode('utf-8', errors='replace'))
 
 
-def _cached(key: str, fetcher, ttl: int = CACHE_TTL) -> dict:
+def _cached(key: str, fetcher, ttl: int = CACHE_TTL) -> Any:
     """带缓存的抓取"""
     cache = {}
     if CACHE_FILE.exists():
@@ -52,7 +54,7 @@ def _cached(key: str, fetcher, ttl: int = CACHE_TTL) -> dict:
         data = fetcher()
         cache[key] = {"ts": time.time(), "data": data}
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(CACHE_FILE, cache)
         return data
     except Exception as e:
         if entry:
@@ -193,8 +195,8 @@ def get_category_heat() -> list:
 
 def get_reddit_sentiment():
     """Reddit 加密社区情绪 (免费·无需Key)"""
+    headers = {"User-Agent": "python:棠溪-trading-bot:v1.0"}
     try:
-        headers = {"User-Agent": "python:棠溪-trading-bot:v1.0"}
         # r/Bitcoin
         req = urllib.request.Request("https://www.reddit.com/r/Bitcoin/about.json", headers=headers)
         with urllib.request.urlopen(req, timeout=8) as r:

@@ -3,8 +3,13 @@
 爆仓/清算压力监控 v1.2 — 表格化输出
 """
 import json, sys, os, time
+from typing import cast
+from typing import Any
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 import urllib.request
+from source_contract import attach_source_contract
+from atomic_json import atomic_write_json
 
 TZ = timezone(timedelta(hours=8))
 UA = "Hermes/1.0"
@@ -13,6 +18,13 @@ ORION_URL = "https://screener.orionterminal.com/api/screener?exchange=binance"
 DATA_DIR = os.path.expanduser("~/AppData/Local/hermes/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _fetch(url, timeout=10):
@@ -29,7 +41,7 @@ def _fetch(url, timeout=10):
 
 def _orion_current(row: dict) -> dict:
     """Normalize Orion's Binance futures snapshot to the collector contract."""
-    tf1h = row.get("tf1h") if isinstance(row.get("tf1h"), dict) else {}
+    tf1h = cast(dict, row.get("tf1h")) if isinstance(row.get("tf1h"), dict) else {}
     return {
         "symbol": str(row.get("symbol") or ""),
         "oi": float(row.get("openInterest") or 0),
@@ -81,11 +93,13 @@ def save_snapshot(symbol: str, data: dict):
 
 
 def analyze(symbol: str, current: dict, prev: dict) -> dict:
-    oi_now, price_now = current.get("oi", 0), current.get("price", 0)
-    oi_prev, price_prev = prev.get("oi", oi_now), prev.get("price", price_now)
+    oi_now = float(current.get("oi") or 0)
+    price_now = float(current.get("price") or 0)
+    oi_prev = float(prev.get("oi") or oi_now)
+    price_prev = float(prev.get("price") or price_now)
     if not oi_now: return {"symbol": symbol, "status": "no_data"}
-    oi_delta_pct = float(current.get("oi_delta_pct")) if current.get("oi_delta_pct") is not None else ((oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0)
-    price_delta_pct = float(current.get("price_delta_pct")) if current.get("price_delta_pct") is not None else ((price_now - price_prev) / price_prev * 100 if price_prev else 0)
+    oi_delta_pct = _number(current.get("oi_delta_pct"), (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0)
+    price_delta_pct = _number(current.get("price_delta_pct"), (price_now - price_prev) / price_prev * 100 if price_prev else 0)
 
     if oi_delta_pct < -2 and price_delta_pct < -1: squeeze, detail = "多头爆仓", f"OI{oi_delta_pct:+.1f}% 价{price_delta_pct:+.1f}%→多杀多"
     elif oi_delta_pct < -2 and price_delta_pct > 1: squeeze, detail = "空头爆仓", f"OI{oi_delta_pct:+.1f}% 价{price_delta_pct:+.1f}%→轧空"
@@ -168,31 +182,39 @@ def main():
         return 1
     if has_squeeze:
         print(output)
-        try:
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from telegram_reliable import push_tg_rich
-            push_tg_rich("telegram:-1003733144325:846", output)
-        except Exception as _te:
-            print(f"⚠ 清算压力RichMarkdown推送失败: {_te}", file=sys.stderr)
+        if os.environ.get("TANGXI_ENABLE_AUTOMATED_TG") == "1":
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from telegram_reliable import push_tg_rich
+                push_tg_rich("telegram:-1003733144325:846", output)
+            except Exception as _te:
+                print(f"⚠ 清算压力RichMarkdown推送失败: {_te}", file=sys.stderr)
+        else:
+            print("⏸ 清算压力 TG 外发关闭（需显式 TANGXI_ENABLE_AUTOMATED_TG=1）")
     else:
         try:
-            from alert_dedup import dedup_wrapper
+            dedup_wrapper = __import__("alert_dedup").dedup_wrapper
             dedup_wrapper("liquidation", output, force_seconds=1800)
         except ImportError:
             print(output)
 
-    # 保存 — 双落盘
-    result_json = {"ts": now.isoformat(), "results": results}
+    valid_rows = [r for r in results if r.get("status") not in ("api_error", "no_data")]
+    result_json = attach_source_contract(
+        {"ts": now.isoformat(), "results": results},
+        "liquidation_pressure",
+        status="live" if valid_rows else "unavailable",
+        captured_at=now,
+        symbol="BTCUSDT/ETHUSDT",
+        error=None if valid_rows else "empty_payload",
+    )
     
-    with open(os.path.join(DATA_DIR, "liquidation_pressure.json"), "w") as f:
-        json.dump(result_json, f, ensure_ascii=False)
+    atomic_write_json(Path(os.path.join(DATA_DIR, "liquidation_pressure.json")), result_json)
     
     # 落盘2: 项目data（cron_read 读取）
     script_dir = os.path.dirname(os.path.abspath(__file__))
     proj_data = os.path.join(script_dir, "..", "data")
     os.makedirs(proj_data, exist_ok=True)
-    with open(os.path.join(proj_data, "liquidation_pressure.json"), "w") as f:
-        json.dump(result_json, f, ensure_ascii=False)
+    atomic_write_json(Path(os.path.join(proj_data, "liquidation_pressure.json")), result_json)
     
     return 0
 

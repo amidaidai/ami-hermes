@@ -9,9 +9,9 @@ import asyncio
 import os
 from pathlib import Path
 
-# Add the hermes venv to path
-hermes_venv = Path(os.path.expanduser("~/AppData/Local/hermes/hermes-agent/venv/Lib/site-packages"))
-sys.path.insert(0, str(hermes_venv))
+# TANGXI-FIX 2026-08-29: 禁用错误的 hermes venv site-packages 注入（会导致 pydantic_core 二进制不匹配）
+# hermes_venv = Path(os.path.expanduser("~/AppData/Local/hermes/hermes-agent/venv/Lib/site-packages"))
+# sys.path.insert(0, str(hermes_venv))
 
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
@@ -46,6 +46,22 @@ async def get_pine_labels(session):
 async def get_chart_state(session):
     """Get current chart state."""
     result = await call_tool(session, "chart_get_state", {})
+    return result
+
+async def get_pine_boxes(session, study_filter=None):
+    """Get Pine Script boxes (FVG/OB/breaker zones)."""
+    args = {}
+    if study_filter:
+        args["study_filter"] = study_filter
+    result = await call_tool(session, "data_get_pine_boxes", args)
+    return result
+
+async def get_pine_tables(session, study_filter=None):
+    """Get Pine Script action grid tables."""
+    args = {}
+    if study_filter:
+        args["study_filter"] = study_filter
+    result = await call_tool(session, "data_get_pine_tables", args)
     return result
 
 async def set_symbol(session, symbol):

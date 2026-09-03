@@ -1,5 +1,8 @@
 import subprocess, json, os
 
+if os.environ.get("TANGXI_ENABLE_DESTRUCTIVE_REPO_RESET") != "1":
+    raise SystemExit("BLOCKED: destructive remote reset requires explicit operator authorization")
+
 # Read the token from a temp file approach - write it to a temp header file
 import tempfile
 

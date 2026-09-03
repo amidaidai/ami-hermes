@@ -33,6 +33,21 @@ class GateResult(TypedDict):
     reason: str
 
 
+class DataEnvelope(TypedDict):
+    source: str
+    symbol: str
+    timeframe: str
+    timestamp: int
+    value: float
+    quality: str
+    received_at: NotRequired[int]
+    freshness_seconds: NotRequired[float]
+    unit: NotRequired[str]
+    semantic_valid: NotRequired[bool]
+    raw_value: NotRequired[Any]
+    normalized_value: NotRequired[float]
+
+
 _SNAPSHOT_KEYS = frozenset(MarketSnapshot.__required_keys__)
 
 
@@ -50,6 +65,29 @@ def validate_market_snapshot(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def validate_data_envelope(value: dict[str, Any]) -> dict[str, Any]:
+    required = {"source", "symbol", "timeframe", "timestamp", "value", "quality"}
+    missing = required - set(value)
+    if missing:
+        raise ValueError(f"missing fields: {sorted(missing)}")
+    if not value.get("source") or not value.get("symbol") or not value.get("timeframe"):
+        raise ValueError("invalid envelope identity")
+    if int(value.get("timestamp") or 0) <= 0:
+        raise ValueError("invalid timestamp")
+    if float(value.get("value") or 0) <= 0:
+        raise ValueError("invalid value")
+    if value.get("quality") not in {"A", "B", "C", "X", "unknown"}:
+        raise ValueError("invalid quality")
+    if "received_at" in value and int(value.get("received_at") or 0) <= 0:
+        raise ValueError("invalid received_at")
+    if "freshness_seconds" in value and float(value.get("freshness_seconds") or 0) < 0:
+        raise ValueError("invalid freshness_seconds")
+    if "semantic_valid" in value and not isinstance(value["semantic_valid"], bool):
+        raise ValueError("invalid semantic_valid")
+    return value
+
+
 __all__ = [
-    "MarketSnapshot", "CandidatePlan", "GateResult", "validate_market_snapshot",
+    "MarketSnapshot", "CandidatePlan", "GateResult", "DataEnvelope",
+    "validate_market_snapshot", "validate_data_envelope",
 ]

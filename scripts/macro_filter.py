@@ -10,6 +10,7 @@
 import json, urllib.request, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from source_contract import write_source_artifact
 
 TZ = timezone(timedelta(hours=8))
 CACHE_FILE = Path.home() / "AppData/Local/hermes/data/macro_snapshot.json"
@@ -103,10 +104,15 @@ def fetch_macro_snapshot() -> dict:
             snapshot["btc_correlation"] = "neutral"
     
     # 缓存
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    
-    return snapshot
+    source_ok = any(snapshot.get(key) is not None for key in ("dxy", "vix", "spx", "us10y", "gold", "silver"))
+    return write_source_artifact(
+        str(CACHE_FILE),
+        "macro",
+        snapshot,
+        status="live" if source_ok else "unavailable",
+        captured_at=snapshot["timestamp"],
+        error=None if source_ok else "empty_payload",
+    )
 
 
 def macro_filter_bias(snapshot: dict | None = None) -> tuple[str, float, str]:

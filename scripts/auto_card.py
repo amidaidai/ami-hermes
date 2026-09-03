@@ -23,6 +23,7 @@ TZ = timezone(timedelta(hours=8))
 ROOT = Path("D:/Hermes agent")
 DATA = ROOT / "data"
 sys.path.insert(0, str(ROOT / "scripts"))
+from atomic_json import append_text_line, atomic_write_json, atomic_write_text
 
 # v7.5: 中文本地化
 from zh_locale import T, CARD_LABELS, KILL_ZONE_ZH, DIR_ZH, STRATEGY_ZH, SYMBOL_ZH, asset_name
@@ -36,7 +37,7 @@ try:
     from topic_router import route_send as _route_send, get_target as _get_target
 except Exception:
     _route_send = lambda s, m, sc=None: None
-    _get_target = lambda s: "telegram:-1003733144325:416"
+    _get_target = lambda s: None
 
 
 FIXED_MODELS = ("VWAP反抽", "VAH回收", "VAL回收", "POC拒绝", "扫流动性回收", "突破接受")
@@ -538,6 +539,20 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     coverage = tv_main.get("sub_coverage_exchanges") or tv_sub.get("coverage")
     volume_ratio = tv_main.get("sub_volume_ratio") or tv_sub.get("volume")
     lsr = tv_main.get("sub_lsr") or tv_sub.get("lsr")
+    # TradingView may not expose Binance's LSR metric suffix. Fall back to
+    # the already collected Binance global account ratio, without pretending
+    # it came from the AggVol Pine feed.
+    lsr_source = "tradingview"
+    if lsr in (None, ""):
+        ls_fallback = engine_data.get("long_short") or {}
+        if isinstance(ls_fallback, dict) and ls_fallback.get("long") is not None and ls_fallback.get("short") is not None:
+            try:
+                lsr = float(ls_fallback["long"]) / max(float(ls_fallback["short"]), 1e-9)
+                lsr_source = "binance_global_account_ratio"
+            except (TypeError, ValueError, ZeroDivisionError):
+                lsr = None
+                lsr_source = "unavailable"
+
     oi_change_pct = tv_main.get("sub_oi_change_pct_normalized") or tv_sub.get("oi_change_pct")
     risk_raw = tv_main.get("sub_haldro_risk_code")
     if risk_raw is None:
@@ -606,6 +621,8 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     dual.update({
         "haldro_direction": f"{haldro_dir} · Composite {comp_text}",
         "haldro_position": f"OI {oi or '待判'} · 归一变化 {oi_change_pct if oi_change_pct not in (None, '') else '待判'}% · {lsr_text}",
+        "lsr": lsr,
+        "lsr_source": lsr_source,
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
         "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'} · 风险 {risk_text}",
         "haldro_confirm": f"Confirm {confirm or '待判'}",
@@ -621,6 +638,14 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "risk_code": risk_code,
         "usable": valid_code >= 1 and bool(tv_sub or composite is not None or confirm is not None),
     })
+    _register_source_record(
+        engine_data,
+        "haldro",
+        dual,
+        status="live" if dual.get("usable") else "unavailable",
+        captured_at=datetime.now(TZ) if dual.get("usable") else None,
+        symbol=symbol,
+    )
 
     engine_data["_dual_indicator_verdict"] = dual
     return dual
@@ -779,7 +804,31 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
         "stop": numeric_stop or None,
         "target": numeric_target or None,
         "rr": numeric_rr,
+        "data_grade": meta.get("data_grade") or candidate.get("data_grade") or engine_data.get("quality", "C"),
     })
+
+    # Carry the data-boundary freshness decision into FinalVerdict.  A cache
+    # can contain a perfectly parseable action grid while still being stale;
+    # parseability is not proof of live TV confirmation.
+    tv_status = engine_data.get("_tv_live_status") or engine_data.get("_tv_cache_status")
+    if isinstance(tv_status, dict) and "usable" in tv_status:
+        candidate["tv_live_verified"] = bool(tv_status.get("usable"))
+    elif "_tv_direct_verified" in engine_data:
+        candidate["tv_live_verified"] = bool(engine_data.get("_tv_direct_verified"))
+    snapshot_status = engine_data.get("_snapshot_status")
+    if isinstance(snapshot_status, dict) and snapshot_status.get("age_hours") is not None:
+        candidate["snapshot_age_sec"] = max(0.0, float(snapshot_status.get("age_hours") or 0.0) * 3600.0)
+    if engine_data.get("_tv_five_tf_required"):
+        five_tf_status = engine_data.get("_tv_five_tf_status") or {}
+        candidate["tv_five_tf_required"] = True
+        candidate["tv_five_tf_verified"] = bool(
+            isinstance(five_tf_status, dict) and five_tf_status.get("usable")
+        )
+    cross_validation = engine_data.get("_cross_validation")
+    if isinstance(cross_validation, dict):
+        candidate["cross_validation"] = cross_validation
+        candidate["cross_source_hard_blockers"] = list(cross_validation.get("hard_blockers") or [])
+        candidate["cross_source_warnings"] = list(cross_validation.get("warnings") or [])
 
     route_candidates = engine_data.get("_candidate_plans")
     if regime is not None and isinstance(route_candidates, list) and route_candidates:
@@ -811,7 +860,14 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
         "corr_high": bool(engine_data.get("_corr_high")),
     })
     engine_data["_risk_v2"] = risk
-    final = resolve_final_verdict(symbol, candidate, dual, regime=regime, risk=risk).to_dict()
+    final = resolve_final_verdict(
+        symbol,
+        candidate,
+        dual,
+        regime=regime,
+        risk=risk,
+        advanced=engine_data.get("_advanced"),
+    ).to_dict()
     engine_data["_final_verdict"] = final
     if engine_data.get("_shadow_enabled"):
         from shadow_calibration import append_shadow_signal
@@ -865,6 +921,21 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
 def _unknown_tv_text(value) -> bool:
     s = str(value or "").strip()
     return s in ("", "?", "—", "--", "None", "nan")
+
+
+# 8/31 事故教训硬编码：行动格结论/处理行含这些语义 → 整卡 C级等待，禁止改写为 A/B。
+# 注意区分：B等待（方向明确·等触发）≠ C等待（观望/未收线/方向不明）。
+# 词表只覆盖 C 语义，不含"等待"本身；⚠ 必须带后续词（如 ⚠未收线），避免误伤
+# B等待处理行的 ⚠ 前缀（如 "⚠ 等5m反抽VWAP确认"）。
+_C_WAIT_SEMANTICS = ("观望", "未收线", "等解除", "等收线", "⚠冲突", "⚠未收线", "等待方向", "待确认方向", "C等待")
+
+
+def _conclusion_forces_c_wait(conc: object) -> bool:
+    """结论/处理行含 C级等待语义 → True。用于等级兜底前拦截 MCP 数字升A/B。"""
+    if not conc:
+        return False
+    c = str(conc)
+    return any(w in c for w in _C_WAIT_SEMANTICS)
 
 
 def _grade_from_mcp_values(tv_vals: dict | None) -> str:
@@ -956,9 +1027,14 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0) -> dict
             if tv_key in tv_vals:
                 main[dict_key] = tv_vals[tv_key]
         if _unknown_tv_text(main.get("grade")):
-            mcp_grade = _grade_from_mcp_values(tv_vals)
-            if mcp_grade:
-                main["grade"] = mcp_grade
+            # P0-2 (2026-08-31): 结论行含 C级等待语义（观望/未收线/等解除等）
+            # → 强制 C等待，禁止 MCP 数字兜底把"未收线/观望"改写为 A/B（8/31事故根因）。
+            if _conclusion_forces_c_wait(main.get("conclusion") or main.get("treatment")):
+                main["grade"] = "C等待"
+            else:
+                mcp_grade = _grade_from_mcp_values(tv_vals)
+                if mcp_grade:
+                    main["grade"] = mcp_grade
     if _unknown_tv_text(main.get("grade")):
         main["grade"] = "C等待"
     return main
@@ -977,8 +1053,18 @@ def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
             if str(conc).startswith(prefix):
                 grade = prefix
                 break
+        # P0-2 (2026-08-31): 前缀提取失败且结论含 C级等待语义 → 强制 C等待，
+        # 禁止走 MCP 数值兜底把"观望/未收线/等解除"改写为 A/B（8/31事故根因）。
+        if not grade and _conclusion_forces_c_wait(conc):
+            grade = "C等待"
     if _unknown_tv_text(grade):
         grade = _grade_from_mcp_values(tv_vals) or "C等待"
+    # P0-2 第二道闸门：等级行给了 A/B，但结论/处理行含硬 C等待语义 → 整卡降 C。
+    # （8/31 事故：1h结论=观望·等解除 仍被硬给 A级做空）
+    if grade.startswith(("A", "B")):
+        wait_conc = dmi_rows.get("结论", "") or dmi_rows.get("处理", "")
+        if _conclusion_forces_c_wait(wait_conc):
+            grade = "C等待"
     treatment = dmi_rows.get("处理", "?")
     if _unknown_tv_text(treatment):
         treatment = dmi_rows.get("结论", "?")
@@ -988,31 +1074,43 @@ def _apply_tv_dmi_override(meta: dict, engine_data: dict, symbol: str,
                "tv_execution": dmi_rows.get("执行", "?"), "tv_risk": dmi_rows.get("风控", "?")}
 
     # Grade -> status mapping (TV authority overrides engine)
-    if grade.startswith("A多"):
+    # 2026-08-31 加固：统一去掉"做"字变体（A做多/A做空），兼容 Pine 格式漂移
+    g_norm = grade.replace("做", "")
+    if g_norm.startswith("A多"):
         meta["status"] = "A做多"
         meta["direction"] = "long"
         meta["priority_plan"] = "A"
-    elif grade.startswith("A空"):
+    elif g_norm.startswith("A空"):
         meta["status"] = "A做空"
         meta["direction"] = "short"
         meta["priority_plan"] = "A"
-    elif grade.startswith("B多"):
+    elif g_norm.startswith("B多"):
         meta["status"] = "B等待"
         meta["direction"] = "long"
         meta["priority_plan"] = "B"
-    elif grade.startswith("B空"):
+    elif g_norm.startswith("B空"):
         meta["status"] = "B等待"
         meta["direction"] = "short"
         meta["priority_plan"] = "B"
-    elif grade.startswith("C反多"):
+    elif g_norm.startswith("B") or g_norm == "B等待":
+        # B等待 无显式方向时从结论/方向行推断
+        _hint = dmi_rows.get("结论", "") + dmi_rows.get("方向", "")
+        meta["status"] = "B等待"
+        meta["direction"] = "short" if "空" in _hint else "long" if "多" in _hint else "wait"
+        meta["priority_plan"] = "B"
+    elif g_norm.startswith("C反"):
+        # C反多/C反空 is a directional observation, not an executable order.
+        # The direction may live in the background row while the conclusion
+        # only says "回踩"; include all authoritative text before falling back
+        # to neutral.
+        _hint = " ".join(
+            str(dmi_rows.get(key, ""))
+            for key in ("等级", "结论", "方向", "背景", "处理")
+        )
         meta["status"] = "C反转"
-        meta["direction"] = "long"
+        meta["direction"] = "short" if "空" in _hint else "long" if "多" in _hint else "wait"
         meta["priority_plan"] = "C"
-    elif grade.startswith("C反空"):
-        meta["status"] = "C反转"
-        meta["direction"] = "short"
-        meta["priority_plan"] = "C"
-    elif grade == "X":
+    elif g_norm.startswith("X"):
         meta["status"] = "X禁做"
         meta["direction"] = "wait"
         meta["priority_plan"] = "无"
@@ -1264,7 +1362,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     ])
 
     # ── ③ VWAP/EMA/CVD 三合一 ──
-    fg_v = fg.get("value", "?") if fg else "?"
+    fg_v = fg.get("value") if (fg and fg.get("value") not in (None, "")) else "—"
     v3_line = []
     if vwap_ema.get("available"):
         v = vwap_ema.get("vwap")
@@ -1345,10 +1443,59 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                         pass
     
     dual_indicator = _dual_indicator_verdict(symbol, meta, engine_data, cvd_dir, cvd_quality)
+    try:
+        from cross_validation import build_source_matrix, evaluate_cross_validation
+        source_matrix = build_source_matrix(
+            symbol, engine_data, dual_indicator, pipeline_steps=engine_data.get("_pipeline_steps") or ()
+        )
+        engine_data["_cross_validation_matrix"] = source_matrix
+        engine_data["_cross_validation"] = evaluate_cross_validation(source_matrix)
+    except Exception as _cve:
+        engine_data["_cross_validation_matrix"] = []
+        engine_data["_cross_validation"] = {
+            "state": "blocked",
+            "hard_blockers": ["cross_validation"],
+            "warnings": [],
+            "rows": [],
+            "reason": f"来源矩阵不可用:{type(_cve).__name__}",
+        }
     decision_main = dict(engine_data.get("_tv_main") or {})
     decision_main.setdefault("entry", price)
     decision_main.setdefault("stop", st_a.get("stop"))
     decision_main.setdefault("target", st_a.get("target"))
+    # Production route candidates must come from the current run.  Previously
+    # only tests supplied _candidate_plans, so model_router silently had no
+    # effect in live cards.  Confidence remains display metadata; routing uses
+    # explicit structural quality/strategy fields plus R:R.
+    if not isinstance(engine_data.get("_candidate_plans"), list):
+        route_aliases = {
+            "VWAP反抽": "vwap_pullback",
+            "VAH回收": "value_rotation",
+            "VAL回收": "value_rotation",
+            "POC拒绝": "poc_rejection",
+            "扫流动性回收": "liquidity_sweep",
+            "突破接受": "breakout_acceptance",
+        }
+        plans = []
+        for result in results or []:
+            source_name = str(result.get("name") or "")
+            canonical = route_aliases.get(source_name)
+            if not canonical:
+                continue
+            quality_key = "mcp_fvg_quality_score" if canonical == "fvg_pullback" else "mcp_ob_quality_score" if canonical == "ob_pullback" else "quality"
+            quality = _decision_float(decision_main.get(quality_key) or result.get("quality") or result.get("setup_quality"))
+            plans.append({
+                "model_id": canonical,
+                "entry": _decision_float(result.get("entry")) or _decision_float(decision_main.get("entry")),
+                "stop": _decision_float(result.get("stop")) or _decision_float(decision_main.get("stop")),
+                "target": _decision_float(result.get("target")) or _decision_float(decision_main.get("target")),
+                "rr": _decision_float(result.get("rr") or result.get("rr_ratio")) or _decision_float(decision_main.get("rr")),
+                "quality": quality,
+                "signal_confidence": _decision_float(result.get("confidence")),
+            })
+        if plans:
+            engine_data["_candidate_plans"] = plans
+            engine_data["_candidate_plans_source"] = "current_run_results"
     engine_data.setdefault("_shadow_enabled", True)
     final_verdict = _resolve_card_final_verdict(
         symbol, meta, engine_data, decision_main, dual_indicator, st_a, model_id
@@ -1389,6 +1536,8 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         klines=klines,
         tv_dmi=projected_main or tv_dmi_rows or {},
         dual_indicator=dual_indicator,
+        final_verdict=final_verdict,
+        source_matrix=engine_data.get("_cross_validation_matrix") or [],
     )
     
     # v9: TV双指标直出卡（优先：主+副指标数据齐全时使用）
@@ -1396,7 +1545,9 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     tv_main = _project_final_verdict(tv_main, final_verdict)
     tv_main["_decision_regime"] = engine_data.get("_decision_regime") or {}
     tv_sub = engine_data.get("_tv_sub", {})
-    if not force_full and tv_main and tv_sub:
+    # AggVol is crypto-only. Non-crypto cards must not leak its estimated CVD,
+    # OI or exchange coverage into a gold/FX/equity decision.
+    if not force_full and _asset_class(symbol) == "crypto" and tv_main and tv_sub:
         try:
             import sys as _tv_sys
             _tv_sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -1406,6 +1557,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                 tv_main = dict(tv_main)
                 tv_main.setdefault("_klines", klines)
                 tv_main.setdefault("_dual", dual_indicator)
+                tv_main["_source_matrix"] = engine_data.get("_cross_validation_matrix") or []
             tv_card = _render_tv(tv_main, tv_sub, symbol, price or 0, mode="push")
             if tv_card:
                 return tv_card
@@ -1725,6 +1877,63 @@ def _source_count(ed: dict) -> int:
     if ed.get("binance_spot"): src += 1
     if ed.get("cmc_global"): src += 1
     return max(src, 1)
+
+
+def _register_source_record(
+    engine_data: dict,
+    source_id: str,
+    value,
+    *,
+    status: str | None = None,
+    captured_at=None,
+    error=None,
+    symbol: str | None = None,
+    max_age_hours: float = 6.0,
+) -> dict:
+    """Register an optional source without changing legacy consumer fields."""
+    from source_contract import get_source_contract, source_record
+    from source_health import inspect_payload, payload_timestamp
+
+    records = engine_data.setdefault("_source_records", {})
+    if not isinstance(records, dict):
+        records = {}
+        engine_data["_source_records"] = records
+    existing = get_source_contract(value)
+    effective_status = status
+    effective_capture = captured_at
+    if existing is None and effective_status is None:
+        if isinstance(value, dict) and payload_timestamp(value) is not None:
+            health = inspect_payload(value, max_age_hours=max_age_hours, expected_symbol=symbol)
+            effective_status = health.get("status") or "unavailable"
+        else:
+            has_payload = value not in (None, "", False, {}, [])
+            effective_status = "live" if has_payload else "not_run"
+            if has_payload:
+                effective_capture = datetime.now(TZ)
+    record = source_record(
+        source_id,
+        value,
+        status=effective_status,
+        captured_at=effective_capture,
+        error=error,
+        symbol=symbol,
+    )
+    records[source_id] = record
+    return record
+
+
+def _source_record_status(engine_data: dict, source_id: str, fallback=None) -> str:
+    """Read a normalized source status, falling back to legacy payloads."""
+    from source_contract import source_status
+
+    records = engine_data.get("_source_records")
+    if isinstance(records, dict) and source_id in records:
+        return source_status(records[source_id])
+    return source_status(fallback, default="not_run")
+
+
+def _source_record_usable(engine_data: dict, source_id: str, fallback=None) -> bool:
+    return _source_record_status(engine_data, source_id, fallback) in {"live", "cache", "inherited"}
 
 def _grade_short(data: dict) -> str:
     if not data: return "C"
@@ -2447,15 +2656,21 @@ def _signed_binance_params(params: dict, secret: str, base: str = "https://fapi.
     return signed
 
 
-def _load_binance_keys() -> tuple:
-    """Load Binance API keys from secrets"""
-    import json
-    from pathlib import Path
+def _load_binance_keys() -> tuple[str, str]:
+    """Load Binance API keys with environment-first, repo-relative fallback."""
+    api_key = os.environ.get("BINANCE_API_KEY", "").strip()
+    secret_key = os.environ.get("BINANCE_SECRET_KEY", "").strip()
+    if api_key and secret_key:
+        return api_key, secret_key
     try:
-        data = json.loads(Path("D:/hermes Agent/hermes/secrets/binance.json").read_text())
-        return data.get("api_key", ""), data.get("secret_key", "")
-    except Exception:
-        return "", ""
+        secrets_path = ROOT / "hermes" / "secrets" / "binance.json"
+        data = json.loads(secrets_path.read_text(encoding="utf-8"))
+        return (
+            api_key or str(data.get("api_key", "")).strip(),
+            secret_key or str(data.get("secret_key", "")).strip(),
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError):
+        return api_key, secret_key
 
 
 def _downgrade_low_rr_a_status(meta: dict, engine_data: dict, price, symbol: str) -> dict | None:
@@ -2492,6 +2707,140 @@ def _merge_collected_klines(engine_data: dict, incoming: dict, *, preserve_exist
         if preserve_existing and tf in existing:
             continue
         existing[tf] = payload
+
+
+def _load_tv_five_tf_snapshot(symbol: str, *, mode: str = "quick", context: dict | None = None) -> dict:
+    """Load a validated TV five-timeframe snapshot for this analysis run.
+
+    Direct cache data is limited to 30 minutes.  Standard/inherit may use the last
+    symbol-matched full snapshot stored in the lightweight context for up to
+    four hours, and that source remains labelled as inherited rather than
+    pretending to be live.
+    """
+    from tv_five_tf_contract import (
+        load_five_tf_snapshot,
+        normalize_engine_klines,
+        validate_five_tf_payload,
+    )
+
+    direct = load_five_tf_snapshot(symbol, data_dir=DATA, max_age_minutes=30.0)
+    if direct.get("usable"):
+        direct["scope"] = "direct_cache"
+        direct["engine_klines"] = normalize_engine_klines(direct)
+        return direct
+
+    if mode in {"inherit", "standard"} and isinstance(context, dict) and isinstance(context.get("timeframes"), dict):
+        inherited_payload = {
+            "symbol": context.get("symbol") or symbol,
+            "updated_at": context.get("updated_at"),
+            "timeframes": context.get("timeframes"),
+            "source": "inherited_context",
+        }
+        inherited = validate_five_tf_payload(
+            inherited_payload,
+            symbol,
+            max_age_minutes=240.0,
+        )
+        if inherited.get("usable"):
+            inherited["scope"] = "inherited_context"
+            inherited["engine_klines"] = normalize_engine_klines(inherited)
+            return inherited
+
+    direct["scope"] = "unavailable"
+    direct["engine_klines"] = {}
+    return direct
+
+
+def _refresh_btc_tv_five_tf_snapshot(symbol: str) -> bool:
+    """Refresh the active BTC TV collector once when a full run lacks evidence."""
+    raw = str(symbol or "").upper().split(":")[-1].replace(".P", "")
+    if raw != "BTCUSDT":
+        return False
+    collector = ROOT / "scripts" / "keylevels_collect.py"
+    if not collector.exists():
+        return False
+    try:
+        result = subprocess.run(
+            [sys.executable, str(collector)],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "collector failed").strip()
+            print(f"  ⚠ BTC TV五周期刷新失败: {detail[:180]}")
+            return False
+        from tv_five_tf_contract import load_five_tf_snapshot
+        snapshot = load_five_tf_snapshot(symbol, data_dir=DATA, max_age_minutes=30.0)
+        if not snapshot.get("usable"):
+            print(f"  ⚠ BTC TV五周期刷新未落盘为可用证据: {snapshot.get('reason','校验失败')}")
+            return False
+        print(f"  ✅ BTC TV五周期现场采集完成·落盘覆盖{snapshot.get('coverage', 0)}/5")
+        return True
+    except subprocess.TimeoutExpired:
+        print("  ⚠ BTC TV五周期现场采集超时180s")
+    except OSError as exc:
+        print(f"  ⚠ BTC TV五周期现场采集无法启动: {exc}")
+    return False
+
+
+def _merge_tv_five_tf_into_engine(engine_data: dict, snapshot: dict) -> None:
+    """Merge validated TV structure into per-TF engine rows without losing OHLCV."""
+    if not isinstance(engine_data, dict) or not isinstance(snapshot, dict) or not snapshot.get("usable"):
+        return
+    incoming = snapshot.get("engine_klines") or {}
+    if not isinstance(incoming, dict):
+        return
+    existing = engine_data.setdefault("klines", {})
+    if not isinstance(existing, dict):
+        existing = {}
+        engine_data["klines"] = existing
+    for tf, tv_row in incoming.items():
+        if not isinstance(tv_row, dict):
+            continue
+        merged = dict(existing.get(tf) or {})
+        # TV owns the value-area/action-grid fields.  Preserve Binance OHLCV
+        # when the collector only returned a close/price for that timeframe.
+        for key, value in tv_row.items():
+            if value in (None, "", "—", "--"):
+                continue
+            if key in {"open", "close", "price", "high", "low", "change_pct"} and not tv_row.get("tv_ohlcv_complete"):
+                continue
+            merged[key] = value
+        existing[tf] = merged
+    engine_data["_tv_five_tf_klines"] = incoming
+
+
+def _apply_tv_live_structure(
+    engine_data: dict,
+    klines: dict,
+    *,
+    poc,
+    vah,
+    val,
+    direction: str,
+) -> bool:
+    """Apply a single-period TV structure only when no valid five-TF snapshot exists."""
+    if engine_data.get("_tv_five_tf_klines"):
+        return False
+    if not isinstance(klines, dict) or not poc or not vah or not val:
+        return False
+    for tf in ["D", "4h", "1h", "15m", "5m"]:
+        if tf == "D":
+            klines[tf] = {
+                "close": poc, "high": vah, "low": val,
+                "open": poc, "change_pct": 0,
+                "poc": poc, "vah": vah, "val": val,
+                "direction": direction,
+                "description": f"TV现场 POC {poc:.0f} | VAH {vah:.0f} VAL {val:.0f} | {direction}",
+            }
+        elif tf in klines and isinstance(klines[tf], dict):
+            row = klines[tf]
+            row["poc"] = poc
+            row["vah"] = vah
+            row["val"] = val
+            if "待" in str(row.get("description", "")):
+                row["description"] = f"TV注入 POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f}"
+    return True
 
 
 def _inject_orion_derivatives_fallback(engine_data: dict, symbol: str) -> None:
@@ -2570,7 +2919,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
     # 会把 futures symbol、OI 和 spot K 线混在同一套结构引擎里。
     _kl_fetcher = fetch_futures
     _kl_path = "/fapi/v1/klines"
-    _xau_tf_limit = [("15m", 100), ("1h", 100)] if is_xau else [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50)]
+    _xau_tf_limit = [("15m", 100), ("1h", 100)] if is_xau else [("5m", 30), ("15m", 100), ("1h", 100), ("4h", 50), ("1d", 30)]
     _xau_timeout = 4 if is_xau else 6
     for tf, limit in _xau_tf_limit:
         _ok = False
@@ -2582,6 +2931,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
             )
             if isinstance(data, list) and data:
                 _raw_klines_multi[tf] = data  # 原始已收/未收OHLCV；体制层会剔除末根未收K
+                k_key = "D" if tf == "1d" else tf  # 币安日线键 -> 渲染层 D（2026-08-31 补D层缺失）
                 closes = [float(c[4]) for c in data]
                 highs = [float(c[2]) for c in data]
                 lows = [float(c[3]) for c in data]
@@ -2591,7 +2941,7 @@ def _collect_binance_data(engine_data: dict, symbol: str) -> None:
                 rng = max(highs) - min(lows)
                 poc = sum(closes) / len(closes) if closes else closes[-1]
                 direction = "偏多" if chg_pct > 0.3 else "偏空" if chg_pct < -0.3 else "震荡"
-                klines[tf] = {
+                klines[k_key] = {
                     "close": closes[-1], "high": max(highs), "low": min(lows),
                     "open": float(data[0][1]), "volume": sum(volumes),
                     "atr": (sum(h - l for h, l in zip(highs, lows)) / len(highs)) if highs else 0,
@@ -2760,7 +3110,12 @@ def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dic
     cache_symbol = cache.get("symbol") or cache.get("ticker") or cache.get("tv_symbol") or ""
     want = _norm_symbol_for_cache(symbol)
     got = _norm_symbol_for_cache(cache_symbol)
-    symbol_ok = (not got) or got.startswith(want) or want.startswith(got)
+    # A cache without an identity is not safe to consume: the old permissive
+    # branch allowed a generic/empty-symbol snapshot to cross-contaminate BTC
+    # and XAU after a chart switch.
+    # Identity is a hard contract, not a fuzzy prefix match. BTC/BTCUSDT and
+    # XAU/XAUUSD must never satisfy one another after a chart switch.
+    symbol_ok = bool(got) and got == want
     fresh = age_min is not None and age_min <= max_age_minutes
 
     # v9.6 第二道防线：价位合理性校验，拦截 XAU/BTC 缓存交叉污染
@@ -2781,10 +3136,16 @@ def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dic
             price_ok = False
             price_reason = f"价位污染 POC={poc} 疑似BTC数据"
 
-    usable = bool(symbol_ok and fresh and price_ok)
+    identity_contract_ok = cache.get("identity_valid", True) is True
+    action_contract_ok = cache.get("action_table_complete", True) is True
+    usable = bool(symbol_ok and fresh and price_ok and identity_contract_ok and action_contract_ok)
     reason = "实时/新鲜" if usable else ""
     if not symbol_ok:
         reason = f"品种不匹配 {cache_symbol or '?'}"
+    elif not identity_contract_ok:
+        reason = "TV身份契约无效"
+    elif not action_contract_ok:
+        reason = "TV行动格核心字段不完整"
     elif age_min is None:
         reason = "无时间戳"
     elif not fresh:
@@ -2810,17 +3171,62 @@ def _source_snapshot_status(symbol: str, max_age_hours: float = 1.0) -> dict:
     deliberately file-based so it works after either source_snapshot() refreshes
     data or a cron/daemon refreshed it out of band.
     """
+    # Formal freshness is per-asset only. The shared compatibility snapshot is
+    # diagnostic and must never satisfy a GO/NO-GO input.
     candidates = [DATA / f"source_snapshot_{symbol}.json"]
-    if str(symbol).upper() == "BTCUSDT":
-        candidates.append(DATA / "source_snapshot.json")
     existing = [p for p in candidates if p.exists()]
     if not existing:
         return {"usable": False, "age_hours": 24.0, "reason": "source_snapshot缺失", "path": ""}
-    newest = max(existing, key=lambda p: p.stat().st_mtime)
-    age_h = max(0.0, (datetime.now(TZ).timestamp() - newest.stat().st_mtime) / 3600.0)
-    usable = age_h <= max_age_hours
-    reason = f"{age_h:.2f}h新鲜" if usable else f"source_snapshot过期{age_h:.1f}h"
-    return {"usable": usable, "age_hours": age_h, "reason": reason, "path": str(newest)}
+    now = datetime.now(TZ)
+    loaded = []
+    expected_symbol = _norm_symbol_for_cache(symbol)
+    for path in existing:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        payload_symbol = _norm_symbol_for_cache(str(payload.get("symbol") or payload.get("ticker") or ""))
+        if not payload_symbol or payload_symbol != expected_symbol:
+            continue
+        root_dt = _parse_bjt_dt(payload.get("time") or payload.get("updated_at") or payload.get("updated"))
+        loaded.append((path, payload, root_dt))
+    if not loaded:
+        return {"usable": False, "age_hours": 24.0, "reason": "source_snapshot缺少匹配品种", "path": ""}
+    stamped = [item for item in loaded if item[2] is not None]
+    if not stamped:
+        return {"usable": False, "age_hours": 24.0, "reason": "source_snapshot无根时间戳", "path": str(loaded[0][0])}
+    newest, payload, root_dt = max(stamped, key=lambda item: item[2].timestamp())
+    age_h = max(0.0, (now - root_dt).total_seconds() / 3600.0)
+    child_status = {}
+    child_issues = []
+    # Nested macro snapshots used to retain a July timestamp while the outer
+    # XAU file was rewritten in September.  Validate the child timestamp too.
+    macro = payload.get("macro_context")
+    if isinstance(macro, dict) and macro:
+        macro_dt = _parse_bjt_dt(macro.get("time") or macro.get("updated_at") or macro.get("updated"))
+        if macro_dt is None:
+            child_status["macro_context"] = {"usable": False, "reason": "无时间戳"}
+            child_issues.append("macro_context无时间戳")
+        else:
+            macro_age_h = max(0.0, (now - macro_dt).total_seconds() / 3600.0)
+            child_ok = macro_age_h <= max_age_hours
+            child_status["macro_context"] = {"usable": child_ok, "age_hours": macro_age_h}
+            if not child_ok:
+                child_issues.append(f"macro_context过期{macro_age_h:.1f}h")
+    usable = age_h <= max_age_hours and not child_issues
+    if not usable:
+        reason = "; ".join(child_issues) if child_issues else f"source_snapshot过期{age_h:.1f}h"
+    else:
+        reason = f"{age_h:.2f}h新鲜"
+    return {
+        "usable": usable,
+        "age_hours": age_h,
+        "reason": reason,
+        "path": str(newest),
+        "child_status": child_status,
+    }
 
 
 def _refresh_and_mark_snapshot(symbol: str, engine_data: dict) -> None:
@@ -2888,8 +3294,10 @@ def append_trade_plan(meta: dict, card: str) -> None:
         predicted_grade = "C"
     row["predicted_grade"] = predicted_grade
     row["card_excerpt"] = card[:500]
-    with (DATA / "trade_plans.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    append_text_line(
+        DATA / "trade_plans.jsonl",
+        json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+    )
 
 def update_monitor_metadata(symbol: str, meta: dict) -> None:
     # monitor_levels.json 是历史兼容缓存，不再作为批准监测位真相源。
@@ -2901,7 +3309,7 @@ def update_monitor_metadata(symbol: str, meta: dict) -> None:
             "updated": datetime.now(TZ).isoformat(),
             "latest_setup": {k: meta.get(k) for k in ("setup_id", "model_id", "entry_tag", "exit_tag", "direction", "status", "priority_plan", "data_grade", "level_confidence", "engine_confidence", "confidence_5", "expires_at", "monitor_write")},
         }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, data)
     except Exception as e:
         print(f"  ⚠ monitor metadata skipped: {e}")
 
@@ -3091,6 +3499,8 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
             "rr_ratio": meta.get("rr1", 0) or 0,
         }
         gate = check_meta_label(signal)
+        if not isinstance(gate, dict) or not isinstance(gate.get("execute"), bool):
+            gate = {"execute": False, "confidence": 0.0, "reason": "Meta-Labeling返回格式无效·默认拒绝"}
         # 周期冲突 → 强制否决
         if out["factors"].get("tf_conflict"):
             gate = {"execute": False, "confidence": gate.get("confidence", 0), "reason": "周期冲突·否决"}
@@ -3102,7 +3512,9 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
         verdict = "✓放行" if gate.get("execute") else "✗否决"
         lines.append(f"- **执行门控：{verdict}·{gate.get('reason','?')}·置信{gate.get('confidence',0):.0%}**")
     except Exception as e:
-        lines.append(f"- 执行门控：跳过({str(e)[:40]})")
+        reason = f"高级门控不可用·{type(e).__name__}:{str(e)[:60]}·默认拒绝"
+        out["gate"] = {"execute": False, "confidence": 0.0, "reason": reason, "error": str(e)[:120]}
+        lines.append(f"- **执行门控：✗否决·{reason}**")
 
     # ── ⑦ 孤儿模块集成（订单流吸收+FVG+OB+CVD共振+相关性乘数）──
     try:
@@ -3182,10 +3594,10 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
 def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     """一键出卡。
 
-    mode 支持 full/quick/inherit。路由和上下文由 pipeline_router 统一管理；
-    quick/inherit 的高周期结论由最近一次完整卡继承，执行器只应刷新主执行/触发周期。
+    mode 支持 full/quick/standard/inherit。standard 是对话层“标准”档，
+    inherit 作为旧调用方兼容名；二者都只刷新执行层并尽量读取高周期上下文。
     """
-    if mode not in {"full", "quick", "inherit"}:
+    if mode not in {"full", "quick", "standard", "inherit"}:
         raise ValueError(f"unsupported analysis mode: {mode}")
     print(f"\n{'='*60}")
     print(f"  棠溪 · 一键分析卡 · {symbol} · {mode}")
@@ -3195,22 +3607,21 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     asset_class = _asset_class(symbol)
     asset = "crypto" if asset_class == "crypto" else "metal" if asset_class == "gold" else asset_class
     
-    # inherit 必须有新鲜上下文；没有则自动升级 full，避免用空背景冒充继承。
+    # standard/inherit 尝试读取上下文；上下文缺失不偷偷升级 full，
+    # 标准档仍按相邻周期结论执行，缺口在卡片完成度中显式显示。
     context = None
     effective_mode = mode
     try:
         from pipeline_router import load_analysis_context
-        if mode == "inherit":
+        if mode in {"inherit", "standard"}:
             context = load_analysis_context(symbol)
             if context is None:
-                effective_mode = "full"
-                print("  ⚠ inherit上下文缺失/过期 → 升级full，避免空背景继承")
+                print("  ⚠ 标准档上下文缺失/过期 → 保留标准档，邻近周期现场补读")
             else:
                 print(f"  ✅ 继承高周期上下文: {context.get('updated_at', '?')}")
     except Exception as exc:
-        if mode == "inherit":
-            effective_mode = "full"
-            print(f"  ⚠ inherit上下文读取失败 → 升级full: {str(exc)[:100]}")
+        if mode in {"inherit", "standard"}:
+            print(f"  ⚠ 标准档上下文读取失败 → 保留标准档: {str(exc)[:100]}")
 
     # 管线路由：确定应该执行的步骤
     pipeline_steps = []
@@ -3220,10 +3631,23 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         print(f"📋 管线路由：{len(pipeline_steps)}步 → {' → '.join(pipeline_steps)}")
     except Exception as e:
         print(f"⚠️ 管线路由不可用({e})·使用默认步骤")
-        pipeline_steps = ["tv","binance","card"] if mode != "full" else ["tv","macro","x_sent","card"]
+        pipeline_steps = ["tv","binance","card"] if effective_mode != "full" else ["tv","macro","x_sent","card"]
+        if effective_mode == "full" and asset_class == "crypto":
+            try:
+                from pipeline_router import crypto_full_pipeline
+                pipeline_steps = crypto_full_pipeline()
+            except Exception:
+                # Keep the fallback fail-closed and aligned with the public
+                # fifteen-stage contract even if the helper import fails.
+                pipeline_steps = [
+                    "tv", "binance", "cg_pro", "macro", "x_sent", "cron_read",
+                    "cvd", "depth", "corr", "engine", "regime", "dual",
+                    "advanced", "risk", "card",
+                ]
     completed_steps = set()
 
     # TV MCP是分析前提：先切目标品种+主周期并刷新Data Window，再进入任何指标/体制引擎。
+    xau_contract = {}
     try:
         from pipeline_router import timeframe_info
         tf_main = str(timeframe_info(symbol).get("main") or "15m")
@@ -3231,31 +3655,52 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         if _asset_class(symbol) == "gold":
             xau_env = os.environ.copy()
             xau_env["XAU_TV_NO_PUSH"] = "1"
+            engine_tv_ready = False
             try:
                 xau_sync = subprocess.run(
                     [sys.executable, str(ROOT / "scripts" / "xau_tv_sync.py")],
                     cwd=str(ROOT), capture_output=True, text=True, env=xau_env,
-                    encoding="utf-8", errors="replace", timeout=20,
+                    encoding="utf-8", errors="replace", timeout=300,
                 )
                 if xau_sync.returncode != 0:
                     print(f"  ⚠ XAU五层前置同步失败: {(xau_sync.stderr or xau_sync.stdout)[:160]}")
+                else:
+                    try:
+                        from xau_tv_sync import validate_xau_outputs
+                        state_path = ROOT / "data" / "xau_tv_state.json"
+                        live_path = ROOT / "data" / "tv_live_XAUUSD.json"
+                        state = json.loads(state_path.read_text(encoding="utf-8"))
+                        live = json.loads(live_path.read_text(encoding="utf-8"))
+                        xau_contract = validate_xau_outputs(state, live, require_batch_id=True)
+                        engine_tv_ready = bool(xau_contract.get("usable"))
+                        if not engine_tv_ready:
+                            print(f"  ⚠ XAU五层/主周期成对校验失败: {xau_contract.get('reason','校验失败')}")
+                    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                        xau_contract = {"usable": False, "reason": f"XAU双缓存读取失败:{type(exc).__name__}"}
+                        engine_tv_ready = False
             except subprocess.TimeoutExpired:
-                print(f"  ⚠ XAU五层前置同步超时20s，降级继续")
+                print(f"  ⚠ XAU五层前置同步超时300s，降级继续")
             # XAU 已由 xau_tv_sync 完成TV同步，跳过 tv_live_dump 避免双倍等待
-            engine_tv_ready = True
             tf_main = str(timeframe_info(symbol).get("main") or "5m")
-            print(f"  ✅ TV分析前置刷新: {symbol} {tf_main} (XAU专用路径)")
+            print(f"  {'✅' if engine_tv_ready else '⚠'} TV分析前置刷新: {symbol} {tf_main} (XAU专用路径)")
         else:
-            tv_refresh = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "tv_live_dump.py"),
-                 "--symbol", symbol, "--timeframe", tf_code, "--verbose"],
-                cwd=str(ROOT), capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=45,
-            )
-            engine_tv_ready = tv_refresh.returncode == 0
-            print(f"  {'✅' if engine_tv_ready else '⚠'} TV分析前置刷新: {symbol} {tf_main}")
-            if not engine_tv_ready:
-                print(f"  ⚠ TV前置详情: {(tv_refresh.stderr or tv_refresh.stdout)[:160]}")
+            _tv_dump = ROOT / "scripts" / "tv_live_dump.py"
+            if _tv_dump.exists():
+                tv_refresh = subprocess.run(
+                    [sys.executable, str(_tv_dump),
+                     "--symbol", symbol, "--timeframe", tf_code, "--verbose"],
+                    cwd=str(ROOT), capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=45,
+                )
+                engine_tv_ready = tv_refresh.returncode == 0
+                print(f"  {'✅' if engine_tv_ready else '⚠'} TV分析前置刷新: {symbol} {tf_main}")
+                if not engine_tv_ready:
+                    print(f"  ⚠ TV前置详情: {(tv_refresh.stderr or tv_refresh.stdout)[:160]}")
+            else:
+                # 2026-08-31 P0: tv_live_dump.py 已迁入 _disabled_20260829 归档区，
+                # 前置刷新改由实时缓存（tv_live_<SYM>.json / tv_dmi_cache.json）兜底，不再强制子进程。
+                engine_tv_ready = False
+                print(f"  ⚠ tv_live_dump.py 缺失（已归档8/29）→ 跳过前置刷新，依赖TV实时缓存/现场MCP")
     except Exception as exc:
         engine_tv_ready = False
         print(f"  ⚠ TV分析前置刷新异常: {str(exc)[:120]}")
@@ -3265,8 +3710,31 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     
     engine_data = {"symbol": symbol, "quality": "B", "asset_class": asset_class,
                    "analysis_mode": effective_mode,
+                   "_pipeline_steps": list(pipeline_steps),
                    "context_inherited": bool(context),
-                   "inherited_context": context or {}}
+                   "inherited_context": context or {},
+                   "_tv_preflight_ok": bool(engine_tv_ready),
+                   "_xau_tv_contract": xau_contract if asset_class == "gold" else {},
+                   "_source_records": {}}
+    # Full crypto/gold cards must consume an actual symbol-scoped TV snapshot
+    # for all five timeframes.  Quick/Inherit may use a fresh direct cache or
+    # inherited context for background rows without turning that into a live
+    # execution authorization.
+    tv_five_tf = _load_tv_five_tf_snapshot(symbol, mode=effective_mode, context=context)
+    if effective_mode == "full" and asset_class in {"crypto", "gold"} and not tv_five_tf.get("usable"):
+        _refresh_btc_tv_five_tf_snapshot(symbol)
+        tv_five_tf = _load_tv_five_tf_snapshot(symbol, mode=effective_mode, context=context)
+    engine_data["_tv_five_tf_status"] = {
+        key: tv_five_tf.get(key)
+        for key in ("usable", "identity_valid", "fresh", "timestamp", "timeframes", "missing",
+                    "coverage", "reason", "source", "source_path", "scope")
+    }
+    engine_data["_tv_five_tf_required"] = effective_mode == "full" and asset_class in {"crypto", "gold"}
+    if tv_five_tf.get("usable"):
+        _merge_tv_five_tf_into_engine(engine_data, tv_five_tf)
+        print(f"  ✅ TV五周期契约: {tv_five_tf.get('scope','direct_cache')} · 覆盖{tv_five_tf.get('coverage')}/5")
+    else:
+        print(f"  ⚠ TV五周期契约: {tv_five_tf.get('reason','不可用')} · 覆盖{tv_five_tf.get('coverage',0)}/5")
     _refresh_and_mark_snapshot(symbol, engine_data)
     _snap_status = engine_data.get("_snapshot_status") or {}
     if not isinstance(_snap_status, dict):
@@ -3292,6 +3760,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         try:
             from multi_source_collector import cmc_quote, cmc_global, cmc_fear_greed
             cmc = cmc_quote(symbol[:3])
+            _register_source_record(engine_data, "cmc", cmc, symbol=symbol)
             spot_price = cmc.get("price", 0)
             # 优先 Binance U 本位期货价，CMC 仅保留为现货交叉验证/备用
             primary_price = futures_price or spot_price
@@ -3309,6 +3778,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             # P1b: 填充 Binance K线（VWAP/EMA/FVG 引擎依赖）
             try:
                 _collect_binance_data(engine_data, symbol)
+                engine_data["_binance_data_collected"] = True
             except Exception:
                 pass
             basis = f" 期现差{(futures_price/spot_price-1)*100:+.3f}%" if futures_price and spot_price else ""
@@ -3316,10 +3786,12 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             
             # CMC global
             glob = cmc_global()
+            _register_source_record(engine_data, "cmc_global", glob, symbol=symbol)
             engine_data["cmc_global"] = glob
             
             # F&G
             fg = cmc_fear_greed() if "macro" in pipeline_steps else {}
+            _register_source_record(engine_data, "fear_greed", fg, symbol=symbol, status="not_run" if "macro" not in pipeline_steps else None)
             engine_data["fear_greed"] = fg
             print(f"  ✅ 恐慌贪婪: {fg.get('value','?')} ({fg.get('classification','?')})")
             
@@ -3327,15 +3799,19 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             try:
                 from multi_source_collector import cg_top_coins, cg_trending
                 top = cg_top_coins(10) if "cg_pro" in pipeline_steps else {}
+                _register_source_record(engine_data, "cg_top", top, symbol=symbol, status="not_run" if "cg_pro" not in pipeline_steps else None)
                 engine_data["cg_top"] = top
-                print(f"  ✅ CoinGecko Top10: {top.get('rotation','?')} | BTC {top.get('btc_change_24h',0):+.1f}% vs Alt {top.get('avg_alt_change_24h',0):+.1f}%")
+                cg_status = top.get("_source_status", "not_run") if isinstance(top, dict) else "unavailable"
+                print(f"  {'✅' if cg_status in ('live', 'cache') else '⚠️'} CoinGecko Top10: {top.get('rotation','?')} | 状态{cg_status} | BTC {top.get('btc_change_24h',0):+.1f}% vs Alt {top.get('avg_alt_change_24h',0):+.1f}%")
             except Exception:
                 pass
             try:
                 trend = cg_trending() if "cg_pro" in pipeline_steps else {}
+                _register_source_record(engine_data, "cg_trending", trend, symbol=symbol, status="not_run" if "cg_pro" not in pipeline_steps else None)
                 engine_data["cg_trending"] = trend
                 hot = ", ".join(c["symbol"] for c in trend.get("trending", [])[:3]) or "无"
-                print(f"  🔥 Trending: {hot}")
+                trend_status = trend.get("_source_status", "not_run") if isinstance(trend, dict) else "unavailable"
+                print(f"  🔥 Trending: {hot} | 状态{trend_status}")
             except Exception:
                 pass
             
@@ -3343,6 +3819,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             try:
                 from multi_source_collector import macro_overview
                 macro = macro_overview() if "macro" in pipeline_steps else {}
+                _register_source_record(engine_data, "macro_overview", macro, symbol=symbol, status="not_run" if "macro" not in pipeline_steps else None)
                 engine_data["macro"] = macro
                 print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
             except Exception:
@@ -3381,12 +3858,6 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 engine_data["grades"] = {"overall": quality, "confidence": confidence}
                 print(f"  ✅ XAU: ${price:,.0f} [{quality}] ({source_label})")
                 
-                # P1b-R2: 补 Binance XAUUSDT K线供 VWAP/EMA 引擎（不覆盖 gold-api 价格）
-                try:
-                    _collect_binance_data(engine_data, symbol)
-                except Exception:
-                    pass
-                
                 # ── 金十 Quote 原始数据（用于获取24h高/低/今开）──
                 jin10_raw = None
                 for src in consensus.get("sources", []):
@@ -3412,9 +3883,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 engine_data["grades"] = {"overall": "C"}
             
             # ── DXY from Yahoo ──
-            try:
+            try:# TANGXI-DISABLED-NON-BINANCE 2026-08-29: DXY from Yahoo disabled
+
                 dxy_r = _req.get(
-                    "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",
+                    # TANGXI-DISABLED-NON-BINANCE 2026-08-29: "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",
                     timeout=5, headers={"User-Agent": "Mozilla/5.0"}
                 )
                 if dxy_r.status_code == 200:
@@ -3430,16 +3902,19 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             try:
                 from multi_source_collector import macro_overview, fmp_forex
                 macro = macro_overview() if "macro" in pipeline_steps else {}
+                _register_source_record(engine_data, "macro_overview", macro, symbol=symbol, status="not_run" if "macro" not in pipeline_steps else None)
                 engine_data["macro"] = macro
                 print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | US10Y {macro.get('us10y',{}).get('price','?')}% | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
             except Exception:
                 pass
             try:
                 eur = fmp_forex("EURUSD")
+                _register_source_record(engine_data, "eurusd", eur, symbol="EURUSD")
                 engine_data["eurusd"] = eur
                 if eur.get("price"):
                     print(f"  💱 EURUSD: {eur['price']:.4f} ({eur.get('change_pct',0):+.2f}%)")
-            except Exception:
+            except Exception as _eur_exc:
+                _register_source_record(engine_data, "eurusd", None, status="unavailable", error=_eur_exc, symbol="EURUSD")
                 pass
             
             # ── K线：基于 gold-api/Jin10 真实数据构建（TV SVP v10 对 XAU 为已知限制）──
@@ -3448,13 +3923,11 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 # P2修复：优先用 TV MCP 现场读取的真实 XAU 状态；无则占位推算并明确降级标注
                 xau_tv_state_path = ROOT / "data" / "xau_tv_state.json"
                 tv_xau = None
-                if xau_tv_state_path.exists():
-                    _age_min = (datetime.now(TZ).timestamp() - xau_tv_state_path.stat().st_mtime) / 60.0
-                    if _age_min <= 30:
-                        try:
-                            tv_xau = json.loads(xau_tv_state_path.read_text(encoding="utf-8"))
-                        except Exception:
-                            tv_xau = None
+                if xau_tv_state_path.exists() and xau_contract.get("usable"):
+                    try:
+                        tv_xau = json.loads(xau_tv_state_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        tv_xau = None
                 if tv_xau:
                     xau_tv_note = "XAU TV MCP现场读取(OANDA:XAUUSD 5/15/1h/4h真实结构)"
                     engine_data["_xau_tv_limitation"] = xau_tv_note
@@ -3477,7 +3950,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                                 "direction": _dir,
                                 "description": f"TV现场·XAU {tf} {_dir}·{_cp:+.1f}%",
                             }
-                    print(f"  📊 XAU K线: TV MCP现场读取 {int(price)} · 真实结构覆盖占位")
+                    print(f"  📊 XAU K线: TV MCP现场读取 {int(price)} · 五周期真实结构已覆盖引擎占位")
                 else:
                     xau_tv_note = "⚠️XAU使用gold-api+金十占位推算(非TV现场)；OANDA:XAUUSD程序化读数需xau_tv_sync.py补真"
                     engine_data["_xau_tv_limitation"] = xau_tv_note
@@ -3522,6 +3995,8 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             from multi_source_collector import gather_all
             routed = gather_all(asset, symbol)
             engine_data["_asset_sources"] = routed
+            if isinstance(routed.get("_source_records"), dict):
+                engine_data["_source_records"] = dict(routed["_source_records"])
             for key in ("macro", "fmp", "av", "td", "td_tech", "massive", "tushare"):
                 if routed.get(key):
                     engine_data[key] = routed[key]
@@ -3540,10 +4015,16 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             engine_data["grades"] = {"overall": "C"}
             engine_data["_asset_source_error"] = str(e)[:160]
             print(f"  ⚠️ {asset}多源采集失败: {e}")
+
+    # Re-apply TV structure after the asset collectors have populated their
+    # fallback rows.  The merge is field-aware: TV owns value-area/action-grid
+    # fields, while Binance/gold sources retain real OHLCV when TV lacks it.
+    _merge_tv_five_tf_into_engine(engine_data, tv_five_tf)
     
-    # v2.1: 实时事件禁做（Jin10日历 + 宏观过滤）
+    # v2.1: 实时事件禁做（Jin10日历 + 宏观过滤）；只在路由包含macro时刷新。
     print("② 引擎运算...")
-    
+    _banned_live, _ban_reason = False, ""
+
     # Session 策略诊断
     try:
         from session_strategy import get_session, get_session_summary
@@ -3554,25 +4035,67 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         engine_data["_session"] = {"key": "default", "name": "未知", "strategy": "default"}
     
     # Jin10 实时事件禁做
-    try:
-        from event_ban_live import check_event_ban_live
-        _banned_live, _ban_reason = check_event_ban_live(symbol)
-        if _banned_live:
-            print(f"  🚫 事件禁做: {_ban_reason}")
-    except Exception:
-        _banned_live = False
-        _ban_reason = ""
-    
+    if "macro" in pipeline_steps:
+        try:
+            from event_ban_live import check_event_ban_live
+            _banned_live, _ban_reason = check_event_ban_live(symbol)
+            _register_source_record(
+                engine_data,
+                "event_ban_live",
+                {"banned": _banned_live, "reason": _ban_reason},
+                status="live",
+                captured_at=datetime.now(TZ),
+                symbol=symbol,
+            )
+            if _banned_live:
+                print(f"  🚫 事件禁做: {_ban_reason}")
+        except Exception as _event_exc:
+            _register_source_record(
+                engine_data,
+                "event_ban_live",
+                None,
+                status="unavailable",
+                error=_event_exc,
+                symbol=symbol,
+            )
+            _banned_live = False
+            _ban_reason = ""
+    else:
+        _register_source_record(engine_data, "event_ban_live", None, status="not_run", symbol=symbol)
+        print("  ⏭️ 事件日历: 当前档位跳过")
+
     # 宏观过滤器
-    try:
-        from macro_filter import fetch_macro_snapshot, macro_filter_bias
-        _macro = fetch_macro_snapshot()
-        engine_data["_macro"] = _macro
-        _macro_bias, _macro_strength, _macro_label = macro_filter_bias(_macro)
-        print(f"  🌍 宏观: {_macro_label} (强度{_macro_strength})")
-    except Exception:
-        _macro_bias, _macro_strength, _macro_label = "neutral", 0.0, "宏观数据不可用"
-        engine_data["_macro"] = {}
+    if "macro" in pipeline_steps:
+        try:
+            from macro_filter import fetch_macro_snapshot, macro_filter_bias
+            _macro = fetch_macro_snapshot()
+            engine_data["_macro"] = _macro
+            _register_source_record(engine_data, "macro", _macro, symbol=symbol)
+            _macro_bias, _macro_strength, _macro_label = macro_filter_bias(_macro)
+            print(f"  🌍 宏观: {_macro_label} (强度{_macro_strength})")
+        except Exception as _macro_exc:
+            _register_source_record(
+                engine_data,
+                "macro",
+                None,
+                status="unavailable",
+                error=_macro_exc,
+                symbol=symbol,
+            )
+            _macro_bias, _macro_strength, _macro_label = "neutral", 0.0, "宏观数据不可用"
+            engine_data["_macro"] = {}
+    else:
+        inherited_macro = (context or {}).get("macro") if isinstance(context, dict) else None
+        engine_data["_macro"] = inherited_macro if isinstance(inherited_macro, dict) else {}
+        _register_source_record(
+            engine_data,
+            "macro",
+            engine_data["_macro"],
+            status="inherited" if isinstance(inherited_macro, dict) and inherited_macro else "not_run",
+            symbol=symbol,
+        )
+        _macro_bias, _macro_strength, _macro_label = "neutral", 0.0, "当前档位未刷新宏观"
+        print("  ⏭️ 宏观过滤: 当前档位跳过")
     
     # v2.0: 合并TV数据到引擎（读取 btc_tv_data.json 缓存，由 TV 数据桥每2分钟更新）
     try:
@@ -3675,18 +4198,34 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
 
     # ═══ 黄金宏观桥接（仅XAU）═══
     try:
-        if 'XAU' in symbol.upper():
+        if 'XAU' in symbol.upper() and "gold_macro" in pipeline_steps:
             from jin10_gold_bridge import gold_macro_context
             gold_macro = gold_macro_context()
+            _register_source_record(
+                engine_data,
+                "gold_macro",
+                gold_macro,
+                status=None if gold_macro else "unavailable",
+                error=None if gold_macro else "empty_payload",
+                symbol=symbol,
+            )
             if gold_macro:
                 print("  ✅ 金十黄金宏观已注入")
                 engine_data['gold_macro'] = gold_macro
     except Exception as _gme:
+        _register_source_record(engine_data, "gold_macro", None, status="unavailable", error=_gme, symbol=symbol)
         print(f"  ⚠️ 金十黄金宏观桥接: {_gme}")
 
     try:
-        from multi_model_engine import run_all_models, merge_directions, check_event_ban, call_grok_validation
-        results = run_all_models(engine_data, symbol)
+        from multi_model_engine import (
+            run_all_models, merge_directions, check_event_ban, call_grok_validation, model_scope,
+        )
+        results = run_all_models(
+            engine_data,
+            symbol,
+            model_names=model_scope(effective_mode),
+            include_confirmations=effective_mode == "full",
+        )
         
         # v2.1: 事件禁做 — 优先使用 Jin10 实时日历，兜底关键词检查
         if _banned_live:
@@ -3712,13 +4251,22 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
 
     # ═══ COT持仓摘要（仅XAU）═══
     try:
-        if 'XAU' in symbol.upper():
+        if 'XAU' in symbol.upper() and "cron_read" in pipeline_steps:
             from cot_bridge import cot_summary_line
             cot = cot_summary_line()
+            _register_source_record(
+                engine_data,
+                "cot",
+                cot,
+                status=None if cot else "unavailable",
+                error=None if cot else "empty_payload",
+                symbol=symbol,
+            )
             if cot:
                 print(f"  ✅ COT黄金持仓：{cot}")
                 engine_data['cot_line'] = cot
     except Exception as _ce:
+        _register_source_record(engine_data, "cot", None, status="unavailable", error=_ce, symbol=symbol)
         print(f"  ⚠️ COT黄金持仓桥接: {_ce}")
 
     # ═══ Step 3: Grok催化剂验证（quick/inherit跳过）═══
@@ -3728,19 +4276,22 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         grok = (call_grok_validation(symbol, merged, results,
                                      price=engine_data.get("prices", {}).get("primary", 0),
                                      data=engine_data)
-                if mode == "full" else {"skipped": f"{mode}模式"})
-        if grok.get("agree"):
-            merged["global_confidence"] = round(merged["global_confidence"] + 0.05, 3)
-            print(f"  ✅ Grok: 催化剂已验证 | 置信+0.05")
-        elif grok.get("skipped"):
+                if effective_mode == "full" and "x_sent" in pipeline_steps
+                else {"skipped": f"{effective_mode}模式"})
+        if grok.get("skipped"):
             print(f"  ⏭️ Grok跳过: {grok['skipped']}")
         elif grok.get("error"):
             print(f"  ⚠️ Grok错误: {grok['error'][:60]}")
+        elif grok.get("agree"):
+            print("  ✅ Grok: 催化剂/盲点交叉验证通过（不改变执行置信）")
         else:
-            print(f"  ⚠️ Grok: 无新热点")
-            merged["action"] = "⚠Grok分歧→B等待"
-            merged["confidence_5"] = min(merged.get("confidence_5", 4), 3)
-            print(f"  ⚠️ Grok分歧 → B等待 | 方向: {grok.get('grok_direction','?')} {grok.get('grok_confidence',0):.3f}")
+            engine_data["x_model_caution"] = {
+                "direction": grok.get("grok_direction", ""),
+                "confidence": grok.get("grok_confidence", 0),
+                "divergence": grok.get("divergence", ""),
+                "blindspot": grok.get("blindspot", ""),
+            }
+            print(f"  ⚠️ Grok分歧已记录，仅作风险提示 | 方向: {grok.get('grok_direction','?')} {grok.get('grok_confidence',0):.3f}")
     except Exception as e:
         print(f"  ⚠️ Grok: {e}")
     
@@ -3757,12 +4308,18 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     # ═══ Step 5: 社区情绪 ═══
     print("⑤ 社区情绪...")
     community = ""
-    if asset == "crypto" and "cg_pro" in pipeline_steps:
+    if asset == "crypto":
         try:
             from coingecko_collector import community_dashboard
-            community = community_dashboard()
-            print(f"  ✅ {community[:80]}...")
+            if "cg_pro" in pipeline_steps:
+                community = community_dashboard()
+                _register_source_record(engine_data, "cg_community", community, symbol=symbol)
+                print(f"  ✅ {community[:80]}...")
+            else:
+                _register_source_record(engine_data, "cg_community", None, status="not_run", symbol=symbol)
+                print("  ℹ️ 社区: 当前档位跳过CoinGecko")
         except Exception as e:
+            _register_source_record(engine_data, "cg_community", None, status="unavailable", error=e, symbol=symbol)
             print(f"  ⚠️ 社区: {e}")
     else:
         community = search_sent
@@ -3775,40 +4332,61 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             _sys.path.insert(0, str(ROOT / "scripts"))
             from polymarket_bridge import get_polymarket_line
             poly_line = get_polymarket_line()
+            _register_source_record(engine_data, "polymarket", poly_line, symbol=symbol)
             print(f"  📊 {poly_line}")
             engine_data["poly_sentiment"] = poly_line
         except Exception as e:
+            _register_source_record(engine_data, "polymarket", None, status="unavailable", error=e, symbol=symbol)
             engine_data["poly_sentiment"] = ""
             print(f"  ⚠️ Poly: {e}")
     else:
+        _register_source_record(engine_data, "polymarket", None, status="not_run", symbol=symbol)
         engine_data["poly_sentiment"] = ""
         print("  ℹ️ Poly: 非加密跳过BTC/crypto预测市场桥")
 
     # ═══ 外汇利差（仅外汇品种）═══
-    if any(p in symbol.upper() for p in ['EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']):
+    if "forex_rate" in pipeline_steps and any(p in symbol.upper() for p in ['EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD']):
         try:
             from forex_rate import forex_card_line
             fx_line = forex_card_line(symbol)
+            _register_source_record(
+                engine_data,
+                "forex_rate",
+                fx_line,
+                status=None if fx_line else "unavailable",
+                error=None if fx_line else "empty_payload",
+                symbol=symbol,
+            )
             if fx_line:
                 print(f"  ✅ {fx_line}")
                 engine_data['forex_rate'] = fx_line
         except Exception as e:
+            _register_source_record(engine_data, "forex_rate", None, status="unavailable", error=e, symbol=symbol)
             print(f"  ⚠️ 外汇利差: {e}")
 
     # ═══ 期权链（加密+股票）═══
-    if any(s in symbol.upper() for s in ['BTC', 'ETH', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'META']):
+    if "options_chain" in pipeline_steps and any(s in symbol.upper() for s in ['BTC', 'ETH', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'NVDA', 'META']):
         try:
             from options_chain import options_card_line
             opt_line = options_card_line(symbol)
+            _register_source_record(
+                engine_data,
+                "options_chain",
+                opt_line,
+                status=None if opt_line else "unavailable",
+                error=None if opt_line else "empty_payload",
+                symbol=symbol,
+            )
             if opt_line:
                 print(f"  ✅ {opt_line}")
                 engine_data['options_line'] = opt_line
         except Exception as e:
+            _register_source_record(engine_data, "options_chain", None, status="unavailable", error=e, symbol=symbol)
             print(f"  ⚠️ 期权链: {e}")
 
     # ═══ X情绪上下文读取 ═══
     try:
-        if asset == "crypto":
+        if "x_sent" in pipeline_steps and asset == "crypto":
             _x_path = ROOT / "data" / "x_sentiment_context.json"
             if _x_path.exists():
                 import json as _xj
@@ -3822,12 +4400,20 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 _q_str = " | ".join(_queries[:2]) if _queries else "无"
                 print(f"  ✅ X情绪: BTC恐贪{_fg_v}({_fg_c}) · 市占{str(_btc_dom)[:6]}% · {_q_str}")
                 engine_data["x_sentiment"] = _x_data
+                _register_source_record(engine_data, "x_sentiment", _x_data, symbol=None, max_age_hours=6.0)
             else:
+                _register_source_record(engine_data, "x_sentiment", None, status="unavailable", error="cache_missing", symbol=None)
                 print(f"  ⚠️ X情绪: 缓存文件不存在")
-        else:
+        elif "x_sent" in pipeline_steps:
             engine_data["x_sentiment"] = f"{symbol}: {search_sent} · 非加密不采用BTC情绪缓存"
+            _register_source_record(engine_data, "x_sentiment", engine_data["x_sentiment"], status="live", captured_at=datetime.now(TZ), symbol=symbol)
             print(f"  ℹ️ X情绪: 非加密不采用BTC缓存·使用本品种热点/宏观替代")
+        else:
+            engine_data["x_sentiment"] = {"_source_status": "not_run", "reason": f"{effective_mode}模式未路由x_sent"}
+            _register_source_record(engine_data, "x_sentiment", None, status="not_run", symbol=symbol)
+            print("  ⏭️ X情绪: 当前档位跳过")
     except Exception as _xe:
+        _register_source_record(engine_data, "x_sentiment", None, status="unavailable", error=_xe, symbol=symbol)
         print(f"  ⚠️ X情绪: {_xe}")
 
     # ═══ Step 6: 市场体制由闭柱OHLCV+TV结构在决策闭环内实时判定 ═══
@@ -3837,16 +4423,43 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
 
     # ═══ Step 7: 锁定排版输出 ═══
     print("⑥.① Binance数据采集...")
-    _collect_binance_data(engine_data, symbol)
-    if engine_data.get("cvd", {}).get("direction"):
-        print(f"  ✅ CVD {engine_data['cvd']['direction']} {engine_data['cvd'].get('quality','?')} | Taker {engine_data.get('taker',{}).get('direction','?')} | Funding {engine_data.get('funding',{}).get('rate_pct','?')}")
+    if _asset_class(symbol) == "crypto":
+        if not engine_data.get("_binance_data_collected"):
+            _collect_binance_data(engine_data, symbol)
+            engine_data["_binance_data_collected"] = True
+        else:
+            print("  ℹ️ Binance数据已在Step 1采集，跳过重复请求")
+        _cvd_value = engine_data.get("cvd")
+        _register_source_record(
+            engine_data,
+            "cvd",
+            _cvd_value,
+            status="live" if _cvd_value else "unavailable",
+            captured_at=datetime.now(TZ) if _cvd_value else None,
+            symbol=symbol,
+        )
+        if engine_data.get("cvd", {}).get("direction"):
+            print(f"  ✅ CVD {engine_data['cvd']['direction']} {engine_data['cvd'].get('quality','?')} | Taker {engine_data.get('taker',{}).get('direction','?')} | Funding {engine_data.get('funding',{}).get('rate_pct','?')}")
+    else:
+        print("  ℹ️ 非加密品种：跳过Binance合约Funding/Taker/CVD采集")
+        # Do not let generic/stale engine fields bleed crypto-only flow into
+        # non-crypto cards after the collector was intentionally skipped.
+        cvd_dir = ""
+        taker_dir = ""
+        taker_ratio = ""
+        funding_rate = ""
+        for _crypto_key in ("cvd", "taker", "funding", "oi"):
+            engine_data.pop(_crypto_key, None)
 
     # ═══ 深度数据采集（仅加密品种）═══
     try:
         _sym = symbol.upper().replace(".P", "").split("-")[0].split(" ")[0]
-        if not _sym.endswith("USDT") or "depth" not in pipeline_steps:
+        if not _sym.endswith("USDT"):
             print(f"  ℹ️ 深度: {_sym} 非加密品种·跳过")
             engine_data["depth"] = {"note": f"{_sym}非加密"}
+        elif "depth" not in pipeline_steps:
+            print(f"  ℹ️ 深度: {symbol} 当前档位跳过")
+            engine_data["depth"] = {"note": "当前档位跳过"}
         else:
             from binance_public import fetch_spot
             _depth = fetch_spot("/api/v3/depth", {"symbol": _sym, "limit": 5}, timeout=10) or {}
@@ -3861,6 +4474,17 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 engine_data["depth"] = {"bid_price": _bp, "bid_qty": _bq, "ask_price": _ap, "ask_qty": _aq, "spread": _spread, "spread_pct": _spread_pct}
     except Exception as _de:
         print(f"  ⚠️ 深度: {_de}")
+    _depth_value = engine_data.get("depth")
+    _depth_requested = _asset_class(symbol) == "crypto" and "depth" in pipeline_steps
+    _depth_ok = isinstance(_depth_value, dict) and _depth_value.get("bid_price") and _depth_value.get("ask_price")
+    _register_source_record(
+        engine_data,
+        "depth",
+        _depth_value,
+        status="live" if _depth_ok else "unavailable" if _depth_requested else "not_run",
+        captured_at=datetime.now(TZ) if _depth_ok else None,
+        symbol=symbol,
+    )
 
     print("⑦ 渲染锁定卡片...")
     meta = build_setup_metadata(symbol, merged, results, engine_data)
@@ -3868,28 +4492,46 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     # v4.4: 高级订单流确认（吸收/FVG/OB/相关性/共振门控）— 接通5个原闲置模块
     print("⑦.① 高级订单流确认...")
     adv = {"section": "", "gate": {}, "factors": {}}
-    try:
-        adv = _advanced_orderflow(symbol, engine_data, merged, meta)
-        engine_data["_advanced"] = adv
-        _g = adv.get("gate", {})
-        _cc = adv.get("factors", {}).get("confluence_count", "?")
-        print(f"  ✅ 共振{_cc}/6 | 门控{'放行' if _g.get('execute') else '否决'}·{_g.get('reason','?')}")
-        # 门控否决 → 压制等级（不强制改方向，只提示）
-        if not _g.get("execute") and _g.get("reason"):
-            meta["gate_verdict"] = f"否决·{_g.get('reason')}"
-        else:
-            meta["gate_verdict"] = "放行"
-        # 孤儿模块信号细化（吸收/相关性/元标记）
+    if effective_mode == "full":
         try:
-            _orp = adv.get("factors", {})
-            _abs = _orp.get("absorption", {})
-            _corr = _orp.get("corr_multiplier", 1.0)
-            _abs_summary = _abs.get("summary", "正常") if isinstance(_abs, dict) else "正常"
-            print(f"  ✅ 孤儿: corr={_corr} · {_abs_summary[:40]}")
-        except Exception:
-            pass
-    except Exception as _ae:
-        print(f"  ⚠ 高级订单流跳过: {_ae}")
+            adv = _advanced_orderflow(symbol, engine_data, merged, meta)
+            engine_data["_advanced"] = adv
+            _g = adv.get("gate", {})
+            _cc = adv.get("factors", {}).get("confluence_count", "?")
+            print(f"  ✅ 共振{_cc}/6 | 门控{'放行' if _g.get('execute') else '否决'}·{_g.get('reason','?')}")
+            # 门控否决 → 压制等级（不强制改方向，只提示）
+            if not _g.get("execute") and _g.get("reason"):
+                meta["gate_verdict"] = f"否决·{_g.get('reason')}"
+            else:
+                meta["gate_verdict"] = "放行"
+            # 孤儿模块信号细化（吸收/相关性/元标记）
+            try:
+                _orp = adv.get("factors", {})
+                _abs = _orp.get("absorption", {})
+                _corr = _orp.get("corr_multiplier", 1.0)
+                _abs_summary = _abs.get("summary", "正常") if isinstance(_abs, dict) else "正常"
+                print(f"  ✅ 孤儿: corr={_corr} · {_abs_summary[:40]}")
+            except Exception:
+                pass
+        except Exception as _ae:
+            print(f"  ⚠ 高级订单流跳过: {_ae}")
+    else:
+        adv = {"section": "当前档位跳过高级订单流", "gate": {}, "factors": {}, "skipped": effective_mode}
+        engine_data["_advanced"] = adv
+        meta["gate_verdict"] = f"未运行·{effective_mode}模式"
+        print(f"  ⏭️ 高级订单流: {effective_mode}模式不运行")
+
+    _corr_value = (adv.get("factors") or {}).get("correlation") if isinstance(adv, dict) else None
+    _corr_requested = effective_mode == "full" and "corr" in pipeline_steps
+    _corr_ok = isinstance(_corr_value, dict) and _corr_value.get("status") == "ok"
+    _register_source_record(
+        engine_data,
+        "correlation",
+        _corr_value,
+        status="live" if _corr_ok else "unavailable" if _corr_requested else "not_run",
+        captured_at=datetime.now(TZ) if _corr_ok else None,
+        symbol=symbol,
+    )
 
     # v6.9.14: TV DMI 决策表数据注入（从 TradingView MCP 读取）
     # v6.9.15b P0 fix: 优先读 engine_data._tv_pine（调用方注入）→
@@ -4060,9 +4702,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                             skipped_tv_caches.append(f"{p.name}: {cache_status2.get('reason')}")
                     except Exception as exc:
                         skipped_tv_caches.append(f"{p.name}: {exc}")
-            if not c2 and skipped_tv_caches:
-                engine_data["_tv_live_status"] = {"usable": False, "reason": "; ".join(skipped_tv_caches)}
-                print(f"  ⚠ TV实时注入未采用: {'; '.join(skipped_tv_caches)}")
+            if not c2 and not live_indicator_injected:
+                reason = "; ".join(skipped_tv_caches) or "没有通过现场品种/新鲜度校验的TV缓存"
+                engine_data["_tv_live_status"] = {"usable": False, "reason": reason}
+                print(f"  ⚠ TV实时注入未采用: {reason}")
             if c2 and c2.get("fresh"):
                 if not live_indicator_injected:
                     _inject_tv_live_pine(engine_data, c2)
@@ -4079,23 +4722,16 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 poc, vah, val = _tv_live_levels(c2)
                 ag = c2.get("action_grid", {})
                 direction = ag.get("方向", "待判")
-                for tf in ["D", "4h", "1h", "15m", "5m"]:
-                    if tf == "D":
-                        klines[tf] = {
-                            "close": poc, "high": vah or poc, "low": val or poc,
-                            "open": poc, "change_pct": 0,
-                            "poc": poc, "vah": vah, "val": val,
-                            "direction": direction,
-                            "description": f"TV现场 POC {poc:.0f} | VAH {vah:.0f} VAL {val:.0f} | {direction}",
-                        }
-                    elif tf in klines and isinstance(klines[tf], dict):
-                        k = klines[tf]; k["poc"] = poc; k["vah"] = vah; k["val"] = val
-                        if "待" in str(k.get("description", "")):
-                            k["description"] = f"TV注入 POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f}"
-                if vah and val:
+                applied_single_tf = _apply_tv_live_structure(
+                    engine_data, klines, poc=poc, vah=vah, val=val, direction=direction
+                )
+                if applied_single_tf and vah and val:
                     merged = engine_data.setdefault("merged", {})
                     merged["vah"] = vah; merged["val"] = val; merged["poc"] = poc
-                print(f"  📡 TV实时注入: POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f} → {len(klines)}周期")
+                if applied_single_tf:
+                    print(f"  📡 TV实时注入: POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f} → {len(klines)}周期")
+                else:
+                    print("  📡 TV实时指标已注入；保留五周期逐层结构，未用单周期值覆盖")
     except Exception as _tve:
         print(f"  ⚠ TV注入跳过: {_tve}")
     
@@ -4162,6 +4798,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     if rule_errors:
         print("  ⚠ 模板审计发现问题: " + "；".join(rule_errors))
     # v9.6: GO/NO-GO下单闸门 — 追加到完整卡尾部
+    gate_verified = False
     try:
         import sys as _gate_sys
         _gate_sys.path.insert(0, str(ROOT / "scripts"))
@@ -4170,9 +4807,21 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         engine_data["_gate_result"] = gate_result
         gate_section = gate_report_card(gate_result, symbol)
         full_card = full_card.rstrip() + "\n" + gate_section + "\n"
+        gate_verified = True
         print(f"  🚦 GO/NO-GO: {gate_result['verdict']}")
     except Exception as _ge:
-        print(f"  ⚠ GO/NO-GO跳过: {_ge}")
+        # A gate exception is a hard safety failure. The card may still be
+        # saved locally for diagnosis, but it must never be delivered as a
+        # trading decision.
+        gate_verified = False
+        engine_data["_gate_result"] = {
+            "verdict": "✗ NO-GO · 闸门异常",
+            "go": False,
+            "execution_authorized": False,
+            "final_state": "NO-GO",
+            "reason": f"GO/NO-GO异常: {type(_ge).__name__}",
+        }
+        print(f"  ⚠ GO/NO-GO跳过({_ge})；已阻止外部推送")
     append_trade_plan(meta, full_card)
     update_monitor_metadata(symbol, meta)
     # 保存轻量继承上下文：后续“现在呢/继续”不必重新扫描全部高周期。
@@ -4183,6 +4832,12 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             mode=effective_mode,
             price=engine_data.get("prices", {}).get("primary"),
             levels=meta.get("key_levels", []) if isinstance(meta, dict) else [],
+            timeframes=engine_data.get("_tv_five_tf_klines") or {},
+            tv_five_tf_status=engine_data.get("_tv_five_tf_status") or {},
+            macro=engine_data.get("_macro") if isinstance(engine_data.get("_macro"), dict) else None,
+            final_verdict=engine_data.get("_final_verdict") if isinstance(engine_data.get("_final_verdict"), dict) else None,
+            primary_action=engine_data.get("_tv_main_final") if isinstance(engine_data.get("_tv_main_final"), dict) else None,
+            source_matrix=engine_data.get("_cross_validation_matrix") if isinstance(engine_data.get("_cross_validation_matrix"), list) else None,
         )
     except Exception as _ctxe:
         print(f"  ⚠ 分析上下文保存失败: {_ctxe}")
@@ -4199,8 +4854,8 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     sym_name = symbol.replace('/', '_')
     full_path = DATA / f"auto_card_{sym_name}_full.md"
     compact_path = DATA / f"auto_card_{sym_name}.md"
-    full_path.write_text(full_card, encoding="utf-8")
-    compact_path.write_text(card, encoding="utf-8")
+    atomic_write_text(full_path, full_card)
+    atomic_write_text(compact_path, card)
     
     is_compact = len(card.strip().split('\n')) <= 10
     print(f"  ✅ 已写入 {compact_path} ({'极简' if is_compact else '完整'})")
@@ -4213,11 +4868,26 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         print(f"\n📋 完整分析卡 ({line_count}行) 已保存至 {full_path.name}")
     
     # ═══ Step 6: 推送 ═══
-    if push:
+    # External delivery requires a successfully evaluated gate. A gate
+    # exception is fail-closed: keep the local diagnostic artifact, do not
+    # publish it as a trading decision.
+    # Only an evaluated, executable GO-A decision may leave the process as a
+    # trading card. WAIT/NO-GO/B/C remain local diagnostic artifacts.
+    _push_verdict = engine_data.get("_final_verdict")
+    _push_authorized = (
+        isinstance(_push_verdict, dict)
+        and _push_verdict.get("state") == "GO-A"
+        and _push_verdict.get("executable") is True
+        and all(_push_verdict.get(k) not in (None, "") for k in ("entry", "stop", "target"))
+    )
+    _push_enabled = (
+        os.environ.get("TANGXI_ENABLE_AUTOMATED_TG") == "1"
+        and os.environ.get("TANGXI_AUTOMATED_TG_TARGET", "").strip().startswith("telegram:")
+    )
+    if push and gate_verified and _push_authorized and _push_enabled:
         print("⑥ 推送...")
         try:
-            from topic_router import get_target
-            target = get_target(symbol)
+            target = os.environ["TANGXI_AUTOMATED_TG_TARGET"].strip()
             # 卡片走 telegram_reliable RichMarkdown 真表格（纯文字）
             sys.path.insert(0, str(Path(__file__).parent))
             from telegram_reliable import send_telegram_reliable, send_telegram_photo
@@ -4248,6 +4918,8 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 print("  ⚠️ 主周期截图缺失，仅发文字卡")
         except Exception as e:
             print(f"  ⚠️ Push: {e}")
+    elif push:
+        print("⏸ 未推送：FinalVerdict不是完整GO-A可执行裁决")
 
     # 管线完成度审计表
     if pipeline_steps:
@@ -4256,7 +4928,21 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         print(f"{'='*50}")
         # Mark known completed steps
         # 基于 engine_data 判断各步骤完成（比卡文本匹配更可靠）
-        completed_steps.update(["macro", "card"])
+        completed_steps.add("card")
+        # Crypto Full has five decision stages in addition to the ten source
+        # stages.  Mark them from produced objects, never from route names
+        # alone, so a partial run remains visibly incomplete.
+        if effective_mode == "full" and asset_class == "crypto":
+            if results or merged:
+                completed_steps.add("engine")
+            if isinstance(engine_data.get("_decision_regime"), dict) and engine_data.get("_decision_regime"):
+                completed_steps.add("regime")
+            if isinstance(engine_data.get("_dual_indicator_verdict"), dict):
+                completed_steps.add("dual")
+            if isinstance(engine_data.get("_advanced"), dict) and not engine_data["_advanced"].get("error"):
+                completed_steps.add("advanced")
+            if isinstance(engine_data.get("_final_verdict"), dict) and engine_data.get("_risk_v2") is not None:
+                completed_steps.add("risk")
         tv_status_obj = engine_data.get("_tv_cache_status") or engine_data.get("_tv_live_status") or {}
         if not isinstance(tv_status_obj, dict):
             tv_status_obj = {}
@@ -4264,23 +4950,40 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         if not isinstance(tv_override_obj, dict):
             tv_override_obj = {}
         tv_active = bool(tv_override_obj.get("tv_active"))
+        five_tf_status = engine_data.get("_tv_five_tf_status") or {}
+        if not isinstance(five_tf_status, dict):
+            five_tf_status = {}
+        five_tf_required = bool(engine_data.get("_tv_five_tf_required"))
         _klines_for_audit = engine_data.get("klines", {}) or {}
         tf_coverage = sum(1 for tf in ("D", "4h", "1h", "15m", "5m")
                           if isinstance(_klines_for_audit.get(tf), dict) and _klines_for_audit.get(tf))
-        tv_usable = (tv_active or bool(tv_status_obj.get("usable"))) and tf_coverage == 5
+        tv_usable = (
+            (tv_active or bool(tv_status_obj.get("usable")))
+            and tf_coverage == 5
+            and (not five_tf_required or bool(five_tf_status.get("usable")))
+        )
         if tv_usable:
             completed_steps.add("tv")
+        if "macro" in pipeline_steps:
+            macro_value = engine_data.get("macro") or engine_data.get("_macro")
+            if isinstance(macro_value, dict) and macro_value:
+                macro_status = macro_value.get("_source_status") or macro_value.get("source_status") or "cache"
+                if macro_status in ("live", "cache", "inherited"):
+                    completed_steps.add("macro")
         cron_fresh = []
         cron_missing = []
         if "cron_read" in pipeline_steps:
             try:
                 from pipeline_router import cron_sources
+                from source_health import inspect_json_file
                 for source_name in cron_sources(symbol):
                     source_path = ROOT / "data" / f"{source_name}.json"
-                    if source_path.exists() and time.time() - source_path.stat().st_mtime <= 6 * 3600:
+                    source_health = inspect_json_file(source_path, max_age_hours=6.0)
+                    if source_health.get("fresh"):
                         cron_fresh.append(source_name)
                     else:
-                        cron_missing.append(source_name)
+                        status = source_health.get("status") or "unavailable"
+                        cron_missing.append(f"{source_name}({status})")
                 if cron_fresh and not cron_missing:
                     completed_steps.add("cron_read")
             except Exception:
@@ -4288,16 +4991,27 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         price_fields = engine_data.get("prices")
         if not isinstance(price_fields, dict):
             price_fields = {}
-        if (engine_data.get("cmc") or engine_data.get("cmc_global") or price_fields.get("futures") or engine_data.get("funding") or engine_data.get("oi") or "CMC" in card or "Binance" in card): completed_steps.add("binance")
-        if engine_data.get("cg_top") or "CoinGecko" in card: completed_steps.add("cg_pro")
-        if engine_data.get("x_sentiment") or "X情绪" in card: completed_steps.add("x_sent")
-        if engine_data.get("cvd") or "CVD" in card: completed_steps.add("cvd")
-        if engine_data.get("depth") or "深度" in card: completed_steps.add("depth")
-        if engine_data.get("_advanced",{}).get("orphan",{}).get("corr_multiplier") is not None: completed_steps.add("corr")
-        if engine_data.get("gold_macro") or any(k in card for k in ["GLD", "黄金"]): completed_steps.add("gold_macro")
-        if engine_data.get("forex_rate") or any(k in card for k in ["利差", "forex_rate"]): completed_steps.add("forex_rate")
-        if isinstance(engine_data.get("fmp"), dict) and engine_data["fmp"] and "_error" not in engine_data["fmp"]: completed_steps.add("fmp")
-        if engine_data.get("options_line"): completed_steps.add("options_chain")
+        if engine_data.get("_binance_data_collected") and price_fields.get("primary"):
+            completed_steps.add("binance")
+        cg_top = engine_data.get("cg_top")
+        if isinstance(cg_top, dict) and cg_top:
+            cg_status = _source_record_status(engine_data, "cg_top", cg_top)
+            if cg_status in ("live", "cache", "inherited"):
+                completed_steps.add("cg_pro")
+        if _source_record_usable(engine_data, "x_sentiment", engine_data.get("x_sentiment")):
+            completed_steps.add("x_sent")
+        if _source_record_usable(engine_data, "cvd", engine_data.get("cvd")):
+            completed_steps.add("cvd")
+        if _source_record_usable(engine_data, "depth", engine_data.get("depth")):
+            completed_steps.add("depth")
+        if _source_record_usable(engine_data, "correlation", _corr_value):
+            completed_steps.add("corr")
+        if _source_record_usable(engine_data, "gold_macro", engine_data.get("gold_macro")):
+            completed_steps.add("gold_macro")
+        if _source_record_usable(engine_data, "forex_rate", engine_data.get("forex_rate")):
+            completed_steps.add("forex_rate")
+        if _source_record_usable(engine_data, "fmp", engine_data.get("fmp")): completed_steps.add("fmp")
+        if _source_record_usable(engine_data, "options_chain", engine_data.get("options_line")): completed_steps.add("options_chain")
         completed_steps.add("orphan")  # orphan integration always runs
         
         step_status = {}
@@ -4326,6 +5040,8 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             label = {"tv":"TV五层","binance":"Binance衍生品","cg_pro":"CoinGecko Pro",
                      "macro":"宏观背景","x_sent":"X情绪","cron_read":"Cron缓存",
                      "cvd":"CVD订单流","depth":"深度数据","corr":"相关性",
+                     "engine":"核心模型引擎","regime":"市场体制","dual":"双指标确认",
+                     "advanced":"高级订单流","risk":"FinalVerdict风控",
                      "gold_macro":"黄金宏观","forex_rate":"外汇利率","fmp":"FMP基本面",
                      "options_chain":"期权链","card":"出卡","orphan":"孤儿模块"}.get(s, s)
             audit_lines.append(f"| {label} | {step_status[s]} | {step_notes.get(s, '')} |")
@@ -4336,7 +5052,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         for line in audit_lines:
             print(line)
         try:
-            full_path.write_text(full_card.rstrip() + "\n\n" + "\n".join(audit_lines) + "\n", encoding="utf-8")
+            atomic_write_text(full_path, full_card.rstrip() + "\n\n" + "\n".join(audit_lines) + "\n")
         except Exception as e:
             print(f"  ⚠️ 管线完成度写入full卡失败: {e}")
 
@@ -4751,14 +5467,27 @@ def _find_nearest_key_level(klines: dict, price: float) -> tuple:
 
 
 def _parse_cli_symbol(argv=None) -> str:
-    """Return the first real trading symbol, ignoring pytest/hermes CLI flags."""
+    """Return the trading symbol from positional args or --message text."""
     argv = list(sys.argv[1:] if argv is None else argv)
+    message = ""
+    for idx, arg in enumerate(argv):
+        if arg == "--message" and idx + 1 < len(argv):
+            message = str(argv[idx + 1])
+            break
     for arg in argv:
         if not arg or arg.startswith("-"):
             continue
         symbol = arg.upper().strip()
         if re.match(r"^[A-Z0-9][A-Z0-9._:-]{0,31}$", symbol):
             return "BTCUSDT" if symbol == "BTC" else "XAUUSD" if symbol == "XAU" else symbol
+    # --mode-auto commonly receives the user's natural-language request via
+    # --message, so do not silently fall back to BTC when it names another
+    # supported asset (e.g. "看下XAUUSD").
+    message_upper = message.upper()
+    if "XAU" in message_upper or "GOLD" in message_upper:
+        return "XAUUSD"
+    if "BTC" in message_upper:
+        return "BTCUSDT"
     return "BTCUSDT"
 
 
@@ -4802,4 +5531,20 @@ if __name__ == "__main__":
         _mode = "full"
     elif "--inherit" in sys.argv or "--now" in sys.argv:
         _mode = "inherit"
+    # 2026-08-31 --mode-auto：档位识别代码化——对话层必传用户原话，
+    # 由 pipeline_router.resolve_analysis_mode 定档，模型不再自行判断档位。
+    if "--mode-auto" in sys.argv:
+        try:
+            from pipeline_router import resolve_analysis_mode, context_is_fresh
+            _msg = ""
+            if "--message" in sys.argv:
+                _idx = sys.argv.index("--message")
+                if _idx + 1 < len(sys.argv):
+                    _msg = sys.argv[_idx + 1]
+            if not _msg:
+                _msg = " ".join(a for a in sys.argv if not a.startswith("-"))
+            _mode = resolve_analysis_mode(_msg, has_context=context_is_fresh(sym))
+            print(f"🎛 --mode-auto: 消息={_msg[:40]!r} → 档位={_mode}")
+        except Exception as _me:
+            print(f"⚠ --mode-auto 解析失败({_me}) → 保留 {_mode}")
     auto_card(sym, push=do_push, mode=_mode)

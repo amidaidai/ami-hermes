@@ -14,14 +14,17 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import urllib.request
 import sys
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
+_stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+if callable(_stderr_reconfigure):
+    _stderr_reconfigure(encoding="utf-8", errors="replace")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 import trading_system as ts
+from source_contract import write_source_artifact
 
 CACHE_FILE = ts.DATA_DIR / "deribit_options.json"
 CACHE_MINUTES = 15
@@ -47,6 +50,7 @@ def fetch_options() -> dict:
             call_oi_usd = 0.0
             put_oi_usd = 0.0
             strike_oi = {}  # strike -> {call_oi, put_oi}
+            underlying = 0.0
 
             for inst in instruments:
                 name = inst.get("instrument_name", "")
@@ -79,14 +83,22 @@ def fetch_options() -> dict:
 
                 total_oi_usd += oi_notional
 
-            # 寻找 Max Pain（OI 最大的行权价）
-            max_pain_strike = 0
-            max_pain_oi = 0
-            for strike, data in strike_oi.items():
-                total = data["call_oi"] + data["put_oi"]
-                if total > max_pain_oi:
-                    max_pain_oi = total
-                    max_pain_strike = strike
+            # Max Pain 是“总持仓量最大行权价”之外的另一件事：
+            # 应取使所有 Call/Put 买方到期赔付最小的结算价。
+            # 旧逻辑把 max OI strike 冒充 Max Pain，容易产生数量级错误。
+            strikes = sorted(strike_oi)
+            pain_by_settlement = {}
+            for settlement in strikes:
+                pain = 0.0
+                for strike, oi_data in strike_oi.items():
+                    pain += max(settlement - strike, 0) * oi_data["call_oi"]
+                    pain += max(strike - settlement, 0) * oi_data["put_oi"]
+                pain_by_settlement[settlement] = pain
+            max_pain_strike = sorted(pain_by_settlement, key=lambda s: pain_by_settlement[s])[0] if pain_by_settlement else 0
+            max_pain_valid = bool(
+                max_pain_strike and underlying > 0
+                and abs(max_pain_strike - underlying) / underlying <= 0.15
+            )
 
             # Top 3 行权价集中度
             top_strikes = sorted(strike_oi.items(), key=lambda x: x[1]["call_oi"] + x[1]["put_oi"], reverse=True)[:3]
@@ -100,7 +112,10 @@ def fetch_options() -> dict:
                 "put_oi_usd": round(put_oi_usd, 0),
                 "cp_ratio": round(cp_ratio, 2),
                 "max_pain": max_pain_strike,
-                "max_pain_oi": round(max_pain_oi, 1),
+                "max_pain_valid": max_pain_valid,
+                "max_pain_method": "min_total_settlement_payout",
+                "max_oi_strike": max(strike_oi, key=lambda s: strike_oi[s]["call_oi"] + strike_oi[s]["put_oi"]) if strike_oi else 0,
+                "underlying_price": underlying,
                 "options_count": len(instruments),
                 "top_strikes": [
                     {"strike": s, "expiry": d["expiry"], "call_oi": round(d["call_oi"], 1), "put_oi": round(d["put_oi"], 1)}
@@ -122,7 +137,7 @@ def line_summary(data: dict) -> str:
             continue
         cp = d["cp_ratio"]
         signal = "偏多" if cp > 1.5 else "偏空" if cp < 0.7 else "中性"
-        mp = d.get("max_pain", "?")
+        mp = d.get("max_pain") if d.get("max_pain_valid") else "—"
         total_m = d["total_oi_usd"] / 1_000_000
         parts.append(f"{coin}OI${total_m:.0f}M C/P={cp} {signal} MaxPain={mp}")
     return "期权: " + " | ".join(parts) if parts else "期权: 取数失败"
@@ -146,9 +161,21 @@ def _load_cache():
 
 
 def _save_cache(data: dict):
-    data["_fetched_at"] = datetime.now().isoformat()
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
+    fetched_at = datetime.now()
+    data["_fetched_at"] = fetched_at.isoformat()
+    valid = any(
+        isinstance(data.get(coin), dict) and "total_oi_usd" in data[coin]
+        for coin in ("BTC", "ETH")
+    )
+    write_source_artifact(
+        str(CACHE_FILE),
+        "deribit_options",
+        data,
+        status="live" if valid else "unavailable",
+        captured_at=fetched_at,
+        symbol="BTC/ETH",
+        error=None if valid else "empty_payload",
+    )
 
 
 def _print_table(data: dict):
@@ -163,7 +190,7 @@ def _print_table(data: dict):
         put_m = d['put_oi_usd'] / 1e6
         cp = d['cp_ratio']
         signal = "🟢偏多(看涨需求强)" if cp > 1.5 else "🔴偏空(看跌保护重)" if cp < 0.7 else "⚪中性"
-        mp = d.get("max_pain", "?")
+        mp = d.get("max_pain") if d.get("max_pain_valid") else "—"
         # 决策：MaxPain 通常价格磁吸；C/P高=情绪偏多但需防过热
         verdict = f"γ区上方·偏{cp:.1f}" if cp > 1.1 else f"γ区下方·偏{cp:.1f}" if cp < 0.9 else "γ中性"
         lines.append(f"📊 Deribit期权 {coin}")
@@ -197,7 +224,7 @@ def _print_table(data: dict):
     print(output)
     # v9.8: 加 dedup 限频——内容变化或每1小时强制推一次，避免每30分无脑轰炸
     try:
-        from alert_dedup import should_send
+        should_send = __import__("alert_dedup").should_send
         if should_send("deribit_options", output, force_every_seconds=3600):
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             from telegram_reliable import push_tg_rich

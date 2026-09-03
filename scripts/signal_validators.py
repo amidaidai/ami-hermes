@@ -1,283 +1,267 @@
 #!/usr/bin/env python3
-"""
-棠溪 · 信号独立验证器 signal_validators.py v1.0
+"""Active signal validation adapters.
 
-从 auto_card.py 抽取两个核心验证逻辑，做成作战室的轻量独立验证闸门
-（不跑 auto_card 全量管线，避免每小时 cron 被拖垮）：
-
-  1. 多空比反指 (long_short_contra)：Binance 多空账户比 → 散户拥挤反向警惕
-  2. 周期一致性 (tf_alignment)：4h/1h/15m 各自方向 → 相邻周期冲突硬门
-
-两道闸门任一否决 → 作战室不发执行计划（呼应 auto_card 的周期冲突硬门）。
+The former independent validator lived in the archived workflow and could
+fetch a second, drifting data snapshot.  This active module deliberately does
+not create a competing execution decision.  It validates the already-produced
+``FinalVerdict`` and, when explicitly given a validated TV snapshot, provides
+an observational timeframe alignment view for compatibility/reporting.
 """
 from __future__ import annotations
-import sys
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-import json
-import urllib.request
-from datetime import datetime, timezone, timedelta
-
-TZ = timezone(timedelta(hours=8))
+from collections.abc import Mapping
+from typing import Any
 
 
-def _get_json(url: str, timeout: int = 8) -> object:
+_ALLOWED_STATES = {"GO-A", "GO-B", "WAIT", "NO-GO"}
+_EXECUTION_FIELDS = ("entry", "stop", "target")
+_REQUIRED_TIMEFRAMES = ("D", "4h", "1h", "15m", "5m")
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        converted = to_dict()
+        if isinstance(converted, Mapping):
+            return dict(converted)
+    return {}
+
+
+def _number(value: Any) -> float | None:
+    if value in (None, "", "—", "--"):
+        return None
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Hermes/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8", "replace"))
-    except Exception:
+        return float(str(value).replace(",", "").replace("−", "-").replace("%", ""))
+    except (TypeError, ValueError):
         return None
 
 
-def long_short_contra(symbol: str = "BTCUSDT") -> dict:
-    """多空比反指：散户极度拥挤 → 反向警惕。
+def _direction_code(value: Any) -> int:
+    if isinstance(value, (int, float)):
+        return 1 if value > 0 else -1 if value < 0 else 0
+    text = str(value or "").strip().lower()
+    if any(token in text for token in ("待", "观望", "中性", "neutral", "unknown")):
+        return 0
+    if any(token in text for token in ("偏多", "做多", "多头", "long", "buy", "bull")):
+        return 1
+    if any(token in text for token in ("偏空", "做空", "空头", "short", "sell", "bear")):
+        return -1
+    numeric = _number(value)
+    return 1 if numeric and numeric > 0 else -1 if numeric and numeric < 0 else 0
 
-    返回 {available, signal, ratio, contra, note}
-    signal: 'bull_trap' / 'bear_trap' / 'neutral'
+
+def validate_final_verdict(verdict: Mapping[str, Any] | Any | None) -> dict[str, Any]:
+    """Validate the execution boundary without changing the verdict."""
+    value = _as_dict(verdict)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    state = str(value.get("state") or "")
+    executable = bool(value.get("executable", False))
+    side = str(value.get("side") or "neutral")
+
+    if state not in _ALLOWED_STATES:
+        blockers.append("FinalVerdict状态无效")
+    if executable and state != "GO-A":
+        blockers.append("仅GO-A允许executable=true")
+    if state == "GO-A" and not executable:
+        blockers.append("GO-A缺少执行授权")
+    if side not in {"long", "short", "neutral"}:
+        blockers.append("FinalVerdict方向无效")
+
+    prices = {field: _number(value.get(field)) for field in _EXECUTION_FIELDS}
+    rr = _number(value.get("rr"))
+    if executable:
+        if side not in {"long", "short"}:
+            blockers.append("GO-A缺少多空方向")
+        if any(prices[field] is None for field in _EXECUTION_FIELDS):
+            blockers.append("GO-A执行价位不完整")
+        if rr is None or rr < 2.0:
+            blockers.append("GO-A的R:R低于1:2")
+        if not blockers:
+            entry_price = prices["entry"]
+            stop_price = prices["stop"]
+            target_price = prices["target"]
+            if entry_price is not None and stop_price is not None and target_price is not None:
+                if side == "long" and not (stop_price < entry_price < target_price):
+                    blockers.append("多头Entry/Stop/Target几何关系无效")
+                if side == "short" and not (stop_price > entry_price > target_price):
+                    blockers.append("空头Entry/Stop/Target几何关系无效")
+    elif any(prices[field] is not None for field in _EXECUTION_FIELDS):
+        blockers.append("WAIT/NO-GO不得携带执行三件套")
+
+    if state == "WAIT" and value.get("watch_entry") is not None:
+        warnings.append("watch_entry仅为人工观察位")
+    if value.get("blockers"):
+        warnings.extend(str(item) for item in value["blockers"] if item)
+
+    return {
+        "pass": not blockers,
+        "state": state,
+        "executable": executable and not blockers,
+        "side": side,
+        "blockers": list(dict.fromkeys(blockers)),
+        "warnings": list(dict.fromkeys(warnings)),
+        "reason": str(value.get("reason") or ""),
+    }
+
+
+def _snapshot_records(snapshot: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    value = _as_dict(snapshot)
+    records: Mapping[Any, Any] = {}
+    candidate = value.get("engine_klines")
+    if isinstance(candidate, Mapping):
+        records = candidate
+    else:
+        candidate = value.get("timeframes")
+        if isinstance(candidate, Mapping):
+            records = candidate
+    if not records:
+        payload = value.get("payload")
+        if isinstance(payload, Mapping) and isinstance(payload.get("timeframes"), Mapping):
+            records = payload["timeframes"]
+    return {
+        str(tf): dict(record)
+        for tf, record in records.items()
+        if isinstance(record, Mapping)
+    }
+
+
+def tf_alignment(symbol: str = "BTCUSDT", snapshot: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Read alignment from an explicitly supplied/validated TV snapshot.
+
+    No implicit REST/CDP call is made.  A caller that wants live evidence must
+    collect it in the main pipeline and pass that evidence here.
     """
-    sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
-    try:
-        from binance_public import fapi_available
-        if not fapi_available(timeout=2):
-            return {"available": False, "signal": "neutral", "ratio": None,
-                    "contra": "", "note": "多空比主域不可用·交由HALDRO验证"}
-    except Exception:
-        pass
-    url = (f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio"
-           f"?symbol={sym}&period=5m&limit=1")
-    data = _get_json(url)
-    if not data or not isinstance(data, list) or not data:
-        return {"available": False, "signal": "neutral", "ratio": None,
-                "contra": "", "note": "多空比API不可用"}
-    try:
-        row = data[0]
-        long_acc = float(row.get("longAccount", 0))
-        short_acc = float(row.get("shortAccount", 0))
-        if long_acc + short_acc <= 0:
-            return {"available": True, "signal": "neutral", "ratio": 0.0,
-                    "contra": "", "note": "数据异常"}
-        ratio = long_acc / max(1e-9, short_acc)
-        if ratio >= 2.0:
-            signal, contra = "bear_trap", "散户极度拥挤多→反向警惕顶"
-        elif ratio <= 0.5:
-            signal, contra = "bull_trap", "散户极度拥挤空→反向警惕底"
-        else:
-            signal, contra = "neutral", ""
-        return {"available": True, "signal": signal, "ratio": round(ratio, 2),
-                "contra": contra, "note": f"多空比{ratio:.2f}"}
-    except Exception as e:  # noqa: BLE001
-        return {"available": False, "signal": "neutral", "ratio": None,
-                "contra": "", "note": f"解析失败:{e}"}
+    if snapshot is None:
+        # Read-only fallback to the already validated disk snapshot.  This is
+        # not a second REST/CDP collection and therefore cannot drift from the
+        # main pipeline's evidence boundary.
+        try:
+            from tv_five_tf_contract import load_five_tf_snapshot
+            loaded = load_five_tf_snapshot(symbol)
+            snapshot = loaded if loaded.get("usable") else None
+        except Exception:
+            snapshot = None
+    records = _snapshot_records(snapshot)
+    directions: list[int] = []
+    output: dict[str, int] = {}
+    aliases = {"1D": "D", "DAY": "D", "240": "4h", "60": "1h", "15": "15m", "5": "5m"}
+    for tf in _REQUIRED_TIMEFRAMES:
+        record = records.get(tf)
+        if record is None:
+            record = next((row for raw_tf, row in records.items() if aliases.get(raw_tf, raw_tf) == tf), None)
+        direction = 0
+        if isinstance(record, Mapping):
+            grid = record.get("tv_action_grid") or record.get("grid")
+            if isinstance(grid, Mapping):
+                direction = _direction_code(grid.get("方向") or grid.get("direction"))
+            if direction == 0:
+                direction = _direction_code(record.get("direction"))
+            if direction == 0:
+                change = _number(record.get("change_pct"))
+                direction = 1 if change is not None and change > 0.05 else -1 if change is not None and change < -0.05 else 0
+        output[tf] = direction
+        directions.append(direction)
 
-
-def _tf_direction(symbol: str, interval: str) -> int:
-    """单个周期方向：已收盘K线收盘相对开盘。1=多 -1=空 0=中性。"""
-    sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
-    try:
-        from binance_public import fetch_spot
-        data = fetch_spot(
-            "/api/v3/klines",
-            {"symbol": sym, "interval": interval, "limit": 3},
-        )
-    except Exception:
-        data = None
-    if not isinstance(data, list) or len(data) < 2:
-        return 0
-    try:
-        # 最后一根通常未收盘，统一取倒数第二根防止K内漂移。
-        o = float(data[-2][1]); c = float(data[-2][4])
-        if c > o * 1.0005:
-            return 1
-        if c < o * 0.9995:
-            return -1
-        return 0
-    except Exception:
-        return 0
-
-
-def tf_alignment(symbol: str = "BTCUSDT") -> dict:
-    """周期一致性：1D/4h/1h/15m/5m 方向 → 相邻冲突硬门。
-
-    返回 {available, d1d, d4, d1, d15, d5m, conflict, aligned, note}
-    conflict=True → 相邻周期明确反向（1D≠4h 或 4h≠1h 或 1h≠15m 或 15m≠5m），应否决交易。
-    """
-    d1d = _tf_direction(symbol, "1d")
-    d4 = _tf_direction(symbol, "4h")
-    d1 = _tf_direction(symbol, "1h")
-    d15 = _tf_direction(symbol, "15m")
-    d5m = _tf_direction(symbol, "5m")
-    if d1d == 0 and d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
-        return {"available": False, "d1d": d1d, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
-                "conflict": False, "aligned": False, "note": "周期方向数据不足"}
-    # 相邻冲突：1D≠4h 或 4h≠1h 或 1h≠15m 或 15m≠5m
-    conflict = ((d1d != 0 and d4 != 0 and d1d * d4 == -1) or
-                (d4 != 0 and d1 != 0 and d4 * d1 == -1) or
-                (d1 != 0 and d15 != 0 and d1 * d15 == -1) or
-                (d15 != 0 and d5m != 0 and d15 * d5m == -1))
-    aligned = (d1d != 0 and d1d == d4 == d1 == d15 == d5m)
+    available = any(directions)
+    adjacent_conflict = any(
+        left and right and left * right < 0
+        for left, right in zip(directions, directions[1:])
+    )
+    aligned = bool(directions and all(direction != 0 and direction == directions[0] for direction in directions))
     names = {1: "多", -1: "空", 0: "中性"}
-    note = f"1D{names[d1d]}/4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
-    return {"available": True, "d1d": d1d, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
-            "conflict": conflict, "aligned": aligned, "note": note}
+    note = "/".join(f"{tf}{names[output[tf]]}" for tf in _REQUIRED_TIMEFRAMES)
+    if adjacent_conflict:
+        note += " · 冲突"
+    elif aligned:
+        note += " · 同向"
+    return {
+        "available": available,
+        "d1d": output["D"],
+        "d4": output["4h"],
+        "d1": output["1h"],
+        "d15": output["15m"],
+        "d5m": output["5m"],
+        "conflict": adjacent_conflict,
+        "aligned": aligned,
+        "regime_label": "trend" if aligned else "range",
+        "note": note if available else "周期方向数据不足",
+        "source": "validated_tv_snapshot",
+    }
 
 
-def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 3.0) -> dict:
-    """TV MCP 多周期方向（1D/4h/1h/15m/5m）。
+def tf_alignment_tv(symbol: str = "BTCUSDT", wait: float = 0.0) -> dict[str, Any]:
+    """Compatibility alias; collection remains owned by the main pipeline."""
+    del wait
+    return tf_alignment(symbol)
 
-    严格按你的要求：每个周期 set_timeframe 后等 wait 秒让指标完全加载，
-    再读 OHLCV summary 判方向。
 
-    关键修复：TV Desktop CDP 在单会话里连续切周期会断连（Connection closed），
-    改为【每周期独立 MCP 会话】（开→切品种→切周期→等加载→读→关）。
+def long_short_contra(symbol: str = "BTCUSDT", snapshot: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Interpret an already-collected Binance ratio; never fetch a second one."""
+    del symbol
+    value = _as_dict(snapshot)
+    ratio = _number(value.get("ratio") or value.get("lsr"))
+    if ratio is None:
+        long_value = _number(value.get("long") or value.get("longAccount"))
+        short_value = _number(value.get("short") or value.get("shortAccount"))
+        if long_value is not None and short_value not in (None, 0):
+            ratio = long_value / short_value
+    if ratio is None:
+        return {
+            "available": False, "signal": "neutral", "ratio": None,
+            "contra": "", "note": "未提供已采集多空比·不重复请求",
+            "source_status": "not_run",
+        }
+    if ratio >= 2.0:
+        signal, contra = "bear_trap", "散户极度拥挤多→反向警惕顶"
+    elif ratio <= 0.5:
+        signal, contra = "bull_trap", "散户极度拥挤空→反向警惕底"
+    else:
+        signal, contra = "neutral", ""
+    return {
+        "available": True, "signal": signal, "ratio": round(ratio, 2),
+        "contra": contra, "note": f"多空比{ratio:.2f}",
+        "source_status": str(value.get("_source_status") or "live"),
+    }
 
-    symbol：BINANCE:BTCUSDT.P（加密）或 OANDA:XAUUSD（贵金属）等。
 
-    降级：TV Desktop 调试端口(9222)未开放时直接返回 available=False，
-    由调用方回落 Binance REST（环境无 TV 时不卡死）。
+def validate_plan(
+    symbol: str,
+    side: str,
+    tf_override: Mapping[str, Any] | None = None,
+    *,
+    final_verdict: Mapping[str, Any] | Any | None = None,
+) -> dict[str, Any]:
+    """Validate a plan only after FinalVerdict exists.
+
+    ``tf_override`` is retained for callers that need an alignment note, but it
+    cannot authorize a plan by itself.
     """
-    # 端口探测：TV Desktop CDP 未开则跳过（避免无谓的 node 启动+超时）
-    import socket
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", 9222)) != 0:
-                return {"available": False, "conflict": False,
-                        "note": "TV Desktop(9222)未运行→降级REST"}
-    except Exception:
-        return {"available": False, "conflict": False, "note": "TV端口探测失败→降级REST"}
-
-    try:
-        import asyncio
-        import fetch_tv_mcp as tv
-        from mcp.client.stdio import stdio_client, StdioServerParameters
-        from mcp import ClientSession
-        from pathlib import Path as _P
-        server_script = _P("D:/Hermes agent/tools/tradingview-mcp/src/server.js")
-        if not server_script.exists():
-            return {"available": False, "conflict": False, "note": "TV MCP server 未找到"}
-
-        async def _one_tf(res: str) -> int:
-            """单个周期的独立会话：开→切品种→切周期→等→读→关。返回方向 1/-1/0。"""
-            sp = StdioServerParameters(command="node", args=[str(server_script)])
-            async with stdio_client(sp) as (r, w):
-                async with ClientSession(r, w) as s:
-                    await s.initialize()
-                    await tv.set_symbol(s, symbol)
-                    await asyncio.sleep(wait)
-                    await tv.set_timeframe(s, res)
-                    await asyncio.sleep(wait)  # 等指标完全加载
-                    raw = await tv.get_ohlcv(s, summary=True)
-                    txt = tv.parse_result(raw)
-                    return _dir_from_ohlcv_summary(txt)
-
-        async def _run():
-            dirs = {}
-            for res in ("1D", "240", "60", "15", "5"):  # 1D / 4h / 1h / 15m / 5m
-                try:
-                    dirs[res] = await _one_tf(res)
-                except Exception:  # noqa: BLE001
-                    dirs[res] = 0
-            return dirs
-
-        dirs = asyncio.run(_run())
-        d1d = dirs.get("1D", 0); d4 = dirs.get("240", 0); d1 = dirs.get("60", 0); d15 = dirs.get("15", 0); d5m = dirs.get("5", 0)
-        if d1d == 0 and d4 == 0 and d1 == 0 and d15 == 0 and d5m == 0:
-            return {"available": False, "conflict": False, "note": "TV多周期方向全空"}
-        # 相邻冲突：1D≠4h 或 4h≠1h 或 1h≠15m 或 15m≠5m
-        conflict = ((d1d != 0 and d4 != 0 and d1d * d4 == -1) or
-                    (d4 != 0 and d1 != 0 and d4 * d1 == -1) or
-                    (d1 != 0 and d15 != 0 and d1 * d15 == -1) or
-                    (d15 != 0 and d5m != 0 and d15 * d5m == -1))
-        aligned = (d1d != 0 and d1d == d4 == d1 == d15 == d5m)
-        names = {1: "多", -1: "空", 0: "中性"}
-        note = f"TV 1D{names[d1d]}/4h{names[d4]}/1h{names[d1]}/15m{names[d15]}/5m{names[d5m]}" + (" · 冲突" if conflict else " · 同向" if aligned else "")
-        return {"available": True, "d1d": d1d, "d4": d4, "d1": d1, "d15": d15, "d5m": d5m,
-                "conflict": conflict, "aligned": aligned, "note": note, "source": "TV"}
-    except Exception as e:  # noqa: BLE001
-        return {"available": False, "conflict": False, "note": f"TV多周期异常:{e}"}
+    del symbol
+    result = validate_final_verdict(final_verdict)
+    blockers = list(result["blockers"])
+    notes: list[str] = []
+    if final_verdict is None:
+        blockers.append("FinalVerdict缺失·拒绝独立生成计划")
+    expected = _direction_code(side)
+    actual = _direction_code(result.get("side"))
+    if result.get("executable") and expected and actual and expected != actual:
+        blockers.append("计划方向与FinalVerdict不一致")
+    if tf_override is not None:
+        alignment = tf_alignment("", tf_override)
+        notes.append(str(alignment.get("note") or "周期方向未形成"))
+        if alignment.get("conflict"):
+            blockers.append("周期冲突·不交易")
+    return {
+        "pass": not blockers,
+        "blockers": list(dict.fromkeys(blockers)),
+        "notes": notes,
+        "state": result.get("state"),
+        "source": "FinalVerdict" if final_verdict is not None else "missing_final_verdict",
+    }
 
 
-def _dir_from_ohlcv_summary(txt: str) -> int:
-    """从 OHLCV summary 文本判方向：TV 返回的是 JSON，含 change_pct 字段。1多/-1空/0中性。
-
-    真实结构示例：
-      {"success":true,"bar_count":100,"open":63309.2,"close":61984,
-       "high":64234.1,"low":61615,"change":-1325.2,"change_pct":"-2.09%",...}
-    """
-    import re, json
-    # 优先：JSON 解析取 change_pct（TV 实际返回格式）
-    try:
-        # 可能包裹在 MCP content 文本里，先找第一个 { 起的 JSON
-        s = txt.strip()
-        if s.startswith("{"):
-            obj = json.loads(s)
-        else:
-            # 文本里嵌 JSON，找 success 开头对象
-            m = re.search(r'\{[^{}]*"change_pct"[^{}]*\}', s)
-            if m:
-                obj = json.loads(m.group(0))
-            else:
-                obj = None
-        if obj and "change_pct" in obj:
-            ch = float(str(obj["change_pct"]).replace("%", "").strip())
-            if ch > 0.05:
-                return 1
-            if ch < -0.05:
-                return -1
-            return 0
-    except Exception:
-        pass
-    # 退化：正则匹配 change%
-    m = re.search(r"change[_%]?pct?[:\s]*[\"']?([+-]?\d+(?:\.\d+)?)\s*%", txt, re.IGNORECASE)
-    if m:
-        ch = float(m.group(1))
-        if ch > 0.05:
-            return 1
-        if ch < -0.05:
-            return -1
-        return 0
-    return 0
-
-
-def validate_plan(symbol: str, side: str, tf_override: dict = None) -> dict:
-    """综合两道闸门，返回是否通过。side: '🟢做多'/'🔴做空'/'⚪观望'。
-
-    周期方向优先 TV MCP（等加载完再读），不可用降级 Binance REST。
-    tf_override: 传入已算好的周期方向（避免重复调用 Binance 导致数据漂移），
-    不传则自行获取（TV优先→REST降级）。
-    """
-    blockers = []
-    notes = []
-
-    ls = long_short_contra(symbol)
-    if ls.get("available"):
-        notes.append(f"多空比{ls['ratio']}({ls['contra'] or '正常'})")
-        if ls["signal"] == "bear_trap" and side == "🟢做多":
-            blockers.append(f"多空比{ls['ratio']}散户拥挤多→警惕做多顶部")
-        elif ls["signal"] == "bull_trap" and side == "🔴做空":
-            blockers.append(f"多空比{ls['ratio']}散户拥挤空→警惕做空底部")
-
-    # 周期一致性：优先用传入快照（展示与闸门同源），否则 TV→REST
-    tf = tf_override if (tf_override and tf_override.get("available")) else None
-    tf_src = "快照" if tf else None
-    if tf is None:
-        tf = tf_alignment_tv(symbol)
-        tf_src = "TV"
-        if not tf.get("available"):
-            tf = tf_alignment(symbol)
-            tf_src = "REST"
-    if tf.get("available"):
-        notes.append(f"{tf_src} {tf['note']}")
-        if tf["conflict"]:
-            blockers.append(f"周期冲突({tf['note']})→方向矛盾不交易")
-
-    return {"pass": len(blockers) == 0, "blockers": blockers, "notes": notes}
-
-
-if __name__ == "__main__":
-    import pprint
-    pprint.pprint({"long_short": long_short_contra(), "tf_tv": tf_alignment_tv(),
-                   "validate": validate_plan("BTCUSDT", "🟢做多")})
+# Explicit alias for new callers; the legacy name remains for compatibility.
+validate_verdict = validate_final_verdict

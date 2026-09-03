@@ -18,3 +18,8 @@ def test_liquidation_file_with_valid_row_has_no_quality_issue(tmp_path):
     path = tmp_path / "liquidation_pressure.json"
     path.write_text(json.dumps({"results": [{"symbol": "BTCUSDT", "oi": 123, "price": 64000}]}), encoding="utf-8")
     assert dfw._quality_issue("liquidation_pressure.json", path) == ""
+
+
+def test_btc_snapshot_watch_does_not_use_shared_generic_file():
+    paths = dfw.WATCH_FILES["source_snapshot_BTCUSDT.json"]["paths"]
+    assert all(path.name != "source_snapshot.json" for path in paths)

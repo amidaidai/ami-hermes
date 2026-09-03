@@ -307,6 +307,17 @@ def _dual_short(dual: dict | None, ac: str) -> tuple[str, str, str]:
     return _cell(svp)[:28], hal, _cell(verdict)[:18]
 
 
+def _final_dual_verdict(dual: dict | None, final: dict | None) -> str:
+    dual = dual if isinstance(dual, dict) else {}
+    final = final if isinstance(final, dict) else {}
+    reason = str(final.get("reason") or "")
+    if dual.get("hard_conflict") or "dual_indicator" in reason:
+        return "主副强冲突"
+    if dual.get("conflict"):
+        return "主副冲突·等待"
+    return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "待裁决")
+
+
 def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual: dict | None) -> str:
     parts = []
     if cvd_dir:
@@ -360,6 +371,8 @@ def render_v96_card(
     klines: dict = None,
     tv_dmi: dict = None,
     dual_indicator: dict | None = None,
+    final_verdict: dict | None = None,
+    source_matrix: list[dict] | None = None,
 ) -> str:
     klines = klines or {}
     st_a = st_a or {"stop": None, "target": None}
@@ -370,29 +383,77 @@ def render_v96_card(
     display = _display_symbol(symbol)
     levels_prepared = _prepare_levels(levels or [], klines, price)
     svp_short, haldro_short, dual_verdict = _dual_short(dual_indicator, ac)
+    dual_verdict = _final_dual_verdict(dual_indicator, final_verdict)
 
     dir_a = "空" if bearish else "多"
     dir_b = "多" if bearish else "空"
     s_emoji = _status_emoji(status)
     dir_emoji = _dir_emoji(direction)
 
-    final_state = str(status or "").upper()
-    if final_state == "NO-GO" or str(status).startswith("X") or rr_a < 2:
+    # FinalVerdict is mandatory for executable rendering. Legacy ``status``
+    # and st_a values are display context only and cannot authorize a card.
+    final_state = str((final_verdict or {}).get("state") or ("WAIT" if final_verdict is None else status) or "").upper()
+    final_executable = (
+        final_state == "GO-A"
+        and final_verdict is not None
+        and (final_verdict or {}).get("executable") is True
+        and all((final_verdict or {}).get(k) not in (None, "", "—", "--") for k in ("entry", "stop", "target"))
+    )
+    final_side = (final_verdict or {}).get("side")
+    if final_side in {"long", "short", "neutral"}:
+        # Directional text and the primary/backup side must follow the same
+        # authority as execution prices; callers may still pass legacy values.
+        direction = final_side
+        bearish = final_side == "short"
+        bias = _bias_label(direction, status)
+        dir_a = "空" if bearish else "多"
+        dir_b = "多" if bearish else "空"
+        dir_emoji = _dir_emoji(direction)
+    # FinalVerdict is the only execution authority.  The legacy ``st_a`` plan
+    # is still accepted for backward-compatible callers, but it must never
+    # leak into a GO-A card after the decision loop has selected/recomputed a
+    # different plan.  A malformed GO-A payload fails closed instead of
+    # falling back to stale prices.
+    execution_entry = None
+    execution_stop = None
+    execution_target = None
+    execution_rr = rr_a
+    if final_state == "GO-A" and final_executable:
+        execution_entry = (final_verdict or {}).get("entry")
+        execution_stop = (final_verdict or {}).get("stop")
+        execution_target = (final_verdict or {}).get("target")
+        try:
+            execution_rr = float((final_verdict or {}).get("rr"))
+        except (TypeError, ValueError):
+            execution_rr = rr_a
+        if any(value in (None, "", "—", "--") for value in (execution_entry, execution_stop, execution_target)):
+            final_executable = False
+            final_state = "WAIT"
+    if final_executable and final_state == "GO-A":
+        st_a = dict(st_a)
+        st_a["entry"] = execution_entry
+        st_a["stop"] = execution_stop
+        st_a["target"] = execution_target
+        st_a["rr"] = execution_rr
+        rr_a = execution_rr
+    if not final_executable:
+        final_state = "NO-GO" if final_state == "NO-GO" else "WAIT"
+    if final_state == "NO-GO" or str(status).startswith("X") or execution_rr < 2:
         action_summary = "⚠禁做 — 主线无优势或R:R不足"
         recommend_name = "⚠️主推 禁做"
-        recommend_trigger = "现价无优势"
+        recommend_trigger = "等确认后重算；现价无优势"
         recommend_exec = "不下单；等R:R≥1:2且主副指标重新共振"
         recommend_rr = "—"
-        backup_name = f"🔵观察 {dir_a}"
+        backup_name = f"🔁备选/观察 {dir_a}"
         backup_trigger = "重新站回/跌破结构位后再算"
-        backup_exec = "只做提醒，不做执行"
+        backup_exec = "仅观察条件；确认后重新计算，不显示候选价"
         backup_rr = "重算"
-    elif final_state in {"GO-A", "GO-B"} or str(status).startswith("A"):
+    elif final_state == "GO-A" and final_executable:
         action_summary = f"{dir_emoji} {bias}可执行 — 只做最推荐方案"
         recommend_name = f"⭐主推 {dir_a}"
-        recommend_trigger = f"{_price(price)}确认"
-        recommend_exec = f"{dir_a} {_price(price)} 损{_price(st_a.get('stop'))} 标{_price(st_a.get('target'))}"
-        recommend_rr = f"1:{rr_a:.1f}"
+        recommend_trigger = f"{_price(st_a.get('entry'))}确认"
+        recommend_exec = f"{dir_a} {_price(st_a.get('entry'))} 损{_price(st_a.get('stop'))} 标{_price(st_a.get('target'))}"
+        recommend_rr = f"1:{execution_rr:.1f}"
         backup_name = f"🔁备选 {dir_b}"
         backup_trigger = "主推失效后反向确认"
         backup_exec = f"{dir_b}失效路径；不与主推平权"
@@ -405,21 +466,25 @@ def render_v96_card(
         recommend_rr = "待确认"
         backup_name = f"🔁备选 {dir_b}"
         backup_trigger = "反向破位后"
-        backup_exec = f"{dir_b}方案仅作失效预案"
-        backup_rr = f"1:{rr_b:.1f}" if rr_b >= 2 else "观察"
+        backup_exec = "仅观察条件；确认后重新计算，不显示候选价"
+        backup_rr = "待重算"
 
     tf_emojis = []
     for tf in TF_ORDER:
         tf_emojis.append(f"{tf}{_tf_emoji(klines.get(tf, {}))}")
     mtf_summary = " · ".join(tf_emojis)
+    if isinstance(dual_indicator, dict) and dual_indicator.get("asset_is_crypto") is False:
+        cvd_dir = taker_dir = taker_ratio = funding_rate = fg_v = ""
     multi_src_line = _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual_indicator)
 
     lines: list[str] = []
     lines.append(f"📊 {display} · {now} · {s_emoji}{status} · {bias}")
     lines.append("【现在】结构位")
+    lines.append("")
     lines.append(_structure_table(levels_prepared, price))
     rec_name_clean = recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')
     lines.append("【做法】决策摘要")
+    lines.append("")
     lines.append("| 维度 | 内容 |")
     lines.append("|:---|:---|")
     lines.append(f"| 做法 | 只执行{rec_name_clean} · {recommend_trigger} · {recommend_rr} |")
@@ -427,6 +492,7 @@ def render_v96_card(
     lines.append("")
 
     lines.append("① 周期体温 / 多周期定位（D→4h→1h→15m→5m）")
+    lines.append("")
     lines.append("| 周期 | SVP主指标 | HALDRO副指标 | 位置 |")
     lines.append("|:---:|:---|:---|:---|")
     main_tf = _main_tf(symbol)
@@ -438,6 +504,7 @@ def render_v96_card(
     lines.append("")
 
     lines.append("② 关键位 / 结构关键位")
+    lines.append("")
     lines.append("| 结构位 | 价格 | 用法 | 距现价 |")
     lines.append("|:---|:---:|:---|---:|")
     for item in levels_prepared[:6]:
@@ -448,6 +515,7 @@ def render_v96_card(
     lines.append("")
 
     lines.append("③ 多源验证 / 双指标")
+    lines.append("")
     lines.append("| 能力 | 读数 | 裁决 |")
     lines.append("|:---|:---|:---|")
     lines.append(f"| SVP主驾驶 | {_cell(svp_short)} | 结构/入场/止损/目标优先 |")
@@ -455,9 +523,20 @@ def render_v96_card(
     lines.append(f"| 订单流 | {_cell(multi_src_line)} | CVD/OI不配则降级 |")
     if isinstance(dual_indicator, dict) and dual_indicator.get("haldro_quality"):
         lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:34]} | 覆盖不足不追 |")
+    if isinstance(source_matrix, list):
+        for source in source_matrix:
+            if not isinstance(source, dict):
+                continue
+            label = _cell(source.get("label") or source.get("id") or "来源")
+            status = _cell(source.get("status") or "not_run")
+            evidence = _cell(source.get("evidence") or "—")[:24]
+            usage = "已入FinalVerdict" if source.get("entered_final_verdict") else "仅展示/辅助"
+            impact = _cell(source.get("impact") or usage)[:28]
+            lines.append(f"| {label} | {status}·{evidence} | {usage}·{impact} |")
     lines.append("")
 
     lines.append("④ 最推荐方案")
+    lines.append("")
     lines.append("| 优先级 | 条件 | 动作 | R:R |")
     lines.append("|:---|:---|---|---:|")
     lines.append(f"| {recommend_name} | {_cell(recommend_trigger)} | {_cell(recommend_exec)} | {recommend_rr} |")

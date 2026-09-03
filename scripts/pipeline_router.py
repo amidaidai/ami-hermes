@@ -6,7 +6,7 @@ v1.1 (2026-06-29): 五层TF统一(D/4h/1h/15m/5m)·cron_read捷径·步数精简
 
 用法:
     from pipeline_router import route_pipeline, timeframe_info, pipeline_summary
-    steps = route_pipeline("BTCUSDT")   # → 10步: tv/binance/cg_pro/macro/x_sent/cron_read/cvd/depth/corr/card
+    steps = route_pipeline("BTCUSDT")   # → 15步: 采集/验证/引擎/风控/出卡
     steps = route_pipeline("XAUUSD")    # → 8步: tv/macro/x_sent/cron_read/cvd/corr/gold_macro/card
     steps = route_pipeline("EURUSD")    # → 7步: tv/macro/x_sent/cron_read/corr/forex_rate/card
     tfinfo = timeframe_info("BTCUSDT")  # → {'layers': ['D','4h','1h','15m','5m'], 'main':'15m', 'screenshot':'15m'}
@@ -14,10 +14,15 @@ v1.1 (2026-06-29): 五层TF统一(D/4h/1h/15m/5m)·cron_read捷径·步数精简
 
 import sys
 import re
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+import hashlib
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
+_stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+if callable(_stderr_reconfigure):
+    _stderr_reconfigure(encoding="utf-8", errors="replace")
 
 
 def _asset_class(symbol: str) -> str:
@@ -93,6 +98,13 @@ STEPS = {
     "cvd":      {"label": "CVD订单流",   "desc": "量价背离/吸收/FVG",                   "assets": {"crypto", "gold"}},
     "depth":    {"label": "深度数据",     "desc": "挂单墙/清算池",                       "assets": {"crypto"}},
     "corr":     {"label": "跨资产相关",   "desc": "BTC-SPX-XAU-DXY 相关性矩阵(FnanceKit)", "assets": {"crypto", "gold", "forex", "stock", "futures"}},
+    # Crypto Full 的固定15步中，以下是实际执行器内部的决策阶段；
+    # 它们不是空占位，auto_card 会在相应数据/裁决生成后写入完成度审计。
+    "engine":   {"label": "核心模型引擎", "desc": "VWAP/EMA/CVD + 多模型候选",           "assets": {"crypto"}},
+    "regime":   {"label": "市场体制",     "desc": "闭柱特征/体制分类/模型适配",             "assets": {"crypto"}},
+    "dual":     {"label": "双指标确认",   "desc": "SVP主指标 + AggVol/HALDRO副指标",        "assets": {"crypto"}},
+    "advanced": {"label": "高级订单流",   "desc": "吸收/FVG/OB/共振门控",                   "assets": {"crypto"}},
+    "risk":     {"label": "FinalVerdict风控", "desc": "R:R/风险宪法/唯一执行裁决",            "assets": {"crypto"}},
     "card":     {"label": "输出分析卡",   "desc": "结构化分析卡输出",                    "assets": {"crypto", "gold", "forex", "stock", "futures", "option"}},
     "gold_macro":{"label":"黄金宏观",     "desc": "DXY/TIP/GLD/GDX/白银比·央行黄金储备·金银比", "assets": {"gold"}},
     "fmp":      {"label": "FMP基本面",   "desc": "PE/市值/财报/板块",                    "assets": {"stock"}},
@@ -137,6 +149,79 @@ ASSET_STEP_DESCRIPTIONS = {
     },
 }
 
+# Multi-asset collection and cross-validation contract. X is evidence only.
+ASSET_PROFILES = {
+    "crypto": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "AggVol", "Binance Futures", "CoinGecko", "macro", "Deribit"]},
+    "gold": {"primary_timeframe": "5m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "Jin10", "DXY", "US10Y", "GLD/GDX/TIP", "COT"]},
+    "forex": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "Jin10", "DXY", "central-bank/rates", "correlated pairs"]},
+    "stock": {"primary_timeframe": "1h", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "FinanceKit", "SEC/earnings", "sector rotation", "options chain"]},
+    "futures": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "futures quote", "inventory/calendar", "DXY/rates", "related commodity"]},
+    "option": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["underlying TV", "options chain", "IV/Greeks", "OI/PCR", "event calendar"]},
+}
+for _profile in ASSET_PROFILES.values():
+    _profile.update({"x_model_role": "sentiment_catalyst_only", "forbidden_overrides": ["final_verdict", "entry", "stop", "target"]})
+
+
+def asset_analysis_profile(symbol: str) -> dict:
+    asset_class = _asset_class(symbol)
+    profile = dict(ASSET_PROFILES.get(asset_class, ASSET_PROFILES["futures"]))
+    profile["asset_class"] = asset_class
+    return profile
+
+
+def x_model_can_override_final_verdict() -> bool:
+    return False
+
+
+MODE_SPECS = {
+    "quick": {
+        "refresh_scope": "execution_only",
+        "requires_new_screenshot": True,
+        "card": "snapshot",
+        "required_output": ["price", "primary_indicator", "cross_validation", "trigger_or_blocker"],
+    },
+    "inherit": {
+        "refresh_scope": "execution_plus_context",
+        "requires_new_screenshot": True,
+        "card": "delta",
+        "required_output": ["what_changed", "inherited_context", "price", "cross_validation", "trigger_or_blocker"],
+    },
+    # 对话层称为“标准”；保留 inherit 作为内部兼容别名。
+    "standard": {
+        "refresh_scope": "execution_plus_context",
+        "requires_new_screenshot": True,
+        "card": "delta",
+        "required_output": ["what_changed", "inherited_context", "price", "cross_validation", "trigger_or_blocker"],
+    },
+    "full": {
+        "refresh_scope": "all_sources",
+        "requires_new_screenshot": True,
+        "card": "full",
+        "required_output": ["five_timeframes", "key_levels", "source_matrix", "final_verdict", "pipeline_audit"],
+    },
+    "monitor": {
+        "refresh_scope": "event_only",
+        "requires_new_screenshot": False,
+        "card": "none",
+        "required_output": ["event_id", "event_type", "analysis_required"],
+    },
+}
+
+
+# Public crypto Full contract: ten collection/output stages plus five
+# decision stages. All fallbacks should use this tuple instead of copying a
+# stale prose list.
+CRYPTO_FULL_PIPELINE = (
+    "tv", "binance", "cg_pro", "macro", "x_sent", "cron_read",
+    "cvd", "depth", "corr", "engine", "regime", "dual",
+    "advanced", "risk", "card",
+)
+
+
+def analysis_mode_spec(mode: str) -> dict:
+    """Return the required refresh and output contract for an analysis tier."""
+    return dict(MODE_SPECS.get(mode, MODE_SPECS["quick"]))
+
 
 def step_description(step: str, asset_class: str) -> str:
     return str(ASSET_STEP_DESCRIPTIONS.get(step, {}).get(asset_class) or STEPS[step]["desc"])
@@ -152,35 +237,42 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
     """返回应执行的步骤ID列表。
 
     mode:
-      'full' — 完整分析（8步加密 / 5-6步其他）
-      'quick' — 快速更新（4步核心）
+      'full' — 完整分析（加密固定15步；其他资产按适用步骤路由）
+      'quick' — 快速更新（3步核心）
+      'inherit' — 继承高周期，只刷新主执行/触发与加密衍生品
       'monitor' — 监控模式（仅关键数据）
     """
     ac = _asset_class(symbol)
 
-    if mode == "quick":
-        # 快速模式: TV五层 + 宏观 + card
+    if mode in ("quick", "inherit", "standard"):
+        # 快速/继承不重拉宏观与X情绪；高周期上下文由调用方从最近一次完整卡继承。
+        # TV步骤的具体周期由执行器决定：crypto=15m+5m，gold=5m+触发周期。
         quick_map = {
-            "crypto":  ["tv", "binance", "macro", "x_sent", "card"],
-            "gold":    ["tv", "macro", "x_sent", "card"],
-            "forex":   ["tv", "macro", "x_sent", "card"],
-            "stock":   ["tv", "macro", "x_sent", "card"],
-            "futures": ["tv", "macro", "x_sent", "card"],
+            "crypto":  ["tv", "binance", "card"],
+            "gold":    ["tv", "card"],
+            "forex":   ["tv", "card"],
+            "stock":   ["tv", "card"],
+            "futures": ["tv", "card"],
             "option":  ["tv", "card"],
-            "other":   ["tv", "macro", "x_sent", "card"],
+            "other":    ["tv", "card"],
         }
         return [s for s in quick_map.get(ac, ["tv", "card"]) if s in STEPS]
 
     if mode == "monitor":
         mon_map = {
-            "crypto": ["tv", "binance", "macro", "card"],
-            "gold":   ["tv", "macro", "card"],
-            "forex":  ["tv", "macro", "card"],
-            "stock":  ["tv", "macro", "fmp", "card"],
-            "futures":["tv", "macro", "x_sent", "card"],
-            "option": ["tv", "card"],
+            # Monitor is an event-discovery mode. It must not render a
+            # directional card or be mistaken for an analysis request.
+            "crypto": ["binance"],
+            "gold":   [],
+            "forex":  [],
+            "stock":  [],
+            "futures":[],
+            "option": [],
         }
-        return [s for s in mon_map.get(ac, ["tv", "card"]) if s in STEPS]
+        return [s for s in mon_map.get(ac, []) if s in STEPS]
+
+    if mode == "full" and ac == "crypto":
+        return list(CRYPTO_FULL_PIPELINE)
 
     # full mode: 所有适用于该资产类别的步骤
     ordered = [
@@ -193,6 +285,11 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
         "cvd",         # ⑦ CVD订单流（加密/黄金）
         "depth",       # ⑧ 深度数据（仅加密）
         "corr",        # ⑨ 跨资产相关性
+        "engine",      # ⑩ 核心模型引擎
+        "regime",      # ⑪ 市场体制
+        "dual",        # ⑫ 双指标确认
+        "advanced",    # ⑬ 高级订单流
+        "risk",        # ⑭ 风控与FinalVerdict
         "gold_macro",  # ⑩ 黄金宏观（仅黄金：TIP/GLD/GDX/白银比）
         "forex_rate",  # ⑩ 外汇利率（仅外汇：利差/央行窗口）
         "fmp",         # ⑪ FMP基本面（仅股票）
@@ -200,6 +297,162 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
         "card",        # 🔚 出卡
     ]
     return [s for s in ordered if s in STEPS and ac in STEPS[s]["assets"]]
+
+
+def crypto_full_pipeline() -> list[str]:
+    """Return the canonical fifteen-stage crypto Full route.
+
+    Keep this helper as the single fallback source for callers that cannot
+    import/execute the normal router path.  It intentionally returns a copy
+    so callers cannot mutate the contract for later analyses.
+    """
+    return list(CRYPTO_FULL_PIPELINE)
+
+
+def resolve_analysis_mode(request: str, *, has_context: bool = False) -> str:
+    """把自然语言请求映射到 quick/standard/full 三档。
+
+    标准档在对话层固定对应“现在呢/继续/接着看/更新”等追踪请求，
+    不因上下文是否存在而偷偷降为 quick；内部仍接受 inherit 作为兼容名。
+    ``has_context`` 只供调用方判断继承内容是否可用，不改变用户所选档位。
+    """
+    text = str(request or "").strip().lower()
+    if any(k in text for k in ("分析", "全面", "全周期", "深度", "重新从高周期", "完整卡")):
+        return "full"
+    if any(k in text for k in ("现在呢", "继续", "接着", "更新", "继承")):
+        return "standard"
+    return "quick"
+
+
+def context_file(symbol: str) -> Path:
+    """返回最近一次分析上下文文件路径；只存摘要/时间，不存凭据。"""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(symbol).upper())
+    return Path.home() / "AppData/Local/hermes/data" / f"analysis_context_{safe}.json"
+
+
+def context_is_fresh(symbol: str, *, max_age_hours: float = 4.0) -> bool:
+    """判断是否可以继承高周期背景。"""
+    p = context_file(symbol)
+    try:
+        d = __import__("json").loads(p.read_text(encoding="utf-8"))
+        ts = float(d.get("updated_epoch", 0))
+        age = datetime.now(timezone.utc).timestamp() - ts
+        return ts > 0 and -60.0 <= age <= max_age_hours * 3600
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def load_analysis_context(symbol: str, *, max_age_hours: float = 4.0) -> dict | None:
+    """读取新鲜上下文；过期或品种不匹配时返回 None。"""
+    p = context_file(symbol)
+    try:
+        data = __import__("json").loads(p.read_text(encoding="utf-8"))
+        if str(data.get("symbol", "")).upper() != str(symbol).upper():
+            return None
+        ts = float(data.get("updated_epoch", 0))
+        age = datetime.now(timezone.utc).timestamp() - ts
+        if ts <= 0 or age < -60.0 or age > max_age_hours * 3600:
+            return None
+        return data
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _compact_timeframes(timeframes: dict | None) -> dict:
+    """Keep only the small, decision-relevant part of a TF snapshot."""
+    if not isinstance(timeframes, dict):
+        return {}
+    allowed = {
+        "open", "close", "high", "low", "price", "change_pct", "poc", "vah", "val",
+        "vwap", "npoc", "direction", "description", "tv_source", "tv_timestamp",
+        "tv_identity_valid", "tv_ohlcv_complete", "tv_action_grid",
+    }
+    compact = {}
+    for tf, record in timeframes.items():
+        if not isinstance(record, dict):
+            continue
+        compact[tf] = {key: record[key] for key in allowed if key in record}
+    return compact
+
+
+def save_analysis_context(
+    symbol: str,
+    *,
+    mode: str,
+    price=None,
+    levels=None,
+    timeframes: dict | None = None,
+    tv_five_tf_status: dict | None = None,
+    macro: dict | None = None,
+    final_verdict: dict | None = None,
+    primary_action: dict | None = None,
+    source_matrix: list[dict] | None = None,
+    keylevels_revision: str | None = None,
+) -> Path:
+    """保存可继承的轻量上下文，供“现在呢”避免重扫高周期。"""
+    p = context_file(symbol)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    compact_timeframes = _compact_timeframes(timeframes)
+    now_utc = datetime.now(timezone.utc)
+    payload = {
+        "context_schema_version": 2,
+        "symbol": symbol,
+        "mode": mode,
+        "updated_epoch": now_utc.timestamp(),
+        "updated_at": now_utc.astimezone(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+        "price": price,
+        "levels": levels or [],
+    }
+    if compact_timeframes:
+        payload["timeframes"] = compact_timeframes
+        payload["timeframes_complete"] = len(compact_timeframes) == 5
+    if isinstance(tv_five_tf_status, dict):
+        payload["tv_five_tf_verified"] = bool(tv_five_tf_status.get("usable"))
+        payload["tv_five_tf_source"] = tv_five_tf_status.get("source")
+    if isinstance(macro, dict) and macro:
+        payload["macro"] = dict(macro)
+    if isinstance(final_verdict, dict) and final_verdict:
+        final_keys = (
+            "state", "executable", "side", "grade", "model_id", "rr", "risk_usd",
+            "blockers", "warnings", "reason", "watch_side", "watch_entry",
+        )
+        payload["final_verdict"] = {
+            key: final_verdict.get(key)
+            for key in final_keys
+            if key in final_verdict
+        }
+    if isinstance(primary_action, dict) and primary_action:
+        action_keys = (
+            "state", "side", "grade", "model_id", "direction_text", "execution",
+            "reason", "watch_entry", "rr",
+        )
+        payload["primary_action"] = {
+            key: primary_action.get(key)
+            for key in action_keys
+            if key in primary_action
+        }
+    if isinstance(source_matrix, list):
+        payload["source_matrix"] = [
+            {
+                key: row.get(key)
+                for key in ("id", "status", "role", "entered_final_verdict", "evidence", "conflict", "timestamp", "source_error", "payload_present", "requested")
+                if key in row
+            }
+            for row in source_matrix
+            if isinstance(row, dict)
+        ]
+    if keylevels_revision is None:
+        try:
+            config_path = Path(__file__).resolve().parents[1] / "data" / "keylevels_config.json"
+            keylevels_revision = hashlib.sha256(config_path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            keylevels_revision = None
+    if keylevels_revision:
+        payload["keylevels_revision"] = keylevels_revision
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from atomic_json import atomic_write_json
+    atomic_write_json(p, payload)
+    return p
 
 
 def pipeline_summary(symbol: str, mode: str = "full") -> str:
@@ -239,7 +492,7 @@ if __name__ == "__main__":
             tfinfo = timeframe_info(sym)
             print(f"  五层TF: {'→'.join(tfinfo['layers'])} · 主周期={tfinfo['main']} · 截图={tfinfo['screenshot']}")
             sc = step_counts(sym)
-            print(f"  执行{sc['included']}步 · 跳过{sc['skipped']}步")
+            print(f"  当前模式执行{len(route_pipeline(sym, mode))}步 · 全量适用步骤{sc['included']}步")
             print()
             print("---")
             print()

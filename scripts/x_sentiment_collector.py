@@ -5,6 +5,9 @@ X情绪采集器 v1.1 — 表格化输出
 import json, sys, os
 from datetime import datetime, timezone, timedelta
 import urllib.request
+from pathlib import Path
+from atomic_json import atomic_write_json
+from source_contract import attach_source_contract
 
 TZ = timezone(timedelta(hours=8))
 UA = "Hermes/1.0"
@@ -94,7 +97,7 @@ def main():
     # 降噪：去重时不要把时间戳纳入 hash；同一情绪结构最多 2 小时强制推一次。
     dedup_key = json.dumps({"fear_greed": fg_val, "mood": mood, "fomo_score": fomo, "trending": top}, ensure_ascii=False, sort_keys=True)
     try:
-        from alert_dedup import should_send
+        should_send = __import__("alert_dedup").should_send
         if should_send("x_sentiment", dedup_key, force_every_seconds=7200):
             print(output)
             # v9.8: 同步推 TG 真表格（原本只落盘静默）
@@ -108,20 +111,26 @@ def main():
         print(output)
     
     # 保存 — 两处落盘
-    result = {"ts": now.isoformat(), "fear_greed": fg_val, "fear_greed_label": mood, "fomo_score": fomo, "trending": top}
+    source_error = "upstream_error" if trending.get("error") or fg.get("classification") == "Error" else None
+    result = attach_source_contract(
+        {"ts": now.isoformat(), "fear_greed": fg_val, "fear_greed_label": mood, "fomo_score": fomo, "trending": top},
+        "x_sentiment",
+        status="live" if source_error is None else "unavailable",
+        captured_at=now,
+        symbol="BTCUSDT",
+        error=source_error,
+    )
     
     # 落盘1: hermes data目录（现有路径）
     data_dir1 = os.path.expanduser("~/AppData/Local/hermes/data")
     os.makedirs(data_dir1, exist_ok=True)
-    with open(os.path.join(data_dir1, "sentiment.json"), "w") as f:
-        json.dump(result, f, ensure_ascii=False)
+    atomic_write_json(Path(os.path.join(data_dir1, "sentiment.json")), result)
     
     # 落盘2: 项目data目录（cron_read 读取）
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir2 = os.path.join(script_dir, "..", "data")
     os.makedirs(data_dir2, exist_ok=True)
-    with open(os.path.join(data_dir2, "x_sentiment.json"), "w") as f:
-        json.dump(result, f, ensure_ascii=False)
+    atomic_write_json(Path(os.path.join(data_dir2, "x_sentiment.json")), result)
 
 
 if __name__ == "__main__":

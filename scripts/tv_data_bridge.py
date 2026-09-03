@@ -20,14 +20,72 @@ TV需以CDP模式运行 (端口9222)，否则fallback到已有cache。
 缓存: data/tv_dmi_cache.json
 """
 
-import subprocess, json, sys, os, time
+import subprocess, json, re, sys, os, time, threading
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+
+from atomic_json import atomic_write_json
 
 TZ = timezone(timedelta(hours=8))
 ROOT = Path(os.environ.get("HERMES_ROOT", "D:/Hermes agent"))
 TV_CLI = ROOT / "tools" / "tradingview-mcp" / "src" / "cli" / "index.js"
 CACHE = ROOT / "data" / "tv_dmi_cache.json"
+TV_LOCK = ROOT / "data" / ".tv_collection.lock"
+TV_LOCK_STALE_SECONDS = 300
+_LOCK_LOCAL = threading.local()
+
+
+@contextmanager
+def tv_collection_lock(timeout: float = 30.0):
+    """Serialize shared TradingView chart mutations across BTC/XAU jobs."""
+    depth = getattr(_LOCK_LOCAL, "depth", 0)
+    if depth:
+        _LOCK_LOCAL.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LOCK_LOCAL.depth -= 1
+        return
+    deadline = time.monotonic() + timeout
+    acquired = False
+    while time.monotonic() < deadline:
+        try:
+            TV_LOCK.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(TV_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()}\n".encode())
+            os.close(fd)
+            acquired = True
+            break
+        except FileExistsError:
+            try:
+                owner_alive = False
+                owner = ""
+                try:
+                    owner = TV_LOCK.read_text(encoding="utf-8").strip().splitlines()[0]
+                    if owner.isdigit() and int(owner) != os.getpid():
+                        os.kill(int(owner), 0)
+                        owner_alive = True
+                except (FileNotFoundError, IndexError, OSError, ValueError, SystemError):
+                    owner_alive = False
+                stale = time.time() - TV_LOCK.stat().st_mtime > TV_LOCK_STALE_SECONDS
+                if not owner_alive and (stale or owner):
+                    TV_LOCK.unlink()
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.1)
+    if not acquired:
+        raise TimeoutError("TradingView shared chart lock timeout")
+    _LOCK_LOCAL.depth = 1
+    try:
+        yield
+    finally:
+        _LOCK_LOCAL.depth = 0
+        try:
+            TV_LOCK.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _norm_symbol_for_cache(symbol: str) -> str:
@@ -73,7 +131,18 @@ def _num(v):
     if v is None:
         return None
     try:
-        return float(str(v).replace(",", "").replace("\u202f", "").replace(" ", ""))
+        if isinstance(v, (int, float)):
+            return float(v)
+        text = str(v).replace("−", "-").replace(",", "")
+        text = text.replace("\u202f", "").replace("\u00a0", "").replace(" ", "").strip()
+        match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))([KMBkmb])?", text)
+        if not match:
+            return None
+        value = float(match.group(1))
+        multiplier = {"K": 1_000.0, "M": 1_000_000.0, "B": 1_000_000_000.0}.get(
+            (match.group(2) or "").upper(), 1.0
+        )
+        return value * multiplier
     except ValueError:
         return None
 
@@ -157,8 +226,18 @@ def read_quote(symbol="BINANCE:BTCUSDT.P"):
     if not ok:
         return None
     try:
-        return float(out.strip().split()[-1])
-    except:
+        payload = json.loads(out)
+        if isinstance(payload, dict):
+            value = payload.get("last") or payload.get("close") or payload.get("price")
+            parsed = _num(value)
+            if parsed is not None and parsed > 0:
+                return parsed
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        parsed = _num(out.strip().split()[-1])
+        return parsed if parsed and parsed > 0 else None
+    except (IndexError, TypeError, ValueError):
         return None
 
 
@@ -204,11 +283,10 @@ def load_cache():
 
 def save_cache(data):
     """写入缓存。"""
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(CACHE, data)
 
 
-def collect_and_cache(alert_mode=False, expect_symbol=None):
+def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
     """
     采集TV数据 → 写缓存。
 
@@ -265,6 +343,34 @@ def collect_and_cache(alert_mode=False, expect_symbol=None):
     old_cache = load_cache()
     old_grade = old_cache.get("grade", "")
 
+    # A chart can return generic Volume/Plot values while the required SVP
+    # study is absent or still recalculating.  Do not stamp that partial read
+    # as fresh TV authority.  Keep an old cache only as explicitly stale data.
+    main_indicator_keys = {
+        "poc_price", "vah_price", "val_price", "s_vwap", "mcp_side_code",
+        "mcp_grade_code", "mcp_setup_score", "mcp_entry_price",
+    }
+    has_main_indicator = bool(main_indicator_keys.intersection(indicators))
+    if not dmi and not has_main_indicator:
+        if old_cache:
+            old_cache["fresh"] = False
+            old_cache["stale"] = True
+            old_cache["stale_reason"] = "SVP主指标行动格/Data Window缺失"
+            save_cache(old_cache)
+            return old_cache
+        return None
+    required_action_rows = {"结论", "方向", "路径", "风控"}
+    action_table_complete = required_action_rows.issubset(set(dmi))
+    if not action_table_complete or quote is None:
+        reason = "SVP行动格核心行或真实报价缺失"
+        if old_cache:
+            old_cache["fresh"] = False
+            old_cache["stale"] = True
+            old_cache["stale_reason"] = reason
+            save_cache(old_cache)
+            return old_cache
+        return None
+
     # 构建缓存
     poc = _num(indicators.get("poc_price"))
     vah = _num(indicators.get("vah_price"))
@@ -302,6 +408,10 @@ def collect_and_cache(alert_mode=False, expect_symbol=None):
         "vah": vah,
         "val": val,
         "action_grid": action_grid,
+        "identity_valid": True,
+        "action_table_complete": action_table_complete,
+        "source_quality": "A",
+        "source_quality_reason": "symbol/timeframe gate and core action rows passed",
     }
     save_cache(cache)
 
@@ -315,6 +425,12 @@ def collect_and_cache(alert_mode=False, expect_symbol=None):
             print(f"🚨 TV DMI: {grade} · {treatment} · CVD{cvd_state} · {position}{price_str}")
 
     return cache
+
+
+def collect_and_cache(alert_mode=False, expect_symbol=None):
+    """Collect one complete chart read under the shared-chart lease."""
+    with tv_collection_lock():
+        return _collect_and_cache_locked(alert_mode=alert_mode, expect_symbol=expect_symbol)
 
 
 if __name__ == "__main__":

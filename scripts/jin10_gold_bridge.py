@@ -21,10 +21,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
+_stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+if callable(_stderr_reconfigure):
+    _stderr_reconfigure(encoding="utf-8", errors="replace")
 
 # ── 路径设置 ──
 ROOT = Path("D:/Hermes agent")
@@ -343,7 +345,7 @@ def gold_macro_context() -> str:
     quote = fetch_gold_quote()
     price = quote.get("price")
     if price:
-        change = quote.get("change_pct")
+        change: Any = quote.get("change_pct")
         try:
             change_f = float(change)
             change_str = f" ({change_f:+.2f}%)"

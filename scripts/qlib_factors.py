@@ -4,8 +4,13 @@ QLib启发式因子库 v1.1 — 表格化输出
 """
 from __future__ import annotations
 import json, sys, os, math
+from typing import Any
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 import urllib.request
+
+from atomic_json import atomic_write_json
+from source_contract import attach_source_contract
 
 TZ = timezone(timedelta(hours=8))
 UA = "Hermes/1.0"
@@ -40,7 +45,7 @@ def fetch_klines(symbol="BTCUSDT", interval="1h", limit=200) -> list:
 
 def _sma(values: list, period: int) -> list:
     if len(values) < period: return [None] * len(values)
-    result = [None] * (period - 1)
+    result: list[float | None] = [None] * (period - 1)
     window = sum(values[:period])
     result.append(window / period)
     for i in range(period, len(values)):
@@ -52,32 +57,32 @@ def _sma(values: list, period: int) -> list:
 def _ema(values: list, period: int) -> list:
     if len(values) < period: return [None] * len(values)
     k = 2.0 / (period + 1)
-    result = [None] * len(values)
+    result: list[float | None] = [None] * len(values)
     result[period - 1] = sum(values[:period]) / period
     for i in range(period, len(values)):
-        result[i] = values[i] * k + result[i - 1] * (1 - k)
+        result[i] = values[i] * k + (result[i - 1] or 0.0) * (1 - k)
     return result
 
 
 def _std(values: list, period: int) -> list:
     sma = _sma(values, period)
-    result = [None] * len(values)
+    result: list[float | None] = [None] * len(values)
     for i in range(period - 1, len(values)):
-        avg = sma[i]
+        avg = sma[i] or 0.0
         sq_sum = sum((v - avg) ** 2 for v in values[i - period + 1:i + 1])
         result[i] = math.sqrt(sq_sum / period)
     return result
 
 
 def _max(values: list, period: int) -> list:
-    result = [None] * len(values)
+    result: list[float | None] = [None] * len(values)
     for i in range(period - 1, len(values)):
         result[i] = max(values[i - period + 1:i + 1])
     return result
 
 
 def _min(values: list, period: int) -> list:
-    result = [None] * len(values)
+    result: list[float | None] = [None] * len(values)
     for i in range(period - 1, len(values)):
         result[i] = min(values[i - period + 1:i + 1])
     return result
@@ -145,11 +150,13 @@ def compute_factors(klines: list) -> dict:
     tr_vals = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]) if i > 0 else 0, abs(lows[i] - closes[i - 1]) if i > 0 else 0) for i in range(n)]
     factors["ATR"] = last(_ema(tr_vals, 14))
     sma20, std20 = _sma(closes, 20), _std(closes, 20)
-    factors["BBW"] = last(std20) / (last(sma20) + 1e-10) if last(std20) and last(sma20) else None
+    std_last, sma_last = last(std20), last(sma20)
+    factors["BBW"] = std_last / (sma_last + 1e-10) if std_last is not None and sma_last is not None else None
     
     # Volume
     vol_ema5, vol_ema20 = _ema(volumes, 5), _ema(volumes, 20)
-    factors["VRATIO"] = last(vol_ema5) / (last(vol_ema20) + 1e-10) if last(vol_ema5) else None
+    vol5_last, vol20_last = last(vol_ema5), last(vol_ema20)
+    factors["VRATIO"] = vol5_last / (vol20_last + 1e-10) if vol5_last is not None and vol20_last is not None else None
     
     # Composite signal
     score = 0
@@ -226,7 +233,7 @@ def main():
         from telegram_reliable import push_tg_rich
         # 常态也推，dedup 限频(1h)，避免完全静默
         try:
-            from alert_dedup import dedup_wrapper
+            dedup_wrapper = __import__("alert_dedup").dedup_wrapper
             dedup_wrapper("qlib_factors", output, force_seconds=3600)
         except ImportError:
             print(output)
@@ -236,18 +243,22 @@ def main():
         print(f"⚠ 量化因子RichMarkdown推送失败: {_te}", file=sys.stderr)
 
     # 保存 — 双落盘
-    result_json = {"ts": now.isoformat(), "price": price, "factors": {k: (round(v, 4) if isinstance(v, float) and not math.isnan(v) else v) for k, v in f.items()}}
+    result_json = attach_source_contract(
+        {"ts": now.isoformat(), "price": price, "factors": {k: (round(v, 4) if isinstance(v, float) and not math.isnan(v) else v) for k, v in f.items()}},
+        "qlib_factors",
+        status="live",
+        captured_at=now,
+        symbol="BTCUSDT",
+    )
 
     # 落盘1: hermes data
-    with open(os.path.join(DATA_DIR, "qlib_factors.json"), "w") as fh:
-        json.dump(result_json, fh, ensure_ascii=False)
+    atomic_write_json(Path(os.path.join(DATA_DIR, "qlib_factors.json")), result_json)
     
     # 落盘2: 项目data（cron_read 读取）
     script_dir = os.path.dirname(os.path.abspath(__file__))
     proj_data = os.path.join(script_dir, "..", "data")
     os.makedirs(proj_data, exist_ok=True)
-    with open(os.path.join(proj_data, "qlib_factors.json"), "w") as fh:
-        json.dump(result_json, fh, ensure_ascii=False)
+    atomic_write_json(Path(os.path.join(proj_data, "qlib_factors.json")), result_json)
     
     return 0
 

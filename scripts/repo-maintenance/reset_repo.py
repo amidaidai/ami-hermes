@@ -1,4 +1,8 @@
+import os
 import subprocess, json, sys
+
+if os.environ.get("TANGXI_ENABLE_DESTRUCTIVE_REPO_RESET") != "1":
+    raise SystemExit("BLOCKED: destructive repository reset requires explicit operator authorization")
 
 # Read token from the temp file
 with open(r"C:\Users\Administrator\Desktop\.gh_token.txt", "r") as f:

@@ -108,8 +108,165 @@ def test_all_hard_gates_pass_returns_go_a():
     assert all(gate["status"] == "green" for gate in out.gates.values())
 
 
+def test_go_a_missing_execution_prices_fails_closed_to_wait():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(entry=None, stop=None, target=None),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "WAIT"
+    assert out.executable is False
+    assert out.entry is None and out.stop is None and out.target is None
+    assert "execution_contract" in out.blockers
+
+
+def test_go_a_invalid_execution_geometry_fails_closed_to_wait():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(stop=102.0),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "WAIT"
+    assert out.executable is False
+    assert out.entry is None and out.stop is None and out.target is None
+    assert "execution_contract" in out.blockers
+
+
+def test_go_a_uses_geometric_rr_instead_of_trusting_claimed_rr():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(target=101.0, rr=2.5),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "WAIT"
+    assert out.executable is False
+    assert out.rr == 0.5
+    assert "rr_ratio" in out.blockers
+
+
+def test_short_execution_uses_short_geometry_and_geometric_rr():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(direction="short", grade="A空", stop=102.0, target=94.0, rr=99.0),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "GO-A"
+    assert out.side == "short"
+    assert out.rr == 3.0
+
+
+def test_nonfinite_execution_price_fails_closed():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(entry="nan"),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "WAIT"
+    assert out.executable is False
+    assert "execution_contract" in out.blockers
+
+
+def test_zero_risk_budget_cannot_produce_go_a():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(), _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 0.0},
+    )
+
+    assert out.state == "NO-GO"
+    assert out.executable is False
+    assert "risk_constitution" in out.blockers
+
+
+def test_wait_keeps_observation_fields_separate_from_execution_tuple():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(grade="C等待", direction="short"),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "WAIT"
+    assert out.side == "neutral"
+    assert out.entry is None and out.stop is None and out.target is None
+    assert out.watch_side == "short"
+    assert out.watch_entry == 100.0
+
+
+def test_required_five_timeframe_snapshot_is_a_hard_data_gate():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(tv_five_tf_required=True, tv_five_tf_verified=False),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "NO-GO"
+    assert out.executable is False
+    assert "tv_five_tf" in out.blockers
+    assert out.gates["tv_five_tf"]["status"] == "red"
+
+
+def test_cross_source_hard_blockers_are_consumed_by_final_verdict():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(cross_source_hard_blockers=["tv_main"], cross_source_warnings=["cg_pro"]),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+
+    assert out.state == "NO-GO"
+    assert "cross_source" in out.blockers
+    assert out.gates["cross_source"]["status"] == "red"
+    assert "cross_source:cg_pro" in out.warnings
+
+
 def test_unknown_legacy_model_is_inferred_from_active_zone_quality():
     main = _main(model_id="无", mcp_fvg_quality_score=82, mcp_ob_quality_score=50)
     out = resolve_final_verdict("BTCUSDT", main, _dual(), regime=_trend())
     assert out.model_id == "fvg_pullback"
     assert out.state == "GO-A"
+
+
+def test_unclosed_svp_action_text_forces_wait_even_when_legacy_grade_is_a():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(conclusion="⚠未收线 · 等收线", treatment="等收线", action="A空"),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+    assert out.state == "WAIT"
+    assert not out.executable
+    assert out.entry is None and out.stop is None and out.target is None
+    assert "svp_wait_language" in out.blockers
+
+
+def test_svp_conflict_text_forces_wait_even_when_legacy_grade_is_a():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(conclusion="A空 ⚠冲突", path="等解除"),
+        _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+    assert out.state == "WAIT"
+    assert not out.executable
+    assert "svp_wait_language" in out.blockers

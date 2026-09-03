@@ -8,6 +8,7 @@
 import json, urllib.request, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from source_contract import write_source_artifact
 
 TZ = timezone(timedelta(hours=8))
 CACHE_FILE = Path.home() / "AppData/Local/hermes/data/event_cache.json"
@@ -131,7 +132,13 @@ def refresh_event_cache() -> bool:
             "events": high_impact[:20],
         }
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_source_artifact(
+            str(CACHE_FILE),
+            "event_ban_live",
+            cache,
+            status="live",
+            captured_at=cache["updated"],
+        )
         return True
     return False
 

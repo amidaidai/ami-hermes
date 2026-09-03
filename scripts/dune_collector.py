@@ -3,15 +3,19 @@
 棠溪 · Dune Analytics 链上数据采集器 v1.1 — 表格化输出
 """
 import json, time, os, urllib.request
+from typing import Any
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
+_stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+if callable(_stderr_reconfigure):
+    _stderr_reconfigure(encoding="utf-8", errors="replace")
 
 from credential_store import read_secret
+from source_contract import attach_source_contract, write_source_artifact
 
 DUNE_KEY = read_secret("dune_api_key.txt", "DUNE_API_KEY")
 DUNE_BASE = "https://api.dune.com/api/v1"
@@ -41,7 +45,7 @@ def _get_query_results(query_id: int, limit: int = 10) -> dict:
 def get_btc_flow() -> dict:
     rows = _get_query_results(QUERIES["btc_flow"], limit=6)
     if isinstance(rows, dict) and "_error" in rows: return rows
-    result = {"source": "Dune #3485694", "type": "BTC on-chain flow"}
+    result: dict[str, Any] = {"source": "Dune #3485694", "type": "BTC on-chain flow"}
     if rows:
         latest = rows[-1]
         result["period"] = latest.get("formatted_time", "")
@@ -59,7 +63,7 @@ def get_btc_flow() -> dict:
 def get_cex_netflow() -> dict:
     rows = _get_query_results(QUERIES["cex_netflow"], limit=15)
     if isinstance(rows, dict) and "_error" in rows: return rows
-    result = {"source": "Dune #1621987", "type": "CEX netflow"}
+    result: dict[str, Any] = {"source": "Dune #1621987", "type": "CEX netflow"}
     if rows:
         total_netflow, exchanges = 0, []
         for r in rows:
@@ -78,7 +82,7 @@ def get_stablecoin_supply() -> dict:
     rows = _get_query_results(QUERIES["stablecoin_supply"], limit=5)
     if isinstance(rows, dict) and "_error" in rows:
         return {"ok": False, "source": "Dune #4159727", "_note": "query may not exist"}
-    result = {"source": "Dune #4159727", "type": "Stablecoin supply"}
+    result: dict[str, Any] = {"source": "Dune #4159727", "type": "Stablecoin supply"}
     if rows: result["rows"], result["ok"] = rows[:5], True
     else: result["ok"] = False
     return result
@@ -90,17 +94,48 @@ def gather_onchain() -> dict:
         try:
             cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
             if time.time() - cache.get("ts", 0) < CACHE_TTL:
-                return cache.get("data", {})
+                return attach_source_contract(
+                    cache.get("data", {}),
+                    "dune",
+                    status="cache",
+                    captured_at=cache.get("ts"),
+                    cached=True,
+                    symbol="BTCUSDT",
+                )
         except Exception: pass
-    result = {"fetched_at": datetime.now(TZ).isoformat(timespec="seconds")}
+    result: dict[str, Any] = {"fetched_at": datetime.now(TZ).isoformat(timespec="seconds")}
     for name, fn in [("btc_flow", get_btc_flow), ("cex_netflow", get_cex_netflow)]:
         try: result[name] = fn(); time.sleep(0.5)
         except Exception as e: result[name] = {"ok": False, "_error": str(e)[:100]}
     try: time.sleep(0.5); result["stablecoin"] = get_stablecoin_supply()
     except Exception: result["stablecoin"] = {"ok": False}
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps({"ts": time.time(), "data": result}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    return result
+    captured_at = datetime.now(TZ)
+    source_ok = any(
+        bool(item.get("ok"))
+        for key in ("btc_flow", "cex_netflow", "stablecoin")
+        for item in [result.get(key)]
+        if isinstance(item, dict)
+    )
+    source_status = "live" if source_ok else "unavailable"
+    source_data = attach_source_contract(
+        result,
+        "dune",
+        status=source_status,
+        captured_at=captured_at,
+        symbol="BTCUSDT",
+        error=None if source_ok else "empty_payload",
+    )
+    stored = {"ts": captured_at.timestamp(), "data": source_data}
+    write_source_artifact(
+        str(CACHE_FILE),
+        "dune",
+        stored,
+        status=source_status,
+        captured_at=captured_at,
+        symbol="BTCUSDT",
+        error=None if source_ok else "empty_payload",
+    )
+    return source_data
 
 
 def get_onchain_summary_line() -> str:

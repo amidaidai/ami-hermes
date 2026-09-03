@@ -79,8 +79,8 @@ snap["binance_spot"] = {
     "24h_change_pct": float(bt["priceChangePercent"]) if isinstance(bt, dict) and bt.get("priceChangePercent") is not None else None,
 }
 
-cg = safe_fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true",
-    headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None)
+# TANGXI-DISABLED-NON-BINANCE 2026-08-29: api.coingecko.com (was cg = safe_fetch(...))
+cg = None
 snap["coingecko"] = {
     "price": cg.get("bitcoin", {}).get("usd") if isinstance(cg, dict) else None,
 }
@@ -162,7 +162,8 @@ if isinstance(taker, list) and taker:
 # ═══════════════════════════════════════
 # 5. 市场情绪 (恐慌贪婪指数)
 # ═══════════════════════════════════════
-fng = safe_fetch("https://api.alternative.me/fng/?limit=5")
+# TANGXI-DISABLED-NON-BINANCE 2026-08-29: api.alternative.me (was fng = safe_fetch(...))
+fng = None
 snap["fear_greed"] = {"error": "unavailable"}
 if isinstance(fng, dict) and fng.get("data"):
     items = fng["data"]
@@ -180,7 +181,8 @@ if isinstance(fng, dict) and fng.get("data"):
 xau_prices = []
 
 # 金十 Quote
-xau_jin10 = safe_fetch("https://api.jin10.com/quote/XAUUSD", timeout=10)
+# TANGXI-DISABLED-NON-BINANCE 2026-08-29: api.jin10.com (was xau_jin10 = safe_fetch(...))
+xau_jin10 = None
 if isinstance(xau_jin10, dict) and xau_jin10.get("close") and not xau_jin10.get("_error"):
     try:
         xau_prices.append({"source": "jin10", "price": float(xau_jin10["close"])})
@@ -188,7 +190,8 @@ if isinstance(xau_jin10, dict) and xau_jin10.get("close") and not xau_jin10.get(
         pass
 
 # Yahoo GC=F (黄金期货)
-xau_gc = safe_fetch("https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=2d", timeout=10)
+# TANGXI-DISABLED-NON-BINANCE 2026-08-29: query1.finance.yahoo.com (was xau_gc = safe_fetch(...))
+xau_gc = None
 if isinstance(xau_gc, dict):
     try:
         meta = xau_gc.get("chart", {}).get("result", [{}])[0].get("meta", {})
@@ -198,7 +201,8 @@ if isinstance(xau_gc, dict):
         pass
 
 # Yahoo MGC=F (微型黄金期货)
-xau_mgc = safe_fetch("https://query1.finance.yahoo.com/v8/finance/chart/MGC=F?interval=1d&range=2d", timeout=10)
+# TANGXI-DISABLED-NON-BINANCE 2026-08-29: query1.finance.yahoo.com (was xau_mgc = safe_fetch(...))
+xau_mgc = None
 if isinstance(xau_mgc, dict):
     try:
         meta = xau_mgc.get("chart", {}).get("result", [{}])[0].get("meta", {})
@@ -233,7 +237,8 @@ xau_macro_map = {
     "move": "^MOVE",
 }
 for key, symbol in xau_macro_map.items():
-    data = safe_fetch(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=2d", timeout=10)
+    # TANGXI-DISABLED-NON-BINANCE 2026-08-29: query1.finance.yahoo.com (was data = safe_fetch(...))
+    data = None
     if isinstance(data, dict):
         try:
             meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
@@ -324,7 +329,8 @@ if isinstance(pm, dict) and not pm.get("_error"):
     }
 else:
     # fallback: 原简单端点
-    pm_fb = safe_fetch("https://gamma-api.polymarket.com/events?tag=finance&limit=5&closed=false", timeout=10)
+    # TANGXI-DISABLED-NON-BINANCE 2026-08-29: gamma-api.polymarket.com (was pm_fb = safe_fetch(...))
+    pm_fb = None
     if isinstance(pm_fb, list) and pm_fb:
         snap["sentiment"]["polymarket"] = {
             "events": [{"title": e.get("title"), "slug": e.get("slug")} for e in pm_fb[:5]],
@@ -365,7 +371,8 @@ for kw in ["黃金 XAUUSD", "金價 美元", "聯準會 利率"]:
 for symbol, key in [
     ("DX-Y.NYB", "dxy"), ("%5EVIX", "vix"), ("%5EGSPC", "spx"), ("%5ETNX", "us10y")
 ]:
-    data = safe_fetch(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=2d")
+    # TANGXI-DISABLED-NON-BINANCE 2026-08-29: query1.finance.yahoo.com (was data = safe_fetch(...))
+    data = None
     if isinstance(data, dict):
         meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
         snap[key] = {"value": meta.get("regularMarketPrice")}

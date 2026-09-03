@@ -136,23 +136,83 @@ def _decision_line(main: dict) -> str:
     regime_name = regime.get("name") if isinstance(regime, dict) else "待判"
     model_id = final.get("model_id") or "待判"
     state = final.get("state") or "WAIT"
+    # Keep the machine state literal in the compact card.  The state is the
+    # contract consumed by downstream readers; translating it here made a
+    # valid FinalVerdict impossible to trace back to the decision loop.
     return f"体制{regime_name} · 模型{model_id} · {state}"
+
+
+def _source_summary(main: dict) -> str:
+    """Compactly expose source status and FinalVerdict usage."""
+    matrix = main.get("_source_matrix") if isinstance(main, dict) else None
+    if not isinstance(matrix, list):
+        return ""
+    parts = []
+    for row in matrix:
+        if not isinstance(row, dict):
+            continue
+        label = _clean_text(row.get("label") or row.get("id") or "来源", 12)
+        status = _clean_text(row.get("status") or "not_run", 16)
+        usage = "裁决" if row.get("entered_final_verdict") else "辅助"
+        parts.append(f"{label}:{status}·{usage}")
+    return "来源 " + " / ".join(parts) if parts else ""
+
+
+def _dual_verdict_for_final(main: dict, dual: dict) -> str:
+    """Prevent stale/raw dual text from contradicting FinalVerdict."""
+    final = main.get("_final_verdict") if isinstance(main, dict) else None
+    final = final if isinstance(final, dict) else {}
+    state = str(final.get("state") or "").upper()
+    reason = str(final.get("reason") or "")
+    if bool(dual.get("hard_conflict")) or "dual_indicator" in reason:
+        return "主副强冲突"
+    if bool(dual.get("conflict")):
+        return "主副冲突·等待"
+    if state in {"WAIT", "NO-GO"} and not bool(final.get("executable")):
+        return "主指标等待/禁做"
+    return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "主副待读")
 
 
 def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: str = "BTCUSDT", price: float = 0, mode: str = "push") -> str:
     main = main or {}
     sub = sub or {}
     final = main.get("_final_verdict") if isinstance(main, dict) else None
+    executable = False
+    if not isinstance(final, dict):
+        # Direct renderer calls are untrusted compatibility inputs. Without
+        # the canonical FinalVerdict, legacy grade/price fields must never
+        # become an executable order card.
+        main = dict(main)
+        main["grade"] = "C等待"
+        main["treatment"] = "FinalVerdict缺失·仅观察"
+        for key in ("entry", "stop", "target", "进场", "止损", "目标", "position"):
+            main.pop(key, None)
+        main["_executable"] = False
     if isinstance(final, dict):
         main = dict(main)
+        raw_grade = str(main.get("grade") or "")
+        raw_entry = main.get("entry") or main.get("进场") or main.get("position")
         main["grade"] = final.get("grade") or main.get("grade") or "C等待"
         main["treatment"] = final.get("reason") or main.get("treatment") or ""
-        if final.get("executable"):
+        executable = (
+            str(final.get("state") or "").upper() == "GO-A"
+            and final.get("executable") is True
+            and all(final.get(k) not in (None, "", "—", "--") for k in ("entry", "stop", "target"))
+        )
+        if executable:
             main["entry"], main["stop"], main["target"] = final.get("entry"), final.get("stop"), final.get("target")
         else:
+            # WAIT/NO-GO must never render stale execution prices. B/C反 may
+            # retain a clearly-labelled observation candidate only.
+            if raw_grade.startswith(("B多", "B空", "C反多", "C反空")):
+                main["candidate_entry"] = raw_entry
             main.pop("entry", None)
             main.pop("stop", None)
             main.pop("target", None)
+            main.pop("进场", None)
+            main.pop("止损", None)
+            main.pop("目标", None)
+        main["_executable"] = executable
 
     grade = main.get("grade", "C等待")
     treatment = main.get("treatment", "")
@@ -179,10 +239,9 @@ def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: st
     operation = sub.get("operation", "")
 
     direction = "观望"
-    if str(grade).startswith(("A多", "B多", "C反多")):
-        direction = "做多"
-    elif str(grade).startswith(("A空", "B空", "C反空")):
-        direction = "做空"
+    if str(grade).startswith(("A多", "A空")) and executable:
+        direction = "做多" if str(grade).startswith("A多") else "做空"
+    # B多/B空/C反多/C反空 一律观望等触发（P0-1 2026-08-31：B/C反无自动执行权）
 
     if mode == "push":
         return _render_push(symbol, price, grade, direction, treatment, signal, conclusion, htf, oi_status, cvd_flow, vol_status, share_data, liq_data, vwap, vah, val, poc, operation, entry, stop, target, magnet_up, magnet_down, check, main, sub, dual)
@@ -199,7 +258,7 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
     target_clean = _clean_text(target, 22) if target else "—"
     magnet_up_clean = _clean_text(magnet_up, 18) if magnet_up and magnet_up != "--" else "—"
     magnet_down_clean = _clean_text(magnet_down, 18) if magnet_down and magnet_down != "--" else "—"
-    dual_verdict = _clean_text(dual.get("direction_verdict") or dual.get("flow_verdict") or "主副待读", 18) if isinstance(dual, dict) else "主副待读"
+    dual_verdict = _clean_text(_dual_verdict_for_final(main, dual), 18) if isinstance(dual, dict) else "主副待读"
 
     lines = [
         f"📊 {short_sym} · {_now_chinese()}",
@@ -213,6 +272,9 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
     decision_line = _decision_line(main)
     if decision_line:
         lines.insert(4, decision_line)
+    source_line = _source_summary(main)
+    if source_line:
+        lines.insert(5, source_line)
     if direction == "做多":
         lines.append(f"| ⭐主推 多 | {entry_clean} | 多 损{stop_clean} 标{target_clean} |")
         lines.append(f"| 🔁备选 空 | {magnet_up_clean} | 主推失效后再看空 |")
@@ -220,8 +282,15 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
         lines.append(f"| ⭐主推 空 | {entry_clean} | 空 损{stop_clean} 标{target_clean} |")
         lines.append(f"| 🔁备选 多 | {magnet_down_clean} | 主推失效后再看多 |")
     else:
-        lines.append(f"| 🔵主推 等 | {entry_clean} | 等结构位确认 |")
-        lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
+        if str(grade).startswith(("B多", "B空", "C反多", "C反空")):
+            # P0-1 (2026-08-31): B/C反 只渲染触发条件+人工候选价，禁止"损/标"执行指令
+            _trigger = _clean_text(treatment or "等结构位触发", 34)
+            _cand = _clean_text(main.get("candidate_entry"), 22) or "—"
+            lines.append(f"| 🔵主推 等 | {_trigger} | 候选 {_cand}·人工判断 |")
+            lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
+        else:
+            lines.append("| 🔵主推 等 | — | 等结构位确认 |")
+            lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/冲突 | 主副不共振不做 |")
     lines.append("")
     # SVP + HALDRO 双指标行（精简合并为一行）
@@ -265,7 +334,7 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         "| 指标 | 读数 | 裁决 |",
         "|:---|:---|:---|",
         f"| SVP主驾驶 | {_clean_text(str(grade) + ' ' + (treatment or ''), 34)} | 结构/执行优先 |",
-        f"| HALDRO副驾驶 | {_clean_text((signal or '') + ' ' + (operation or ''), 38)} | {_clean_text(dual.get('direction_verdict') if isinstance(dual, dict) else '待判', 18)} |",
+        f"| HALDRO副驾驶 | {_clean_text((signal or '') + ' ' + (operation or ''), 38)} | {_clean_text(_dual_verdict_for_final(main, dual) if isinstance(dual, dict) else '待判', 18)} |",
         "",
         "③ 结构位",
         "| 结构 | 价格 | 用法 |",
@@ -279,6 +348,9 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         "| 优先级 | 条件 | 动作 |",
         "|:---|:---|:---|",
     ]
+    source_line = _source_summary(main)
+    if source_line:
+        lines.insert(8, source_line)
     if direction == "做多":
         lines.append(f"| ⭐主推 多 | {entry or '—'} | 多 损{stop or '—'} 标{target or '—'} |")
         lines.append(f"| 🔁备选 空 | {magnet_up or '主推失效'} | 只作失效路径 |")
@@ -286,7 +358,13 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         lines.append(f"| ⭐主推 空 | {entry or '—'} | 空 损{stop or '—'} 标{target or '—'} |")
         lines.append(f"| 🔁备选 多 | {magnet_down or '主推失效'} | 只作失效路径 |")
     else:
-        lines.append(f"| 🔵主推 等 | {entry or _fmt_num(price)} | 等结构位确认 |")
+        if str(grade).startswith(("B多", "B空", "C反多", "C反空")):
+            # P0-1 (2026-08-31): B/C反 只渲染触发条件+人工候选价，禁止"损/标"执行指令
+            _trigger = _clean_text(treatment or "等结构位触发", 34)
+            _cand = main.get("candidate_entry") or "—"
+            lines.append(f"| 🔵主推 等 | {_trigger} | 候选 {_cand}·人工判断 |")
+        else:
+            lines.append("| 🔵主推 等 | — | 等结构位确认 |")
         lines.append("| 🔁备选 | 反向破位 | 只作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/主副冲突 | 不做 |")
     lines.append("")

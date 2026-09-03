@@ -14,6 +14,10 @@ import json, os, sys, time, asyncio, subprocess, urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from collections import OrderedDict
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from atomic_json import atomic_write_json
+
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -174,22 +178,25 @@ def run_deep_scoring():
     使用Python DMI引擎 + F&G 做深度评分
     返回 {score, direction, reason} 或 None
     """
-    try:
-        # Run DMI engine as subprocess
-        script_path = str(DMI_SCRIPT)
-        r = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)
-        dmi_result = json.loads(r.stdout) if r.stdout else {}
-    except Exception as e:
-        log(f"DMI engine: {e}")
-        dmi_result = {}
+    dmi_result = {}
+    if not DMI_SCRIPT.exists():
+        log(f"DMI engine unavailable: missing {DMI_SCRIPT.name}; legacy daemon remains non-executable")
+        return None
+    else:
+        try:
+            script_path = str(DMI_SCRIPT)
+            r = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                raise RuntimeError(f"returncode={r.returncode}: {(r.stderr or r.stdout)[:160]}")
+            dmi_result = json.loads(r.stdout) if r.stdout else {}
+        except Exception as e:
+            log(f"DMI engine: {e}")
+            dmi_result = {}
 
-    # Get F&G
+    # F&G is an optional non-Binance source and is intentionally disabled.
+    # Do not parse the removed response handle ``r`` or silently pretend it ran.
     fng = None
-    try:
-        r = urllib.request.urlopen("https://api.alternative.me/fng/?limit=1", timeout=5)
-        d = json.loads(r.read())
-        fng = int(d["data"][0]["value"])
-    except: pass
+    fng_status = "disabled_optional_source"
 
     # Score from DMI engine
     trend_long = dmi_result.get("trend_long", 0)
@@ -240,6 +247,8 @@ def run_deep_scoring():
 
 # ── 推送 ──
 def push_tg(text):
+    if os.environ.get("TANGXI_ENABLE_AUTOMATED_TG") != "1":
+        return "DISABLED: automated Telegram delivery is off"
     try:
         safe_text = text.replace("'", "'\\''").replace("`", "\\`")[:3800]
         script_path = str(ROOT / "scripts")
@@ -258,8 +267,7 @@ print('OK' if ok else 'FAIL:' + str(rs))
 # ── 信号文件 ──
 def write_signal(zone, price):
     s = {"status": "pending", "zone": zone, "price": price, "triggered_at": now_ts().isoformat()}
-    with open(SIGNAL_FILE, "w", encoding="utf-8") as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
+    atomic_write_json(SIGNAL_FILE, s)
 
 def read_signal():
     try:
@@ -271,15 +279,13 @@ def mark_done(signal):
     if signal:
         signal["status"] = "completed"
         signal["completed_at"] = now_ts().isoformat()
-        with open(SIGNAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(signal, f, ensure_ascii=False, indent=2)
+        atomic_write_json(SIGNAL_FILE, signal)
 
 
 # ── 心跳 ──
 def write_heartbeat(zone="", score=0):
     hb = {"ts": now_ts().isoformat(), "zone": zone, "score": score, "pid": os.getpid()}
-    with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
-        json.dump(hb, f, ensure_ascii=False)
+    atomic_write_json(HEARTBEAT_FILE, hb, indent=None)
 
 def load_state():
     try:
@@ -289,14 +295,16 @@ def load_state():
         return {"last_zone": None, "last_push_dir": None, "last_push_ts": 0}
 
 def save_state(s):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
+    atomic_write_json(STATE_FILE, s)
 
 
 # ── TV MCP 深度分析（调用card_gen） ──
 def run_tv_analysis():
     try:
         cg = ROOT / "scripts/btc_card_gen.py"
+        if not cg.exists():
+            log(f"card gen unavailable: missing {cg.name}; legacy daemon remains non-delivery")
+            return None
         r = subprocess.run([sys.executable, str(cg)], capture_output=True, text=True, timeout=60)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
@@ -367,12 +375,16 @@ def main_loop():
                     
                     card = run_tv_analysis()
                     if card:
-                        push_result = push_tg(card)
+                        # Legacy daemon output has no structured FinalVerdict.
+                        # Never promote its score/card to an external decision.
+                        push_result = "BLOCKED: legacy daemon lacks FinalVerdict authorization"
                         log(f"Push: {push_result}")
-                        state["last_push_dir"] = direction
-                        state["last_push_ts"] = now
-                        state["last_push_zone"] = zone
-                        state["last_push_score"] = conf_score
+                        # Do not update last_push_*: nothing was delivered.
+                        # A newer authorized dispatcher must own any external delivery.
+                    else:
+                        log("Legacy daemon card generation unavailable; no delivery attempted")
+
+                    # This legacy daemon is intentionally non-delivery by design.
 
         save_state(state)
         time.sleep(POLL_S)

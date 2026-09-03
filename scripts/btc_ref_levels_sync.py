@@ -21,10 +21,13 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+from atomic_json import atomic_write_json
+
 TZ = timezone(timedelta(hours=8))
 ROOT = Path("D:/Hermes agent")
 DATA = ROOT / "data"
 TV_LIVE = DATA / "tv_live.json"
+TV_LIVE_SYMBOL = DATA / "tv_live_BTCUSDT.json"
 TV_DMI = DATA / "tv_dmi_cache.json"
 OUT = DATA / "btc_ref_levels.json"
 
@@ -60,6 +63,19 @@ def age_minutes(path: Path) -> float:
     return (time.time() - path.stat().st_mtime) / 60
 
 
+def cache_capture_age_minutes(data: dict[str, Any]) -> float | None:
+    """Return semantic cache age; file mtime is not market evidence."""
+    raw = data.get("timestamp") or data.get("updated_at") or data.get("ts")
+    try:
+        from source_health import parse_timestamp
+        captured = parse_timestamp(raw)
+        if captured is None:
+            return None
+        return max(0.0, (datetime.now(timezone.utc) - captured).total_seconds() / 60.0)
+    except Exception:
+        return None
+
+
 def refresh_tv_cache() -> str:
     """刷新 TV BTC 缓存（MCP stdio 路径，与 XAU 同步同源）。
 
@@ -70,12 +86,15 @@ def refresh_tv_cache() -> str:
     """
     import asyncio
     try:
-        from fetch_tv_mcp import (
-            get_ohlcv, get_study_values, get_pine_lines,
-            set_symbol,
-        )
+        import fetch_tv_mcp
         from mcp.client.stdio import stdio_client, StdioServerParameters
         from mcp import ClientSession
+        # fetch_tv_mcp is a runtime bridge without typed MCP stubs. Keep the
+        # dynamic boundary explicit instead of leaking Unknown into this file.
+        get_ohlcv = getattr(fetch_tv_mcp, "get_ohlcv")
+        get_study_values = getattr(fetch_tv_mcp, "get_study_values")
+        get_pine_lines = getattr(fetch_tv_mcp, "get_pine_lines")
+        set_symbol = getattr(fetch_tv_mcp, "set_symbol")
     except Exception as e:
         raise RuntimeError(f"TV MCP 模块不可用: {e}")
 
@@ -92,7 +111,7 @@ def refresh_tv_cache() -> str:
                     async with ClientSession(r, w) as s:
                         await s.initialize()
                         # 记录原图表品种，采完 BTC 后切回（保住用户看盘）
-                        from fetch_tv_mcp import get_chart_state
+                        get_chart_state = getattr(fetch_tv_mcp, "get_chart_state")
                         prev = await get_chart_state(s)
                         prev_sym = ""
                         try:
@@ -151,9 +170,13 @@ def refresh_tv_cache() -> str:
     ind["do_price"] = data.get("do")
     ind["w_vwap_price"] = data.get("w_vwap")
     TV_LIVE.parent.mkdir(parents=True, exist_ok=True)
-    TV_LIVE.write_text(json.dumps(live, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Publish both the legacy shared cache and the per-symbol cache consumed by
+    # strict freshness gates. Use the same atomic writer as other collectors.
+    from atomic_json import atomic_write_json
+    atomic_write_json(TV_LIVE, live)
+    atomic_write_json(TV_LIVE_SYMBOL, live)
     # 同时更新 tv_dmi_cache 保持一致（避免 auto_card BTC 分支误读旧的）
-    TV_DMI.write_text(json.dumps(live, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(TV_DMI, live)
     return f"BTC TV cache refreshed via MCP: POC={live.get('poc')} VWAP={live.get('vwap')}"
 
 
@@ -251,7 +274,9 @@ def pick_cache() -> dict[str, Any]:
             continue
         if str(data.get("symbol")) != "BINANCE:BTCUSDT.P":
             continue
-        if age_minutes(path) > 30:
+        semantic_age = cache_capture_age_minutes(data)
+        age = semantic_age if semantic_age is not None else age_minutes(path)
+        if age > 30:
             continue
         candidates.append((path.stat().st_mtime, data, path.name))
     if not candidates:
@@ -263,7 +288,7 @@ def pick_cache() -> dict[str, Any]:
 
 
 def _pick_cache_relaxed() -> dict[str, Any]:
-    """P0修复：放宽年龄限制读最新 TV cache（用于TV刷新失败兜底，不卡30min）。"""
+    """TV刷新失败时最多使用120分钟旧缓存，并显式标记降级。"""
     candidates = []
     for path in (TV_LIVE, TV_DMI):
         if not path.exists():
@@ -273,6 +298,14 @@ def _pick_cache_relaxed() -> dict[str, Any]:
             continue
         if str(data.get("symbol")) != "BINANCE:BTCUSDT.P":
             continue
+        semantic_age = cache_capture_age_minutes(data)
+        age = semantic_age if semantic_age is not None else age_minutes(path)
+        if age > 120:
+            continue
+        data["stale"] = True
+        data["fresh"] = False
+        data["status"] = "stale_cache"
+        data["degradation_reason"] = f"TV刷新失败，复用{age:.1f}分钟前缓存"
         candidates.append((path.stat().st_mtime, data, path.name))
     if not candidates:
         raise RuntimeError("no BINANCE:BTCUSDT.P TV cache (relaxed)")
@@ -315,7 +348,7 @@ def spot_price() -> float | None:
     urls = [
         "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
         "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
-        "https://api.binance.us/api/v3/ticker/price?symbol=BTCUSDT",
+        # TANGXI-DISABLED-NON-BINANCE 2026-08-29: "https://api.binance.us/api/v3/ticker/price?symbol=BTCUSDT",
     ]
     last_exc: Exception | None = None
     for url in urls:
@@ -394,8 +427,21 @@ def main() -> int:
             "source": "btc_ref_levels_sync.py",
             "tv_cache": cache.get("_picked_cache"),
             "tv_symbol": cache.get("symbol"),
+            "status": "stale_cache" if cache.get("stale") else "cache",
+            "stale": bool(cache.get("stale")),
+            "captured_at": cache.get("timestamp") or cache.get("updated_at") or cache.get("ts"),
+            "degradation_reason": cache.get("degradation_reason") or (refresh_note if refresh_note else None),
         }
-        OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(OUT, payload)
+
+        # Keep the strict per-symbol source snapshot fresh in the same sync
+        # cycle.  This is a quality snapshot only; it never grants execution
+        # permission and failures remain a visible degradation.
+        try:
+            from trading_system import source_snapshot
+            source_snapshot("BTCUSDT", {"price_at_analysis": spot_price()})
+        except Exception as snapshot_exc:
+            print(f"⚠ BTC source_snapshot刷新失败(不覆盖旧快照): {snapshot_exc}", file=sys.stderr)
 
         # v9.8: 成功路径也推 TG（之前完全静默=决策信息缺口）。含现价+关键位偏离%+波动区间+决策。
         try:
@@ -461,10 +507,9 @@ def main() -> int:
         now = datetime.now(TZ)
         # P1: 失败落盘诊断文件，供看门狗/审计读取
         try:
-            (DATA / "btc_ref_levels_error.json").write_text(
-                json.dumps({"ts": now_iso(), "error": str(exc)[:300]},
-                           ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            atomic_write_json(
+                DATA / "btc_ref_levels_error.json",
+                {"ts": now_iso(), "error": str(exc)[:300]},
             )
         except Exception:
             pass

@@ -8,6 +8,7 @@ import json, sys, os, time
 from datetime import datetime, timezone, timedelta
 import urllib.request
 from pathlib import Path
+from source_contract import write_source_artifact
 
 TZ = timezone(timedelta(hours=8))
 UA = "Hermes/1.0"
@@ -46,8 +47,15 @@ def load_prev():
 
 def save_snapshot(data):
     fp = os.path.join(DATA_DIR, "stablecoin_snapshot.json")
-    with open(fp, "w") as f:
-        json.dump(data, f)
+    write_source_artifact(
+        fp,
+        "stablecoin_snapshot",
+        data,
+        status="live" if data else "unavailable",
+        captured_at=data.get("ts") if isinstance(data, dict) else None,
+        symbol="USDT/USDC/DAI/USDe",
+        error=None if data else "empty_payload",
+    )
 
 
 def main():
@@ -141,7 +149,7 @@ def main():
         else:
             # 常态也推，但用 dedup 限频(4h)
             try:
-                from alert_dedup import dedup_wrapper
+                dedup_wrapper = __import__("alert_dedup").dedup_wrapper
                 dedup_wrapper("stablecoin", output, force_seconds=14400)
             except ImportError:
                 print(output)

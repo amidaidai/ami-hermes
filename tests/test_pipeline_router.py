@@ -26,7 +26,7 @@ def test_deribit_option_symbol_routes_to_option_pipeline():
 def test_core_market_pipeline_lengths_remain_stable():
     router = _load_router()
     expected = {
-        "BTCUSDT": ("crypto", 10, "15m"),
+        "BTCUSDT": ("crypto", 15, "15m"),
         "XAUUSD": ("gold", 8, "5m"),
         "EURUSD": ("forex", 7, "15m"),
         "AAPL": ("stock", 8, "1h"),
@@ -36,3 +36,18 @@ def test_core_market_pipeline_lengths_remain_stable():
         assert router._asset_class(symbol) == asset
         assert len(router.route_pipeline(symbol, "full")) == full_len
         assert router.timeframe_info(symbol)["main"] == main_tf
+
+
+def test_crypto_full_route_is_the_canonical_fifteen_stage_pipeline():
+    router = _load_router()
+    assert router.route_pipeline("BTCUSDT", "full") == [
+        "tv", "binance", "cg_pro", "macro", "x_sent", "cron_read",
+        "cvd", "depth", "corr", "engine", "regime", "dual",
+        "advanced", "risk", "card",
+    ]
+
+
+def test_quick_route_contains_only_live_execution_inputs():
+    router = _load_router()
+    assert router.route_pipeline("BTCUSDT", "quick") == ["tv", "binance", "card"]
+    assert router.route_pipeline("BTCUSDT", "inherit") == ["tv", "binance", "card"]

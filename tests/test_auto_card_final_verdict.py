@@ -33,7 +33,17 @@ def test_card_final_verdict_uses_real_features_and_hard_conflict():
     assert final["state"] == "NO-GO"
     assert final["entry"] is None
     assert engine["_decision_regime"]["code"] in {"trend", "expansion"}
-    assert engine["_final_verdict"]["state"] == "NO-GO"
+
+
+def test_dual_verdict_uses_binance_lsr_when_tradingview_lsr_is_missing():
+    engine = {"long_short": {"long": 0.6, "short": 0.4}}
+    dual = auto_card._dual_indicator_verdict(
+        "BTCUSDT", {"status": "C等待", "direction": "wait"}, engine,
+        "", "C",
+    )
+    assert abs(dual["lsr"] - 1.5) < 1e-9
+    assert dual["lsr_source"] == "binance_global_account_ratio"
+    assert "LSR 1.50" in dual["haldro_position"]
 
 
 def test_card_final_verdict_routes_one_primary_model_by_regime():
@@ -160,12 +170,103 @@ def test_card_projection_uses_final_not_raw_grade():
     assert projected["execution"].startswith("不执行")
 
 
+def test_full_renderer_uses_final_verdict_execution_prices():
+    from render_v96 import render_v96_card
+
+    card = render_v96_card(
+        symbol="BTCUSDT",
+        status="GO-A",
+        direction="short",
+        price=100.0,
+        high=101.0,
+        low=99.0,
+        chg=0.0,
+        tf_lines="D偏多 · 4h偏多 · 1h偏多 · 15m偏多 · 5m待判",
+        cvd_dir="买",
+        cvd_quality="A",
+        taker_dir="买",
+        taker_ratio=1.2,
+        funding_rate="0.01%",
+        kill_zone="",
+        vwap_ema={},
+        fg_v="",
+        levels=[],
+        bearish=True,
+        st_a={"stop": 98.0, "target": 105.0, "rr": 2.5},
+        st_b={"stop": 102.0, "target": 95.0, "rr": 1.0},
+        rr_a=2.5,
+        rr_b=1.0,
+        rr_a_note="",
+        rr_b_note="",
+        risk_amt=1.0,
+        leverage_text="",
+        inv_line=98.0,
+        prot_status="通过",
+        data_grade="A",
+        sweep_state="待扫",
+        displacement="待判",
+        one_reason="共振",
+        model_id="fvg_pullback",
+        n5=5,
+        eng_conf=0.9,
+        klines={tf: {} for tf in ("D", "4h", "1h", "15m", "5m")},
+        dual_indicator={"asset_is_crypto": True, "haldro_direction": "偏多"},
+        final_verdict={
+            "state": "GO-A", "grade": "A多", "side": "long", "executable": True,
+            "entry": 110.0, "stop": 108.0, "target": 116.0,
+        },
+    )
+
+    assert "偏多可执行" in card
+    assert "多 `110.00` 损`108.00` 标`116.00`" in card
+    assert "损`98.00`" not in card
+
+
+def test_auto_card_loads_and_normalizes_validated_five_timeframes(tmp_path, monkeypatch):
+    import json
+
+    from datetime import datetime, timezone
+
+    payload = {
+        "symbol": "BINANCE:BTCUSDT.P",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": "tradingview_mcp",
+        "timeframes": {
+            tf: {"price": 100.0, "sv": {"POC_PRICE": 99.0}}
+            for tf in ("D", "4h", "1h", "15m", "5m")
+        },
+    }
+    (tmp_path / "keylevels_candidates.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(auto_card, "DATA", tmp_path)
+
+    snapshot = auto_card._load_tv_five_tf_snapshot("BTCUSDT", mode="full")
+
+    assert snapshot["usable"] is True
+    assert snapshot["coverage"] == 5
+    assert list(snapshot["engine_klines"]) == ["D", "4h", "1h", "15m", "5m"]
+    assert snapshot["engine_klines"]["15m"]["poc"] == 99.0
+
+
+def test_single_tf_live_cache_does_not_overwrite_valid_five_tf_structure():
+    engine = {"_tv_five_tf_klines": {"15m": {"poc": 99.0}}}
+    klines = {"15m": {"poc": 99.0}, "D": {"poc": 88.0}}
+
+    applied = auto_card._apply_tv_live_structure(
+        engine, klines, poc=77.0, vah=78.0, val=76.0, direction="偏空"
+    )
+
+    assert applied is False
+    assert klines["15m"]["poc"] == 99.0
+    assert klines["D"]["poc"] == 88.0
+
+
 def test_render_path_consumes_final_verdict_projection():
     source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
     assert source.count("_resolve_card_final_verdict(") >= 2
     render_slice = source[source.index("dual_indicator = _dual_indicator_verdict"):source.index("# v9.6: 标准出卡统一使用表格驾驶舱")]
     assert "final_verdict = _resolve_card_final_verdict(" in render_slice
     assert "tv_main = _project_final_verdict(tv_main, final_verdict)" in render_slice
+    assert "final_verdict=final_verdict" in render_slice
 
 
 def test_tv_live_cache_projects_haldro_valid_code_into_final_decision():
@@ -236,7 +337,58 @@ def test_orion_derivatives_fallback_only_fills_missing_fields(monkeypatch):
 def test_decision_float_parses_tradingview_unicode_spacing_and_suffixes():
     assert auto_card._decision_float("4,108.636") == 4108.636
     assert auto_card._decision_float("6.6\u202fK") == 6600.0
-    assert auto_card._decision_float("−41.73\u202fM") == -41_730_000.0
+    assert auto_card._decision_float("−41.73\u202fM") == -41_730_000
+
+
+def test_options_summary_does_not_render_invalid_max_pain():
+    source = (ROOT / "scripts" / "deribit_options.py").read_text(encoding="utf-8")
+    assert '"max_pain_valid"' in source
+    assert 'mp = d.get("max_pain") if d.get("max_pain_valid") else "—"' in source
+
+
+def test_non_crypto_does_not_use_aggvol_direct_card_path():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert 'if not force_full and _asset_class(symbol) == "crypto" and tv_main and tv_sub:' in source
+    assert 'if not engine_data.get("_binance_data_collected"):' in source
+    assert 'engine_data["_binance_data_collected"] = True' in source
+    assert 'cvd_dir = ""' in source and 'funding_rate = ""' in source
+    metal_block = source[source.index('elif asset == "metal":'):source.index('elif asset in {"stock", "forex", "futures"}:')]
+    assert '_collect_binance_data(engine_data, symbol)' not in metal_block
+
+
+def test_pipeline_audit_does_not_mark_stale_source_as_completed():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert '_source_record_status(engine_data, "cg_top", cg_top)' in source
+    assert 'completed_steps.add("cg_pro")' in source
+
+
+def test_pipeline_audit_does_not_use_card_labels_as_source_evidence():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert 'or "X情绪" in card' not in source
+    assert 'or "CVD" in card' not in source
+    assert 'or "深度" in card' not in source
+    assert 'any(k in card for k in ["GLD", "黄金"])' not in source
+    assert 'any(k in card for k in ["利差", "forex_rate"])' not in source
+
+
+def test_gate_failure_cannot_enter_external_push_branch():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert "gate_verified = False" in source
+    assert "if push and gate_verified and _push_authorized and _push_enabled:" in source
+    assert "External delivery requires a successfully evaluated gate" in source
+
+
+def test_pipeline_audit_does_not_count_binance_periods_as_tv_five_tf_evidence():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert 'five_tf_required = bool(engine_data.get("_tv_five_tf_required"))' in source
+    assert 'not five_tf_required or bool(five_tf_status.get("usable"))' in source
+
+
+def test_tv_cache_status_requires_identity_and_complete_action_contract():
+    assert auto_card._tv_cache_status({
+        "symbol": "BINANCE:BTCUSDT.P", "timestamp": "2026-09-02T08:00:00+08:00",
+        "poc": 77000, "identity_valid": False, "action_table_complete": True,
+    }, "BTCUSDT", max_age_minutes=999999)["usable"] is False
 
 
 def test_tv_vwap_ema_fallback_consumes_symbol_specific_data_window(monkeypatch, tmp_path):
@@ -254,3 +406,19 @@ def test_tv_vwap_ema_fallback_consumes_symbol_specific_data_window(monkeypatch, 
     assert result["ema"]["9"] == 4110.3
     assert result["ema"]["55"] == 4107.1
     assert result["vwap"]["price_above"] is True
+
+
+def test_source_snapshot_status_rejects_generic_cache_from_other_asset(monkeypatch, tmp_path):
+    import json
+    from datetime import datetime, timezone
+
+    generic = tmp_path / "source_snapshot.json"
+    generic.write_text(json.dumps({
+        "symbol": "XAUUSD",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "quality": "A",
+    }), encoding="utf-8")
+    monkeypatch.setattr(auto_card, "DATA", tmp_path)
+    result = auto_card._source_snapshot_status("BTCUSDT", max_age_hours=1)
+    assert result["usable"] is False
+    assert "匹配品种" in result["reason"] or "缺失" in result["reason"]

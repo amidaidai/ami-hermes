@@ -63,6 +63,8 @@ GATE_RULES = {
     },
 }
 
+FINAL_STATES = {"GO-A", "GO-B", "WAIT", "NO-GO"}
+
 def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     """执行GO/NO-GO八问，返回通过/拒绝和详情。
 
@@ -110,18 +112,47 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     tv_status = engine_data.get("_tv_cache_status") or engine_data.get("_tv_live_status") or {}
     if not isinstance(tv_status, dict):
         tv_status = {}
-    tv_active = bool(tv_data) or bool(tv_override.get("tv_active")) or bool(tv_status.get("usable"))
+    tv_status_known = isinstance(tv_status, dict) and "usable" in tv_status
+    tv_direct_verified = bool(engine_data.get("_tv_direct_verified"))
+    # A non-empty Pine/TV dictionary proves only that something was parsed. It
+    # does not prove symbol identity, freshness, or a live chart witness.
+    tv_verified = bool(tv_status.get("usable")) if tv_status_known else tv_direct_verified
+    tv_active = tv_verified or bool(tv_data) or bool(tv_override.get("tv_active"))
     tv_grade = str(tv_override.get("tv_grade") or engine_data.get("_tv_main", {}).get("grade") or "")
     tv_block = str(meta.get("status", "")).startswith("X") or tv_grade.startswith("X")
-    if tv_active and not tv_block:
+    tv_required = str(symbol or "").upper().endswith("USDT") or "XAU" in str(symbol or "").upper()
+    five_tf_required = bool(engine_data.get("_tv_five_tf_required"))
+    five_tf_status = engine_data.get("_tv_five_tf_status") or {}
+    five_tf_verified = isinstance(five_tf_status, dict) and bool(five_tf_status.get("usable"))
+    if five_tf_required and not five_tf_verified:
+        missing = ",".join(str(v) for v in (five_tf_status.get("missing") or [])) if isinstance(five_tf_status, dict) else ""
+        reason = "Full缺少TV五周期证据"
+        if missing:
+            reason += f"·缺{missing}"
+        gates["tv_live"] = {"status": "red", "reason": reason}
+        red_gates.append("tv_live")
+        go = False
+    elif tv_status_known and not tv_verified:
+        gates["tv_live"] = {"status": "red", "reason": f"TV缓存不可用·{tv_status.get('reason') or '未通过新鲜度/品种校验'}"}
+        red_gates.append("tv_live")
+        go = False
+    elif tv_active and not tv_status_known and not tv_direct_verified:
+        gates["tv_live"] = {"status": "red", "reason": "TV数据存在但缺少新鲜度/现场验证状态"}
+        red_gates.append("tv_live")
+        go = False
+    elif tv_active and not tv_block:
         reason = "TV SVP已读"
         if tv_grade:
             reason += f"·{tv_grade}"
-        if tv_status.get("usable"):
+        if tv_verified:
             reason += "·缓存新鲜"
         gates["tv_live"] = {"status": "green", "reason": reason}
     elif tv_active:
         gates["tv_live"] = {"status": "red", "reason": f"TV禁做/结构冲突: {tv_grade or meta.get('status','')}"}
+        red_gates.append("tv_live")
+        go = False
+    elif tv_required:
+        gates["tv_live"] = {"status": "red", "reason": "加密/黄金缺少TV现场数据·禁止推断实时可用"}
         red_gates.append("tv_live")
         go = False
     else:
@@ -211,14 +242,39 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         go = False
 
     # FinalVerdict 是渲染/告警/仓位/执行的唯一真相源。旧八闸门只负责诊断，
-    # 不能在 FinalVerdict=WAIT/NO-GO 时重新把计划判成可执行。
+    # 不能在 FinalVerdict=WAIT/NO-GO 时重新把计划判成可执行；反过来也不
+    # 能用旧八问的红灯覆盖一个已经由 FinalVerdict 授权的结果。
+    legacy_go = go
+    diagnostic_red_gates = list(red_gates)
+    diagnostic_yellow_gates = list(yellow_gates)
     final = engine_data.get("_final_verdict") or {}
     if not isinstance(final, dict):
         final = {}
     final_state = str(final.get("state") or "").upper()
     final_reason = str(final.get("reason") or "")
-    if final and not bool(final.get("executable", False)):
+    if not final:
+        # The diagnostic eight questions are never an execution authority.
+        # Without a produced FinalVerdict, fail closed instead of returning
+        # the legacy green state that older callers could mistake for approval.
+        final_state = "NO-GO"
+        final_reason = "FinalVerdict缺失·拒绝执行"
+        red_gates.append("final_verdict")
         go = False
+        execution_authorized = False
+    elif final_state not in FINAL_STATES:
+        final_state = "NO-GO"
+        final_reason = "FinalVerdict状态非法·拒绝执行"
+        red_gates.append("final_verdict")
+        go = False
+        execution_authorized = False
+    else:
+        # ``go`` is deliberately derived from FinalVerdict only. The legacy
+        # eight-question result remains useful as a diagnostic table, but it
+        # has no authority to grant or revoke execution.
+        execution_authorized = final_state == "GO-A" and final.get("executable") is True
+        go = execution_authorized
+        if final_state == "GO-A" and not execution_authorized:
+            red_gates.append("final_verdict")
 
     green_count = sum(1 for g in gates.values() if g["status"] == "green")
     yellow_count = len(yellow_gates)
@@ -226,19 +282,25 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     
     if final_state == "WAIT":
         verdict = f"○ WAIT · {final_reason or '等待触发完成'} · 绿灯{green_count}/8"
+    elif final_state == "GO-B":
+        verdict = f"○ GO-B · 仅人工候选，不执行 · {final_reason or '等待确认'}"
     elif final_state == "NO-GO":
         verdict = f"✗ NO-GO · {final_reason or '/'.join(red_gates[:3])}"
-    elif go:
-        verdict = f"✅ GO · {final_state or 'LEGACY'} · 绿灯{green_count}/8"
+    elif execution_authorized:
+        verdict = f"✅ GO-A · FinalVerdict已授权 · 绿灯{green_count}/8"
     else:
-        verdict = f"✗ NO-GO · 红灯{red_count}灯·{'/'.join(red_gates[:3])}"
+        verdict = f"✗ NO-GO · FinalVerdict未授权 · 红灯{red_count}灯·{'/'.join(red_gates[:3])}"
 
     return {
         "go": go,
+        "execution_authorized": execution_authorized,
+        "legacy_go": legacy_go,
         "score": green_count,
         "max_score": 8,
         "red_gates": red_gates,
         "yellow_gates": yellow_gates,
+        "diagnostic_red_gates": diagnostic_red_gates,
+        "diagnostic_yellow_gates": diagnostic_yellow_gates,
         "green_count": green_count,
         "red_count": red_count,
         "yellow_count": yellow_count,
@@ -256,9 +318,12 @@ def gate_report_card(result: dict, symbol: str) -> str:
     if final_state == "WAIT":
         emoji = "○"
         status_text = "WAIT · 等待，不执行"
-    elif result["go"]:
+    elif final_state == "GO-B":
+        emoji = "○"
+        status_text = "GO-B · 仅人工候选，不执行"
+    elif final_state == "GO-A" and result.get("execution_authorized", result["go"]):
         emoji = "✅"
-        status_text = "GO · 允许执行"
+        status_text = "GO-A · FinalVerdict授权"
     else:
         emoji = "✗"
         status_text = "NO-GO · 禁止执行"
@@ -267,16 +332,16 @@ def gate_report_card(result: dict, symbol: str) -> str:
         "",
         "### GO/NO-GO 下单闸门",
         "",
-        f"{emoji} **{status_text}** · 绿灯{result['green_count']}/8",
+        f"{emoji} {symbol}：当前{status_text}，不自动下单；仅按FinalVerdict人工判断。",
         "",
-        "| # | 闸门 | 状态 | 原因 |",
-        "|---:|---|---|---|",
+        "| 闸门 | 状态 | 原因 |",
+        "|:---|:---:|:---|",
     ]
     
     gate_order = ["data_freshness", "tv_live", "rr_ratio", "event_window",
                   "protections", "wfo_samples", "dual_indicator", "portfolio_exposure"]
     
-    for i, gate_name in enumerate(gate_order, 1):
+    for gate_name in gate_order:
         g = result["gates"].get(gate_name, {})
         status = g.get("status", "—")
         reason = g.get("reason", "—")
@@ -284,11 +349,16 @@ def gate_report_card(result: dict, symbol: str) -> str:
         
         emoji_map = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
         status_emoji = emoji_map.get(status, "⚪")
-        lines.append(f"| {i} | {status_emoji} {name} | {status.upper()} | {reason} |")
+        lines.append(f"| {status_emoji} {name} | {status.upper()} | {reason} |")
     
     lines.append("")
     lines.append(f"**裁决**: {result['verdict']}")
-    if result["red_gates"]:
+    if result.get("execution_authorized") and result.get("diagnostic_red_gates"):
+        lines.append(
+            "**诊断提示（不改变FinalVerdict授权）**: "
+            + ", ".join(result["diagnostic_red_gates"])
+        )
+    elif result["red_gates"]:
         lines.append(f"**红灯**: {', '.join(result['red_gates'])}")
     if result["yellow_gates"]:
         lines.append(f"**黄灯**: {', '.join(result['yellow_gates'])}")

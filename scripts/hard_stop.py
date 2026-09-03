@@ -26,8 +26,63 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from atomic_json import append_text_line
+
 ROOT = Path("D:/Hermes agent")
 DATA = ROOT / "data"
+
+
+def _validate_execution_verdict(
+    final_verdict: object,
+    *,
+    symbol: str,
+    direction: str,
+    entry: float,
+    stop: float,
+    target1: Optional[float],
+    target2: Optional[float],
+    risk_usd: float,
+) -> tuple[bool, str]:
+    """实盘边界只接受完整、匹配且几何有效的 GO-A 裁决。"""
+    if not isinstance(final_verdict, dict):
+        return False, "缺少FinalVerdict·拒绝实盘入口"
+    if final_verdict.get("state") != "GO-A" or final_verdict.get("executable") is not True:
+        return False, "FinalVerdict非GO-A可执行·拒绝实盘入口"
+    if any(final_verdict.get(key) in (None, "") for key in ("entry", "stop", "target")):
+        return False, "FinalVerdict执行三件套不完整·拒绝实盘入口"
+    try:
+        verdict_entry = float(final_verdict["entry"])
+        verdict_stop = float(final_verdict["stop"])
+        verdict_target = float(final_verdict["target"])
+    except (TypeError, ValueError):
+        return False, "FinalVerdict执行价格非法·拒绝实盘入口"
+    if str(final_verdict.get("symbol") or symbol).upper() != str(symbol).upper():
+        return False, "FinalVerdict品种不一致·拒绝实盘入口"
+    side = str(final_verdict.get("side") or "").lower()
+    expected_side = "long" if side in {"long", "buy", "多"} else "short" if side in {"short", "sell", "空"} else ""
+    if expected_side != str(direction).lower():
+        return False, "FinalVerdict方向不一致·拒绝实盘入口"
+    for supplied, authorized in ((entry, verdict_entry), (stop, verdict_stop)):
+        if abs(float(supplied) - authorized) > max(1e-8, abs(authorized) * 1e-8):
+            return False, "实盘参数与FinalVerdict不一致·拒绝实盘入口"
+    if target1 is not None and abs(float(target1) - verdict_target) > max(1e-8, abs(verdict_target) * 1e-8):
+        return False, "止盈目标与FinalVerdict不一致·拒绝实盘入口"
+    verdict_risk = final_verdict.get("risk_usd")
+    if verdict_risk in (None, ""):
+        return False, "FinalVerdict风险金额缺失·拒绝实盘入口"
+    try:
+        if abs(float(risk_usd) - float(verdict_risk)) > max(1e-8, abs(float(verdict_risk)) * 1e-8):
+            return False, "实盘风险金额与FinalVerdict不一致·拒绝实盘入口"
+    except (TypeError, ValueError):
+        return False, "FinalVerdict风险金额非法·拒绝实盘入口"
+    if target2 is not None and float(target2) == verdict_target:
+        return False, "止盈目标重复·拒绝实盘入口"
+    if direction == "long" and not (verdict_stop < verdict_entry < verdict_target):
+        return False, "GO-A多头价格几何非法·拒绝实盘入口"
+    if direction == "short" and not (verdict_target < verdict_entry < verdict_stop):
+        return False, "GO-A空头价格几何非法·拒绝实盘入口"
+    return True, "ok"
 
 
 def position_size(entry: float, stop: float, risk_usd: float,
@@ -122,7 +177,8 @@ def execute_stop_loss(symbol: str, direction: str, entry: float,
                        leverage: int = 100, account_balance: float = 67.52,
                        target1: Optional[float] = None,
                        target2: Optional[float] = None,
-                       dry_run: bool = True) -> dict:
+                       dry_run: bool = True,
+                       final_verdict: Optional[dict] = None) -> dict:
     """
     执行硬止损挂单
     
@@ -151,6 +207,27 @@ def execute_stop_loss(symbol: str, direction: str, entry: float,
             "log_entry": {...},
         }
     """
+    # 实盘边界：dry-run 可以用于人工演练；任何非 dry-run 请求必须
+    # 绑定完整、匹配且几何有效的 canonical FinalVerdict。
+    if not dry_run:
+        authorized, reason = _validate_execution_verdict(
+            final_verdict,
+            symbol=symbol,
+            direction=direction,
+            entry=entry,
+            stop=stop,
+            target1=target1,
+            target2=target2,
+            risk_usd=risk_usd,
+        )
+        if not authorized:
+            return {
+                "success": False,
+                "error": reason,
+                "execution_authorized": False,
+                "dry_run": False,
+            }
+
     # 1. 仓位计算
     pos = position_size(entry, stop, risk_usd, leverage, account_balance)
     if "error" in pos:
@@ -221,9 +298,8 @@ def log_execution(result: dict):
     }
     
     path = DATA / "hard_stop_log.jsonl"
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    
+    append_text_line(path, json.dumps(log_entry, ensure_ascii=False))
+
     return log_entry
 
 

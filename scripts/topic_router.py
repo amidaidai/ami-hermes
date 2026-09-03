@@ -56,17 +56,22 @@ def route_send(symbol: str, message: str, screenshot_path: str = None) -> bool:
     
     Returns: 是否成功
     """
-    target = get_target(symbol)
-    
-    # 构建完整消息
+    # Legacy callers may still invoke route_send, but it is not an
+    # authorization boundary. Require the explicit unattended-delivery opt-in
+    # and let telegram_reliable enforce the configured target.
+    if os.environ.get("TANGXI_ENABLE_AUTOMATED_TG") != "1":
+        return False
+    configured_target = os.environ.get("TANGXI_AUTOMATED_TG_TARGET", "").strip()
+    if not configured_target.startswith("telegram:"):
+        return False
+
     full_msg = message
     if screenshot_path and Path(screenshot_path).exists():
         full_msg += f"\nMEDIA:{screenshot_path}"
-    
-    # 直连 Telegram Bot API，避免 subprocess 开销
+
     try:
-        from telegram_direct import send_telegram_direct
-        ok, reason = send_telegram_direct(target, full_msg)
+        from telegram_reliable import push_tg_rich
+        ok, _reason = push_tg_rich(configured_target, full_msg)
         return ok
     except Exception:
         return False
