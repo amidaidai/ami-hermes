@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 
-CONTRACT_VERSION = "v13"
+CONTRACT_VERSION = "v14"
 
 # ── 1. 行动格行名（顺序 = 面板渲染顺序，卡片按此顺序输出）────────────
 
@@ -90,13 +90,17 @@ NEW_IN_V13 = {
     "MCP Entry Valid Code": "入场有效性 -3..3，见 ENTRY_VALID",
     "MCP NoTrade Reason Code": "禁做/降级原因的位掩码，见 NO_TRADE_BITS（最有价值）",
     "MCP Execution Pack": "priceGeom*1e6 + confirmed*1e5 + stopATR*10 + (entryValid+3)",
-    "MCP Trigger Pack": "(triggerCode+10)*1e5 + age*100 + fresh*10 + (signalState+1)",
+    # 20260910(F16)：低位偏移由 +1 改 +3 —— X 态 signalState=-2 时 +1 得 -1，
+    # 会向十位借位（实测算例 1099899 被拆成 998/9/9）。解码须按 -3 反解。
+    "MCP Trigger Pack": "(triggerCode+10)*1e5 + age*100 + fresh*10 + (signalState+3)",
     "MCP Regime Pack": "regimeCode*1e4 + preferredModel*100 + confidence",
     "MCP Contract Pack": "171000 + marketCode*10 + 1（市场身份校验）",
     "MCP Evidence Pack": "证据包版本戳",
     "MCP Evidence Bar Time": "证据K线开盘时间（ms）",
     "MCP Evidence Close Time": "证据K线收盘时间（ms）",
-    "Basic Packed Bus (唯一主副连接)": "主副唯一总线（合同号 22002）",
+    # 20260910(F05)：合同 22003 起，oiPctEnc == 0 表示「OI 缺失」；
+    # 22002 为旧语义（0 就是 0.00%）。主指标两个都接受，保证换装顺序安全。
+    "Basic Packed Bus (唯一主副连接)": "主副唯一总线（合同号 22003；22002 向后兼容）",
     "HALDRO State Pack (0无效/1支持多/2支持空/3冲突/4降权)": "副指标状态码 S0-S4",
     "OI Price Direction (same ACT_LB: 1涨/-1跌)": "同窗口 OI 与价格方向",
     "OI Breadth": "四所多空扩张广度差",
@@ -363,3 +367,47 @@ def parse_risk_row(text: str) -> dict:
     if m:
         out["rr"] = float(m.group(1))
     return out
+
+
+# ── 20260910 新增：F16 / F05 的解码助手 ────────────────────────────────
+def decode_trigger_pack(pack):
+    """拆 Trigger Pack。低位偏移为 +3（F16 修复后），X 态 signalState = -2。"""
+    try:
+        v = int(pack)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "triggerCode": v // 100000 - 10,
+        "age": (v // 100) % 1000,
+        "fresh": (v // 10) % 10 == 1,
+        "signalState": v % 10 - 3,      # 域 -2..4；恒非负编码，不再借位
+    }
+
+
+def decode_basic_bus(pack, contract=None):
+    """拆 Basic Packed Bus。
+
+    合同 22003：oiPct 字段为 0 表示 OI 缺失（不是 0.00%）；
+    合同 22002：0 仍表示 0.00%（旧语义，向后兼容）。
+    返回 oi_present 让调用方区分「没数据」与「持平」。
+    """
+    try:
+        v = int(pack)
+    except (TypeError, ValueError):
+        return None
+    cvd_bg = v % 10
+    raw = v // 10
+    ctr = raw // 10 ** 10
+    oi_raw = raw % 100000
+    present = bool(ctr == 22002) or oi_raw != 0
+    return {
+        "contract": ctr,
+        "valid": ctr in (22002, 22003),
+        "state": (raw // 10 ** 9) % 10,
+        "priceCode": (raw // 10 ** 8) % 10 - 1,
+        "oiDir": (raw // 10 ** 7) % 10 - 1,
+        "oiAgree": (raw // 10 ** 5) % 100,
+        "oiPct": (oi_raw - 10000) / 10.0 if present else None,
+        "oi_present": present,
+        "cvdBg": cvd_bg,
+    }
