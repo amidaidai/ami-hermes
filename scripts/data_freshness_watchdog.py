@@ -29,7 +29,10 @@ HERMES_DATA = Path(os.path.expanduser("~/AppData/Local/hermes/data"))
 WATCH_FILES = {
     # source_snapshot.json is a shared compatibility file and may currently
     # belong to XAU after the last refresh.  It must not satisfy BTC freshness.
-    "source_snapshot_BTCUSDT.json": {"threshold": 0.5, "paths": [PROJECT_DATA / "source_snapshot_BTCUSDT.json", HERMES_DATA / "source_snapshot_BTCUSDT.json"]},
+    # 20260910：阈值必须与刷新器自己的契约对齐 —— btc_tv_refresh.source_snapshot_status()
+    # 用 max_age_hours=0.75（丢到 45 分钟才去刷）。看门狗若 30 分钟就报警，
+    # 每个周期会白报 15 分钟（实测踩到），是自己造的噪声。
+    "source_snapshot_BTCUSDT.json": {"threshold": 0.8, "paths": [PROJECT_DATA / "source_snapshot_BTCUSDT.json", HERMES_DATA / "source_snapshot_BTCUSDT.json"]},
     "source_snapshot_XAUUSD.json": {"threshold": 0.5, "paths": [PROJECT_DATA / "source_snapshot_XAUUSD.json", HERMES_DATA / "source_snapshot_XAUUSD.json"]},
     "tv_dmi_cache.json": {"threshold": 1, "paths": [PROJECT_DATA / "tv_dmi_cache.json", HERMES_DATA / "tv_dmi_cache.json"]},
     # 每品种专属缓存（btc_tv_refresh 每 20 分钟 / xau_tv_sync 每 15 分钟）
