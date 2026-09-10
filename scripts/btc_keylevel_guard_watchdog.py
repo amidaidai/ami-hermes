@@ -25,6 +25,7 @@ ROOT = Path("D:/Hermes agent")
 sys.path.insert(0, str(ROOT / "scripts"))
 from atomic_json import atomic_write_json
 GUARD = ROOT / "scripts/keylevel_guard.py"
+CONFIG = ROOT / "data/keylevels_config.json"
 HEARTBEAT = ROOT / "data/.keylevel_guard_heartbeat.json"
 HEALTH = ROOT / "data/.keylevel_guard_health.json"
 LOG = ROOT / "data/keylevel_guard.log"
@@ -32,6 +33,86 @@ STALE_SECONDS = 90   # 心跳超时阈值
 MIN_ACTIVE_APPROVED_LEVELS = 1
 
 TZ = timezone(timedelta(hours=8))
+
+
+def auto_renew_existing_approved_levels(now: datetime | None = None) -> dict:
+    """Renew already-approved levels when the persisted policy authorizes it."""
+    now = now or datetime.now(TZ)
+    try:
+        config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        return {"changed": False, "error": f"config_read:{type(exc).__name__}"}
+    policy = config.get("auto_approval_policy") or {}
+    if not isinstance(policy, dict) or policy.get("enabled") is not True:
+        return {"changed": False, "reason": "policy_disabled"}
+    if policy.get("scope") != "existing_levels_only":
+        return {"changed": False, "error": "unsupported_scope"}
+    try:
+        ttl_hours = float(policy.get("ttl_hours", 6))
+        renew_before_minutes = float(policy.get("renew_before_minutes", 30))
+    except (TypeError, ValueError):
+        return {"changed": False, "error": "invalid_policy_window"}
+    if ttl_hours <= 0 or renew_before_minutes < 0:
+        return {"changed": False, "error": "invalid_policy_window"}
+
+    max_structure_age = policy.get("max_structure_age_hours")
+    structure_deadline = None
+    if max_structure_age is not None:
+        try:
+            max_structure_age = float(max_structure_age)
+            reviewed_raw = policy.get("structure_reviewed_at") or policy.get("authorized_at")
+            reviewed_at = datetime.fromisoformat(str(reviewed_raw).replace("Z", "+00:00"))
+            if reviewed_at.tzinfo is None:
+                reviewed_at = reviewed_at.replace(tzinfo=TZ)
+        except (TypeError, ValueError):
+            return {"changed": False, "error": "invalid_structure_review_window"}
+        if max_structure_age <= 0:
+            return {"changed": False, "error": "invalid_structure_review_window"}
+        structure_deadline = reviewed_at.astimezone(TZ) + timedelta(hours=max_structure_age)
+        structure_age_hours = (now - reviewed_at.astimezone(TZ)).total_seconds() / 3600.0
+        if structure_age_hours > max_structure_age:
+            return {
+                "changed": False,
+                "error": "structure_review_required",
+                "structure_age_hours": round(structure_age_hours, 2),
+                "max_structure_age_hours": max_structure_age,
+            }
+
+    threshold = now + timedelta(minutes=renew_before_minutes)
+    new_until = now + timedelta(hours=ttl_hours)
+    if structure_deadline is not None:
+        new_until = min(new_until, structure_deadline)
+    renewed = 0
+    for block in (config.get("symbols", {}) or {}).values():
+        if not isinstance(block, dict):
+            continue
+        for level in block.get("levels", []) or []:
+            if not isinstance(level, dict) or level.get("enabled", True) is False:
+                continue
+            raw = level.get("valid_until") or level.get("expires_at")
+            try:
+                expires = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=TZ)
+            except (TypeError, ValueError):
+                expires = now
+            if expires <= threshold:
+                level["valid_until"] = new_until.isoformat()
+                renewed += 1
+    if not renewed:
+        return {"changed": False, "reason": "not_due"}
+
+    stamp = now.isoformat()
+    config["updated_at"] = stamp
+    config["approval_renewal"] = {
+        "mode": "existing_levels_only",
+        "renewed_at": stamp,
+        "valid_until": new_until.isoformat(),
+        "source": "用户持久授权自动续期(现有批准位)",
+        "renewed_count": renewed,
+    }
+    atomic_write_json(CONFIG, config)
+    return {"changed": True, "renewed_count": renewed, "valid_until": new_until.isoformat()}
 
 # uv venv 的 python.exe 是 redirector stub：启动时会再 spawn 一个真实 uv python 子进程
 # 跑同一个 keylevel_guard.py → psutil 会数到 2 个实例（stub+real）→ watchdog 误判
@@ -123,7 +204,34 @@ def is_guard_alive():
         return None  # psutil 不可用时无法判断，交给心跳逻辑
 
 
+def _run_structure_review() -> dict:
+    """先做一次结构复核；通过才盖 structure_reviewed_at，否则安全闸照常落下。
+
+    这是 auto_approval_policy.max_structure_age_hours=24 那道闸的唯一合法来源 ——
+    此前没有任何脚本会写该字段，导致任何一次人工复核后最多 24 小时监控必停摆。
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from keylevels_structure_review import review, apply_review
+        return apply_review(result=review())
+    except Exception as exc:
+        return {"ok": False, "stamped": False,
+                "stamp_reason": f"结构复核不可用: {type(exc).__name__}: {str(exc)[:90]}"}
+
+
 def main():
+    review_result = _run_structure_review()
+    if review_result.get("stamped"):
+        log(f"STRUCTURE-REVIEW ok {review_result.get('valid')}/{review_result.get('checked')} "f"→ structure_reviewed_at 已更新")
+    elif review_result.get("ok"):
+        log(f"STRUCTURE-REVIEW ok (skip write): {review_result.get('stamp_reason')}")
+    else:
+        log(f"STRUCTURE-REVIEW FAILED: {review_result.get('stamp_reason')}")
+    renewal = auto_renew_existing_approved_levels()
+    if renewal.get("changed"):
+        log(f"AUTO-RENEW approved levels={renewal['renewed_count']} valid_until={renewal['valid_until']}")
+    elif renewal.get("error"):
+        log(f"AUTO-RENEW skipped error={renewal['error']}")
     health = check_config_health()
     write_health(health)
     active_levels = int(health.get("active_approved_levels", 0) or 0)

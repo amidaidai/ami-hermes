@@ -406,8 +406,35 @@ def load_cache():
     return {}
 
 
+def _symbol_cache_path(symbol) -> Path:
+    """按品种归一化出专属缓存路径（与 auto_card._tv_symbol_cache_path 同规则）。
+
+    BINANCE:BTCUSDT.P → data/tv_live_BTCUSDT.json
+    OANDA:XAUUSD      → data/tv_live_XAUUSD.json
+    """
+    raw = str(symbol or "").upper().split(":")[-1]
+    if raw.endswith(".P"):
+        raw = raw[:-2]
+    key = "".join(ch for ch in raw if ch.isalnum())
+    if key.endswith("PERP"):
+        key = key[:-4]
+    return CACHE.with_name(f"tv_live_{key}.json") if key else CACHE
+
+
 def save_cache(data):
-    """写入缓存。"""
+    """写入缓存。
+
+    20260910 修复(P0)：tv_dmi_cache.json 是 **BTC 主缓存**（读取侧按 BTC 品种校验），
+    但写入侧原先无条件覆盖它。带 expect_symbol 的调用（如 XAU 采集）不经过旧品种门禁，
+    于是把 OANDA:XAUUSD 的数据整份写进 BTC 主缓存 —— 实测该文件里全是黄金价（4374），
+    而 BTC 消费者读到后会把黄金当 BTC。现在非 BTC 品种改写各自的 tv_live_{KEY}.json。
+    """
+    if isinstance(data, dict) and data.get("symbol"):
+        sym = _norm_symbol_for_cache(data.get("symbol"))
+        canonical = _norm_symbol_for_cache("BINANCE:BTCUSDT.P")
+        if sym and sym != canonical:
+            atomic_write_json(_symbol_cache_path(data.get("symbol")), data)
+            return
     atomic_write_json(CACHE, data)
 
 

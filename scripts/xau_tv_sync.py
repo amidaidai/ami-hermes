@@ -10,6 +10,7 @@ D/4h/1h/15m/5m 读真实 high/low/close/OHLCV，并与5m主行动格成对验收
 降级: TV MCP 不可用则静默退出(不写文件，auto_card 走占位并标注⚠️)
 """
 import sys
+import argparse
 import json
 import asyncio
 import os
@@ -31,6 +32,121 @@ SYMBOL = "OANDA:XAUUSD"
 TIMEFRAMES = [("1D", "D"), ("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
 SOURCE_SNAPSHOT = ROOT / "data" / "source_snapshot_XAUUSD.json"
 _ACTION_KEYS = ("结论", "方向", "路径", "风控", "操作")
+_PREVIOUS_CHART: dict[str, Any] = {}
+# 图表归属状态：记录「用户的图表在哪」，并把「待归还目标」持久化，
+# 用于打断「上次没恢复干净 → 下次把残留当成用户图表 → 永久锁死」的棘轮。
+CHART_OWNER = ROOT / "data" / "tv_chart_owner.json"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="采集并原子发布 XAU TradingView 五周期与5m行动格",
+    )
+    return parser
+
+
+def _tv_command(*args: str, timeout: int = 30) -> tuple[str, bool]:
+    from tv_data_bridge import _tv
+    return _tv(*args, timeout=timeout)
+
+
+def _chart_state() -> dict[str, Any]:
+    from tv_data_bridge import _tv_json
+    return _tv_json("state", timeout=30) or {}
+
+
+def _load_chart_owner() -> dict[str, Any]:
+    try:
+        data = json.loads(CHART_OWNER.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+
+
+def _save_chart_owner(state: dict[str, Any]) -> None:
+    try:
+        CHART_OWNER.parent.mkdir(parents=True, exist_ok=True)
+        CHART_OWNER.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass          # 状态文件写不了也不能阻断采集
+
+
+def _resolve_restore_target(cur_symbol: str, cur_timeframe: str) -> dict[str, Any]:
+    """决定采完后该把图表还给谁。
+
+    - 进入时看到非本任务品种 → 那是用户的图表，记下来并作为归还目标
+    - 进入时已在 XAU 上 → 优先用「待归还」记录修回来（打断棘轮）；
+      没有待归还记录才认为用户真的在看 XAU，保持不动
+    """
+    cur_symbol = str(cur_symbol or "").strip()
+    cur_timeframe = str(cur_timeframe or "").strip()
+    state = _load_chart_owner()
+    is_our_target = cur_symbol.upper() == SYMBOL.upper()
+
+    if cur_symbol and not is_our_target:
+        state["user_symbol"] = cur_symbol
+        state["user_timeframe"] = cur_timeframe
+        state["pending_restore"] = {"symbol": cur_symbol, "resolution": cur_timeframe}
+        state["captured_at"] = datetime.now(TZ).isoformat()
+        _save_chart_owner(state)
+        return {"symbol": cur_symbol, "resolution": cur_timeframe}
+
+    pending = state.get("pending_restore") or {}
+    pending_symbol = str(pending.get("symbol") or "").strip()
+    if pending_symbol and pending_symbol.upper() != SYMBOL.upper():
+        # 上次没还回去 → 用记录修回来，不要顺着残留继续「恢复」成 XAU
+        state["ratchet_break_at"] = datetime.now(TZ).isoformat()
+        state["ratchet_break_from"] = cur_symbol
+        _save_chart_owner(state)
+        return {"symbol": pending_symbol,
+                "resolution": str(pending.get("resolution") or "")}
+
+    # 用户真的在看 XAU（或首次运行无记录）→ 保持原样
+    return {"symbol": cur_symbol, "resolution": cur_timeframe}
+
+
+def _mark_restored() -> None:
+    state = _load_chart_owner()
+    if state.pop("pending_restore", None) is not None:
+        state["restored_at"] = datetime.now(TZ).isoformat()
+        _save_chart_owner(state)
+
+
+def _restore_chart(previous: dict[str, Any]) -> bool:
+    symbol = str(previous.get("symbol") or previous.get("ticker") or "").strip()
+    timeframe = str(previous.get("resolution") or previous.get("timeframe") or "").strip()
+    if not symbol:
+        return False
+    if not _tv_command("symbol", symbol)[1]:
+        return False
+    if timeframe and not _tv_command("timeframe", timeframe)[1]:
+        return False
+    time.sleep(20)
+    actual = _chart_state()
+    actual_symbol = str(actual.get("symbol") or actual.get("ticker") or "").strip().upper()
+    actual_tf = str(actual.get("resolution") or actual.get("timeframe") or "").strip().upper()
+    return actual_symbol == symbol.upper() and (not timeframe or actual_tf == timeframe.upper())
+
+
+def _prepare_xau_main_chart() -> bool:
+    """Wait for XAU 5m indicators before reading the action grid."""
+    if not _tv_command("symbol", SYMBOL)[1]:
+        return False
+    if not _tv_command("timeframe", "5")[1]:
+        return False
+    time.sleep(20)
+    actual = _chart_state()
+    names = [
+        str(row.get("name") if isinstance(row, dict) else row)
+        for row in (actual.get("studies") or [])
+    ]
+    return (
+        str(actual.get("symbol") or "").upper() == SYMBOL
+        and str(actual.get("resolution") or actual.get("timeframe") or "").upper() in {"5", "5M"}
+        and any("SVP" in name for name in names)
+        and any("Volume Aggregated" in name for name in names)
+    )
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -234,6 +350,7 @@ if hermes_venv.exists():
 
 
 async def _run(sync_id: str):
+    global _PREVIOUS_CHART
     # 端口探测前置：TV Desktop CDP(9222)未开则静默退出，避免启动 node 超时/异常
     import socket
     try:
@@ -286,6 +403,10 @@ async def _run(sync_id: str):
                     or previous_payload.get("timeframe")
                     or ""
                 ).strip()
+                # 不直接记录「进入时看到什么」——那会把上次的残留当成用户图表，
+                # 导致图表被永久锁在 XAU。改由归属解析器决定归还目标。
+                _PREVIOUS_CHART = _resolve_restore_target(
+                    previous_symbol, previous_timeframe)
             except (TypeError, ValueError, json.JSONDecodeError):
                 pass
 
@@ -341,17 +462,10 @@ async def _run(sync_id: str):
                 # 外部投递必须在main完成双缓存校验和最终提交后执行。
                 return 0
             finally:
-                # 无论采集成功、校验失败还是中途异常，都恢复进入前状态。
-                # 若旧状态不可读则不擅自切到黄金，避免后台任务覆盖用户图表。
-                if previous_symbol:
-                    try:
-                        await set_symbol(session, previous_symbol)
-                        if previous_timeframe:
-                            await asyncio.sleep(1)
-                            await set_timeframe(session, previous_timeframe)
-                        print(f"↩ 已恢复TV图表: {previous_symbol} {previous_timeframe or '原周期'}")
-                    except Exception as restore_exc:
-                        print(f"⚠ 恢复TV图表失败: {restore_exc}", file=sys.stderr)
+                # The outer main lease restores only after the paired 5m action
+                # cache has been validated and committed. Restoring here would
+                # let the next stage read another symbol's Data Window.
+                pass
 
 
 def _build_xau_report(result: dict[str, Any]) -> str:
@@ -421,6 +535,7 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
 
 def main() -> int:
     """Run the TV sync with a cron-safe three-level degradation path."""
+    global _PREVIOUS_CHART
     try:
         try:
             STAGED_OUT.unlink()
@@ -428,24 +543,33 @@ def main() -> int:
             pass
         from tv_data_bridge import tv_collection_lock
         with tv_collection_lock(timeout=180):
-            batch_id = f"xau-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:10]}"
-            rc = asyncio.run(_run_with_retry(batch_id))
-            if isinstance(rc, int) and rc != 0:
-                raise RuntimeError(f"同步返回非零状态 {rc}")
-            # Keep five-TF capture, 5m action-cache refresh, read and pair
-            # validation under one chart lease. Another asset must not switch
-            # the shared TradingView chart between these publication steps.
-            live = _refresh_tv_live_cache(batch_id)
-            if not STAGED_OUT.exists():
-                raise RuntimeError("XAU五周期暂存快照未生成")
+            _PREVIOUS_CHART = {}
             try:
-                staged = json.loads(STAGED_OUT.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                raise RuntimeError(f"XAU五周期暂存快照无法解析: {exc}") from exc
-            contract = validate_xau_outputs(staged, live, require_batch_id=True)
-            if not contract["usable"]:
-                raise RuntimeError(contract["reason"])
-            os.replace(str(STAGED_OUT), str(OUT))
+                batch_id = f"xau-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:10]}"
+                rc = asyncio.run(_run_with_retry(batch_id))
+                if isinstance(rc, int) and rc != 0:
+                    raise RuntimeError(f"同步返回非零状态 {rc}")
+                # Keep five-TF capture, 5m action-cache refresh, read and pair
+                # validation under one chart lease. Another asset must not switch
+                # the shared TradingView chart between these publication steps.
+                if not _prepare_xau_main_chart():
+                    raise RuntimeError("XAU 5m主图指标重算校验失败")
+                live = _refresh_tv_live_cache(batch_id)
+                if not STAGED_OUT.exists():
+                    raise RuntimeError("XAU五周期暂存快照未生成")
+                try:
+                    staged = json.loads(STAGED_OUT.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(f"XAU五周期暂存快照无法解析: {exc}") from exc
+                contract = validate_xau_outputs(staged, live, require_batch_id=True)
+                if not contract["usable"]:
+                    raise RuntimeError(contract["reason"])
+                os.replace(str(STAGED_OUT), str(OUT))
+            finally:
+                if _PREVIOUS_CHART and not _restore_chart(_PREVIOUS_CHART):
+                    raise RuntimeError("XAU同步完成后恢复原TradingView图表失败")
+                if _PREVIOUS_CHART:
+                    _mark_restored()          # 还回去了就清掉待归还标记
         print(f"✅ XAU TV状态已原子发布 {OUT}")
         # Only publish externally after the validated state has been committed.
         # Test/degraded adapters may return a minimal synthetic snapshot; such
@@ -504,4 +628,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    build_parser().parse_args()
     raise SystemExit(main())
