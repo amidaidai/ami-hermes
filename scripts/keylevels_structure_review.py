@@ -162,6 +162,7 @@ def review(config: dict | None = None, snapshot: dict | None = None,
         reasons.extend(f"{i['name']}：{i['why']}" for i in invalid[:6])
 
     return {
+        "timestamp": now.isoformat(),      # source_health 用这个键判新鲜度
         "ok": bool(ok), "checked": checked, "valid": valid, "invalid": invalid,
         "price": price, "reasons": reasons, "method": "svp-drift+band",
         "reviewed_at": now.isoformat(),

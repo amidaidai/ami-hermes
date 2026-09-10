@@ -17,34 +17,44 @@ PROJECT_DATA = Path("D:/Hermes agent/data")
 HERMES_DATA = Path(os.path.expanduser("~/AppData/Local/hermes/data"))
 
 # 实际存在的文件 + 阈值（小时）
-# 注意：棠溪系统有两套落盘目录。之前只看 HERMES_DATA，导致项目目录内刚更新的
-# btc_ref_levels/tv_dmi_cache/monitor_heartbeat 被误判为 10h 过期。
-# paths 会取“存在文件中的最新 mtime”，避免双落盘期间误报。
+# 注意：棠溪系统有两套落盘目录。paths 会取“存在文件中的最新 mtime”，避免双落盘期间误报。
+#
+# 20260910 重写：原清单盯着 10 个**采集器已停用**的产出（x_sentiment / dune / qlib /
+# stablecoin / oi_snapshot / deribit / orion / liquidation_pressure / polymarket …），
+# 每次运行必然报 16 条过期 → 报警疲劳 → 看门狗被停用 → 真正的事故（BTC 到价监控
+# 停摆 5 天）反而没人看见。
+#
+# 现在只盯**生产者还活着的**文件，并补上监控链自身的生命体征 —— 后者才是
+# 「监控还活着吗」的直接证据，也是这次事故唯一能被提前发现的位置。
 WATCH_FILES = {
     # source_snapshot.json is a shared compatibility file and may currently
     # belong to XAU after the last refresh.  It must not satisfy BTC freshness.
     "source_snapshot_BTCUSDT.json": {"threshold": 0.5, "paths": [PROJECT_DATA / "source_snapshot_BTCUSDT.json", HERMES_DATA / "source_snapshot_BTCUSDT.json"]},
     "source_snapshot_XAUUSD.json": {"threshold": 0.5, "paths": [PROJECT_DATA / "source_snapshot_XAUUSD.json", HERMES_DATA / "source_snapshot_XAUUSD.json"]},
-    "btc_ref_levels.json": {"threshold": 8, "paths": [PROJECT_DATA / "btc_ref_levels.json", HERMES_DATA / "btc_ref_levels.json"]},
-    ".btc_daemon_heartbeat.json": {"threshold": 0.1, "paths": [PROJECT_DATA / ".btc_daemon_heartbeat.json"]},
-    "macro_snapshot.json": {"threshold": 6, "paths": [HERMES_DATA / "macro_snapshot.json", PROJECT_DATA / "macro_snapshot.json"]},
-    "polymarket_sentiment.json": {"threshold": 6, "paths": [HERMES_DATA / "polymarket_sentiment.json", PROJECT_DATA / "polymarket_sentiment.json"]},
-    "tv_dmi_cache.json": {"threshold": 4, "paths": [PROJECT_DATA / "tv_dmi_cache.json", HERMES_DATA / "tv_dmi_cache.json"]},
-    "tv_live.json": {"threshold": 1, "paths": [PROJECT_DATA / "tv_live.json", HERMES_DATA / "tv_live.json"]},
-    # 阈值必须略大于对应cron间隔，给网络和调度抖动留余量。
-    "x_sentiment.json": {"threshold": 3.5, "paths": [PROJECT_DATA / "x_sentiment.json", HERMES_DATA / "sentiment.json"]},
-    "x_sentiment_context.json": {"threshold": 3.5, "paths": [PROJECT_DATA / "x_sentiment_context.json", HERMES_DATA / "x_sentiment_context.json"]},
-    "deribit_options.json": {"threshold": 2.5, "paths": [PROJECT_DATA / "deribit_options.json", HERMES_DATA / "deribit_options.json"]},
-    "dune_cache.json": {"threshold": 5, "paths": [PROJECT_DATA / "dune_cache.json", HERMES_DATA / "dune_cache.json"]},
-    "qlib_factors.json": {"threshold": 3.5, "paths": [PROJECT_DATA / "qlib_factors.json", HERMES_DATA / "qlib_factors.json"]},
-    "orion_radar.json": {"threshold": 2.5, "paths": [PROJECT_DATA / "orion_radar.json", HERMES_DATA / "orion_radar.json"]},
-    "liquidation_pressure.json": {"threshold": 2.5, "paths": [HERMES_DATA / "liquidation_pressure.json", PROJECT_DATA / "liquidation_pressure.json"]},
-    "stablecoin_snapshot.json": {"threshold": 6, "paths": [HERMES_DATA / "stablecoin_snapshot.json", PROJECT_DATA / "stablecoin_snapshot.json"]},
-    "xau_macro_context.json": {"threshold": 24, "paths": [PROJECT_DATA / "xau_macro_context.json", HERMES_DATA / "xau_macro_context.json"]},
-    # 清算/OI任务每2小时运行；阈值需覆盖调度抖动，避免1小时阈值必然误报。
-    "oi_snapshot_BTCUSDT.json": {"threshold": 2.5, "paths": [HERMES_DATA / "oi_snapshot_BTCUSDT.json", PROJECT_DATA / "oi_snapshot_BTCUSDT.json"]},
-    "oi_snapshot_ETHUSDT.json": {"threshold": 2.5, "paths": [HERMES_DATA / "oi_snapshot_ETHUSDT.json", PROJECT_DATA / "oi_snapshot_ETHUSDT.json"]},
-    "monitor_heartbeat.json": {"threshold": 0.3, "paths": [PROJECT_DATA / "monitor_heartbeat.json", HERMES_DATA / "monitor_heartbeat.json"]},
+    "tv_dmi_cache.json": {"threshold": 1, "paths": [PROJECT_DATA / "tv_dmi_cache.json", HERMES_DATA / "tv_dmi_cache.json"]},
+    # 每品种专属缓存（btc_tv_refresh 每 20 分钟 / xau_tv_sync 每 15 分钟）
+    "tv_live_BTCUSDT.json": {"threshold": 1, "paths": [PROJECT_DATA / "tv_live_BTCUSDT.json", HERMES_DATA / "tv_live_BTCUSDT.json"]},
+    "xau_tv_state.json": {"threshold": 1, "paths": [PROJECT_DATA / "xau_tv_state.json", HERMES_DATA / "xau_tv_state.json"]},
+    # 唯一批准监控源：批准位本身有 TTL，文件本身超过 24h 没被续期就是异常
+    "keylevels_config.json": {"threshold": 24, "paths": [PROJECT_DATA / "keylevels_config.json", HERMES_DATA / "keylevels_config.json"]},
+    # ── 监控链自身生命体征（20260910 新增，这次事故的直接教训）─────────
+    ".keylevel_guard_heartbeat.json": {"threshold": 0.3, "paths": [PROJECT_DATA / ".keylevel_guard_heartbeat.json"]},
+    ".keylevel_guard_health.json": {"threshold": 0.3, "paths": [PROJECT_DATA / ".keylevel_guard_health.json"]},
+    # 结构复核结果：盖不上章说明关键位正在失效，必须在闸落下前被看见
+    "keylevels_structure_review.json": {"threshold": 6, "paths": [PROJECT_DATA / "keylevels_structure_review.json", HERMES_DATA / "keylevels_structure_review.json"]},
+}
+
+# 有意不监控的来源（生产者已停用）。列在这里是为了让「为什么没报」有据可查，
+# 而不是让它们继续制造噪声把真事故淹掉。
+#   需要恢复其中任何一个时，先把对应 cron 恢复运行，再把文件加回 WATCH_FILES。
+PAUSED_SOURCES = {
+    "btc_ref_levels.json": "btc_ref_levels_sync cron 已停用，能力由 keylevels_config 承担",
+    "monitor_heartbeat.json": "旧行情守望守护（monitor/market_watchdog）已退役",
+    ".btc_daemon_heartbeat.json": "旧 btc_daemon 守护已退役，现役为 keylevel_guard",
+    "macro_snapshot.json / polymarket_sentiment.json": "宏观Poly刷新脚本已归档",
+    "x_sentiment*.json / dune_cache.json / qlib_factors.json": "对应采集 cron 已停用",
+    "stablecoin_snapshot.json / liquidation_pressure.json / oi_snapshot_*.json": "对应采集 cron 已停用",
+    "deribit_options.json / orion_radar.json": "对应采集 cron 已停用",
 }
 
 
