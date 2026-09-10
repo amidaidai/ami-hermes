@@ -140,13 +140,24 @@ def test_parse_risk_row_variants():
 
 
 def test_dw_names_match_indicator_source():
-    """DW 名必须与两份 v13 源码里的 plot(title=) 完全一致（含中文后缀）。"""
-    assert "MCP CVD Method Code (0=不参与决策,2=lower-TF estimate,1=bar estimate)" in C.DW_MAIN
+    """DW 名必须与指标源码里的 plot(title=) 完全一致（含中文后缀）。
+
+    20260910 CE10117 减重：`MCP CVD Method Code` 与 `MCP StructPack` 的括号后缀被删
+    （纯说明文字，解码格式权威在 tv_indicator_contract 的注释里），此处同步。
+    """
+    assert "MCP CVD Method Code" in C.DW_MAIN
+    assert "MCP StructPack" in C.DW_MAIN
     assert "MCP NoTrade Reason Code" in C.DW_MAIN
     assert "MCP RR Ratio" in C.DW_MAIN
     assert "MCP Entry Valid Code" in C.DW_MAIN
     assert "MCP Trigger Pack" in C.DW_MAIN
     assert "MCP Contract Pack" in C.DW_MAIN
+    # 旧长名（带括号说明）已随 CE10117 减重废止，不得再出现在权威清单里
+    for dead_long in (
+        "MCP CVD Method Code (0=不参与决策,2=lower-TF estimate,1=bar estimate)",
+        "MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))",
+    ):
+        assert dead_long not in C.DW_MAIN
     assert "Basic Packed Bus (唯一主副连接)" in C.DW_SUB
     assert "HALDRO State Pack (0无效/1支持多/2支持空/3冲突/4降权)" in C.DW_SUB
     assert "CVD Method Code (1=当前所K线方向/2=当前所1m方向)" in C.DW_SUB

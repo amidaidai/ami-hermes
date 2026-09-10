@@ -58,12 +58,12 @@ DW_MAIN = [
     "EMA 9", "EMA 21", "EMA 34", "EMA 55",
     "MCP Side Code", "MCP Grade Code", "MCP Setup Score",
     "MCP Entry Price", "MCP Stop Price", "MCP Target Price",
-    "MCP CVD Method Code (0=不参与决策,2=lower-TF estimate,1=bar estimate)",
+    "MCP CVD Method Code",
     "MCP Quality Code", "MCP FVG Quality Score", "MCP OB Quality Score",
     "MCP Entry Valid Code", "MCP RR Ratio", "MCP NoTrade Reason Code",
     "MCP Execution Pack", "MCP Trigger Pack", "MCP Regime Pack", "MCP Contract Pack",
     "MCP Evidence Pack", "MCP Evidence Bar Time", "MCP Evidence Close Time",
-    "MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))",
+    "MCP StructPack",
     "POC Price", "VAH Price", "VAL Price", "nPOC Price",
     "W VWAP Price", "M VWAP Price", "DO Price",
 ]
@@ -147,8 +147,8 @@ DW_ALIASES_MAIN = {
     "mcp_evidence_pack": "MCP Evidence Pack",
     "mcp_evidence_bar_time": "MCP Evidence Bar Time",
     "mcp_evidence_close_time": "MCP Evidence Close Time",
-    "mcp_cvd_method_code": "MCP CVD Method Code (0=不参与决策,2=lower-TF estimate,1=bar estimate)",
-    "mcp_struct_pack": "MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))",
+    "mcp_cvd_method_code": "MCP CVD Method Code",
+    "mcp_struct_pack": "MCP StructPack",
 }
 
 DW_ALIASES_SUB = {
