@@ -1,125 +1,190 @@
-# 双指标 TV Pine → 分析卡 字段映射 v1.2
+# 双指标 TV Pine → 分析卡 字段映射 v1.3
 
 > 所属：棠溪交易驾驶舱 / `tradingview-indicator-analysis`
-> 更新：2026年7月2日
-> 来源：用户上传的两份权威生产指标：`主指标.txt` + `副指标.txt`。
-> 铁律：以后正式分析只读这套双指标，不再沿用旧 SVP/HALDRO 假设或旧 Data Window 状态。
+> 更新：2026年9月10日（上一版 v1.2 = 2026年7月2日）
+> 权威来源：两份 v13 生产指标源码 + 2026-09-10 在 `BINANCE:BTCUSDT.P` 上的实盘读数
+> **唯一代码定义源**：`scripts/tv_indicator_contract.py`（改字段先改这里）
 
 ## 0. 当前生产指标
 
-| 指标 | 权威文件 | Pine | 行数 | 分工 |
+| 指标 | Pine 文件 | sha256[:24] | 行数 | 分工 |
 |---|---|---:|---:|---|
-| 主指标 | `D:/Hermes agent/svp_indicator.txt` | v5 | 3163 · sha703eb981 | 结构、位置、ICT/FVG、VWAP/EMA/CVD、DMI状态、进场/止损/目标、磁吸 |
-| 副指标 | `D:/Hermes agent/haldro_indicator.txt` | v6 | 469 · shab049bac0 | 聚合现货/永续成交量、OI价仓、会话CVD、量能、覆盖率、爆仓、订单流降级 |
+| 主指标 | `SVP_主指标_优化v13_清理死码_20260910.pine` | `98d6338b4cb77e5d4e56e5e4` | 3446 | 结构、位置、IA/FVG/OB、VWAP/EMA/CVD、DMI体制、13 行行动格、唯一执行授权 |
+| 副指标 | `AggVol_副指标_优化v13_清理死码_20260910.pine` | `9f71366943a2d773ccb0c1c4` | 921 | 5 所聚合成交、4 所 OI、估计 CVD、LSR、基差、6 行行动格、只确认/降级/否决 |
 
-主指标当前标题是 `SVP+ICT+VWAP+CVD`，但源码仍包含 EMA9/21/34/55、周/月VWAP、DO、FVG、Funding、ADR 等模块；不要因标题少写 EMA 就误判 EMA 不存在。
+## 1. v1.2 → v1.3 的实质变化（旧文档已失效的部分）
 
-## 1. 主指标更新点
+| 项 | v1.2 记录 | v1.3 实际 | 影响 |
+|---|---|---|---|
+| 主指标版本 | v5 / 3163 行 | **v13 / 3446 行** | 字段与行名大幅变化 |
+| 主指标行动格 | 10 行：结论/方向/进场/止损/目标/确认/风险/磁吸↑/磁吸↓/核对 | **13 行**：位置/结论/方向/路径/风控/CVD/OI/协同/结构/磁吸↑/磁吸↓/前位/现位 | 旧卡片只吃到 4/13 行 |
+| 进场·止损·目标 | 独立三行 | **折进「风控」行**：`入X·止Y·n.nA·标Z·n.nR` | 必须解析「风控」行才能拿到价格 |
+| 「风控」行标签 | 固定「风控」 | **动态四态**：风控 / 风控·观察 / 风控·未授权 / 禁做·不出价 | 只认字面「风控」会在观察态漏读 |
+| 副指标版本 | v6 / 469 行 | **v13 / 921 行** | — |
+| 副指标行动格 | 10 行 | **6 行**：信号/结论/流向/持仓/量能/操作 | 风险/高周/覆盖/爆仓已并入或删除 |
+| `OI Total` | 有 | **已不存在** | 旧映射恒空 |
+| `Estimated CVD Value` | 有 | **改名为 `CVD Value`** | 旧映射恒空 |
+| `MCP CVD Value` | 有 | **已不存在** | 旧映射恒空 |
+| `MCP EMA Length 1-4` / `MCP Risk Pack` / `MCP Bull FVG CE` | 有 | **均已不存在** | 旧映射恒空 |
+| 主副连接 | 无 | **`Basic Packed Bus`（合同号 22002）** | 主指标必须选源指向它 |
+| 配额 | 交易所 20 + 2 + 4 + 1 = 27/40 | **request.\* 8 / 8，input 193 / 38，alert 0** | — |
 
-| 模块 | 当前规则 | 分析影响 |
-|---|---|---|
-| FVG | 已显式内置 ICT 三K FVG、CE 50%、位移过滤、本级/HTF确认 | 正式分析必须读取/解释 FVG✓、FVG✓HTF、扫★HTF；不再说“指标没有FVG代码” |
-| 行动格 v2 | 结论、方向、进场、止损、目标、确认、风险、磁吸↑、磁吸↓；完整模式另有指标/计划 | `pine_tables` 是主真理源；卡片里的进出场优先用行动格原文 |
-| Data Window | 已恢复 MCP 导出：`MCP Side Code`、`MCP Grade Code`、`MCP Setup Score`、`MCP Entry Price`、`MCP Stop Price`、`MCP Target Price`、`MCP CVD Value`、`MCP Quality Code` | 可作为 MCP 稳定读取兜底；但行动格文字仍优先于编码字段 |
-| 右轴价格 | `POC Price`、`VAH Price`、`VAL Price`、`nPOC Price`、`W VWAP Price`、`M VWAP Price`、`DO Price` | 关键位矩阵必须从这些字段/线条交叉验证 |
-| 质量码 | `Quality Code` 按位编码：HTF冲突=1、CVD质量问题=2、低流动性=4、ADR耗尽/禁追=8、HTF FVG=16、MSS=32 | 多源交叉验证表要拆码，不得只写“质量码31” |
+## 2. 主指标行动格（13 行，权威读法）
 
-### 主指标行动格字段
+| # | 行 | 含义 | 卡片用途 | 授权含义 |
+|---:|---|---|---|---|
+| 1 | 位置 | 价在 VA 上/下 · VWAP 锚 · 周月偏空/多 · 波N% | 背景定位 | — |
+| 2 | 结论 | 副Sx·A禁/不执行 + 冲突/未收线标志 + 等待根数 | **裁决首读** | 决定等级 |
+| 3 | 方向 | 主倾向 · 趋势/震荡 · 评分 n/10 | 方向速览 | — |
+| 4 | 路径 | 触发链 + `·距n.nA↑/↓`（入场位距现价） | 触发条件 | — |
+| 5 | **风控** | 授权等级 + `入X·止Y·n.nA·标Z·n.nR` | 执行三件套 | **风控·观察 / 风控·未授权 / 禁做·不出价** |
+| 6 | CVD | 锚定周期 · 方向 · 质量 · `基差±n.nn%` | 订单流确认 | — |
+| 7 | OI | 四所 OI 共识 / 未接 | 持仓变化 | — |
+| 8 | 协同 | `副Sx…·高周N` | **主副一致性** | — |
+| 9 | 结构 | 多/空趋势 · BOS/CHoCH · 守摆高/低 · 扫位 n/m | 结构判定 | — |
+| 10 | 磁吸↑ | `↑周N 高/低 价格·n.nA·分N·N★HTF` | 上方目标 | — |
+| 11 | 磁吸↓ | 同上（下方） | 下方目标 | — |
+| 12 | 前位 | `名称 价格·生命周期·角色·距离·退役时刻` | 前关键位现状 | — |
+| 13 | 现位 | `多/空·反抽/回踩 XX·等MSS↑·HH:MM定` | 当前观察位 | — |
 
-| 行 | 源码变量 | 用途 |
-|---|---|---|
-| 结论 | `actionStateText` | A/B/C/X状态与处理 |
-| 方向 | `panelDirVal` | 主倾向、评分、过热/走弱、溢价/折价、KillZone、扫位计数 |
-| 进场 | `panelEntryVal` | FVG@CE、扫低/扫高、VAL/VAH、吸收/派发、结构触发 |
-| 止损 | `panelStopVal` | 结构失效位 + ATR夹层 |
-| 目标 | `panelTgtVal` | 同向磁吸 + R:R |
-| 确认 | `panelConfirmText` | HTF/CVD/位置/MSS/FVG/扫★HTF |
-| 风险 | `panelRiskText` | HTF逆、CVD冲突、EMA逆、位移缺、深溢折、ADR、SMT、OI、薄量 |
-| 磁吸↑/↓ | `pnlMagUp` / `pnlMagDn` | 上下方目标、分数、HTF标记、距ATR |
+**前位行的生命周期与角色**：生命周期 = 已破 / 过期 / 被替代；角色 = 仍撑 / 破转阻 / 仍阻 / 破转撑。
 
-### 主指标 MCP Data Window 字段
-
-| 字段 | 含义 | 读取优先级 |
-|---|---|---|
-| `MCP Side Code` | 1=多，-1=空，9=X，0=中性/等待 | 表格缺失时兜底 |
-| `MCP Grade Code` | 3=A，2=B，1=C，-1=X，0=等待 | 表格缺失时兜底 |
-| `MCP Setup Score` | 0-10执行评分 | 评分列/Composite |
-| `MCP Entry Price` | A级计划价；B/C可能为空 | 仅 A 或已确认时可执行 |
-| `MCP Stop Price` | A级失效/止损价 | 与行动格止损交叉验证 |
-| `MCP Target Price` | 同向磁吸目标价 | 关键位矩阵/目标 |
-| `MCP CVD Value` | 主指标CVD值 | CVD窗格与订单流验证 |
-| `MCP Quality Code` | 质量/冲突位码 | 拆码写入矛盾点 |
-
-## 2. 副指标更新点
-
-| 模块 | 当前规则 | 分析影响 |
-|---|---|---|
-| 交易所 | 默认5家：BINANCE/BYBIT/OKX/COINBASE/BITGET | 不再按旧20+交易所假设读字段 |
-| 配额 | 交易所20 + EUR/RUB 2 + OI聚合4 + OI回退1 = 27/40 | 不能误报超40 |
-| OI | 聚合 Binance/Bybit/OKX/Bitget OI + 单源回退 | 加密订单流表必须写 OI四象限 |
-| 覆盖率 | `聚合n/5 · 现n 永n · 覆盖% · 低覆盖/单所主导` | 覆盖/单所主导是降权，不是方向 |
-| 行动格 | 精简模式默认只显示 信号/结论/风险/操作；完整模式显示高周/持仓/流向/覆盖/量能/爆仓/操作 | 解析器不能强依赖“占比”行；合约占比已并入量能行 `合N%` |
-| Data Window | `OI Total`、`CVD Value`、`Volume Ratio`、`Coverage Exchanges/Spot/Perp`、`Coverage Feed Mode`、`Exchange Dominance %`、`Confirm Score`、`Composite` | 副指标可从 study_values 直接补订单流数值 |
-
-### 副指标行动格字段
+## 3. 副指标行动格（6 行）
 
 | 行 | 源码变量 | 含义 | 卡片用途 |
 |---|---|---|---|
-| 信号 | `signalA + flowShortA + confirmScoreA/5` | 偏多/偏空/无向 + 共振 + 流型 + 确认分 | 订单流方向与质量 |
-| 结论 | `actText` | 实涨可信、真实下跌、涨势存疑、回补/去杠杆、踩踏/轧空 | 真假运动判断 |
-| 风险 | `riskWarnA` | 低覆盖、单所主导、HTF冲突、OI背离 | 降权/禁追理由 |
-| 高周 | `htfTxtA` | 偏多/偏空/震荡 | 与主指标HTF交叉 |
-| 持仓 | `oiTxtA` | 新多、新空、空补、多平、OI背离 | 价仓四象限 |
-| 流向 | `cvdTxtA` | 买盘占优、卖盘占优、均衡 | CVD确认/背离 |
-| 覆盖 | `coverageRowA` | 聚合覆盖与单所主导 | 数据质量 |
-| 量能 | `volTxtA` | 放量/缩量/平量 + 合约占比 | 是否能追 |
-| 爆仓 | `liqTxtA` | 空头爆仓/多头爆仓/无明显 | 轧空/踩踏风险 |
-| 操作 | `comboTxt` | 配合主指标可做/降级/等待 | 最终执行质量 |
+| 信号 | `panelStateA` + 共振 n/4 | 🔴S3冲突 / S1支持多 / S2支持空 / S4降权 / S0未接 + `·OI背离` | 订单流状态码 |
+| 结论 | `actText` | 实涨可信 / 缩量下跌 / 涨势存疑 / 回补 · 勿追·前N根 | 真假运动 |
+| 流向 | `flowPanelTxtA` | 锚定周期 · 采样口径 · `本锚近NK卖/买` · `净N%` · 滚动同向/逆 | CVD 确认/背离 |
+| 持仓 | `oiTxtA` | ⚡新空/新多/回补/平仓 · `n.nn%` · `同N%` · `滚NK` | 价仓四象限 |
+| 量能 | `volTxtA` | ▲放量/▼缩量/平量 · `xN.N` · `合N%` · `同步放量 n/5` | 能否追 |
+| 操作 | `comboTxt` | 不执行 / 不追 / 弱确认 / 仅作参考 / 确认多 / 确认空 | 最终执行建议 |
 
-### 副指标 Data Window 字段
+## 4. Data Window 全量（35 + 27）
 
-| 字段 | 含义 |
+### 主指标
+
+`S VWAP` `S VWAP ±Band1` `EMA 9/21/34/55` · `POC Price` `VAH Price` `VAL Price` `nPOC Price` `W VWAP Price` `M VWAP Price` `DO Price`
+`MCP Side Code`(1多/-1空/9X/0无) `MCP Grade Code`(3A/2B/1C/-1X/0等待) `MCP Setup Score`(0-10)
+`MCP Entry/Stop/Target Price` · `MCP CVD Method Code` · `MCP Quality Code` · `MCP FVG/OB Quality Score`
+**v13 新增接进卡片**：`MCP Entry Valid Code` `MCP RR Ratio` `MCP NoTrade Reason Code` `MCP Execution Pack` `MCP Trigger Pack` `MCP Regime Pack` `MCP Contract Pack` `MCP Evidence Pack/Bar Time/Close Time` `MCP StructPack`
+
+### 副指标
+
+`HALDRO Valid Code` `OI Change % (Normalized)` `CVD Value` `CVD Method Code` `CVD Quality Code` `LSR` `Volume Ratio` `Coverage Exchanges/Spot/Perp` `Coverage Feed Mode` `Exchange Dominance %` `Confirm Score` `Composite` `HALDRO Risk Code`
+**v13 新增接进卡片**：`Basic Packed Bus` `HALDRO State Pack` `OI Price Direction` `OI Breadth` `OI Agreement %` `HALDRO OI Pack` `OI Dispersion Ratio` `HALDRO Freshness Pack` `Stale Venue Count` `HALDRO Contract Pack` `HALDRO Flow Pack` `CVD Anchor Value`
+
+## 5. 解码器（v13 新增，全在契约文件里）
+
+### `MCP NoTrade Reason Code` — 位掩码，可多位置位（最有价值）
+
+| 位 | 含义 |
+|---:|---|
+| 1 | HTF 冲突 X |
+| 2 | 过热追高 X |
+| 4 | 低流动性 |
+| 8 | 价格几何不成立 |
+| 16 | R:R 不足 |
+| 32 | CVD 质量不达标 |
+| 64 | ADR 禁追 |
+| 128 | 溢折价不允许 |
+| 256 | 本根未收线 |
+| 512 | 触发不新鲜 |
+| 1024 | 副指标冲突/降权 |
+
+**实读样例**：`1976 = 8+16+32+128+256+512+1024` → 七项同时成立，与面板 `副S0未接·A禁 ⚠冲突 ⚠未收线` 自洽。
+
+### 其他
+
+| 字段 | 取值 |
 |---|---|
-| `OI Total` | 聚合/回退后的总OI |
-| `CVD Value` | 会话CVD累计值 |
-| `Volume Ratio` | 当前量 / EMA量 |
-| `Coverage Exchanges` | 有效交易所数量 |
-| `Coverage Spot` | 有效现货源数量 |
-| `Coverage Perp` | 有效永续源数量 |
-| `Coverage Feed Mode` | 1=聚合，-1=回退单图，0=其他 |
-| `Exchange Dominance %` | 最大交易所成交占比 |
-| `Confirm Score` | 0-5确认分 |
-| `Composite` | 正=多、负=空，绝对值含共振强度 |
+| `MCP Entry Valid Code` | -3 X禁做 / -2 价格几何不成立 / -1 R:R不足 / 0 无方向 / 1 待确认 / 2 可执行(B/C) / 3 可执行(A) |
+| `HALDRO State Pack` | 0 S0未接 / 1 S1支持多 / 2 S2支持空 / 3 S3冲突 / 4 S4降权 |
+| `MCP RR Ratio` | ≥2.0 过硬闸（A级必需）；≥1.5 仅 B/C 直通；<1.5 不足 |
+| `MCP Execution Pack` | `几何*1e6 + 收线*1e5 + 止损ATR*10 + (入场码+3)`；实读 1801 → 几何0/未收线/1.80ATR/入场码-2 |
+| `MCP Trigger Pack` | `(触发码+10)*1e5 + 触发年龄*100 + 新鲜*10 + (信号态+1)` |
+| `MCP Contract Pack` | `171000 + 市场码*10 + 1`；实读 171011 = BTC/加密 |
+| `Basic Packed Bus` | 主副唯一总线；合同号 22002 为加密，22000 非加密 |
 
-## 3. 分析驾驶舱新读取顺序
+## 6. 读取顺序（v13）
 
 ```text
-① TV健康与品种校验：chart_get_state，价格数量级必须匹配
-② 五周期读取：1D → 4h → 1h → 15m → 5m
-③ 每周期读取：pine_tables + study_values + pine_labels + pine_lines + pine_boxes + OHLCV摘要
-④ 主指标优先：行动格 v2 决定结构/计划；MCP Data Window 补价格/质量码
-⑤ 副指标确认：行动格 + OI/CVD/Volume/Coverage Data Window
-⑥ 外部验证：Binance OI/Funding/Taker/多空比/Depth、F&G、CoinGecko、Jin10/Web/X
-⑦ 截图：full窗口，价格轴 + 主行动格 + 副行动格/OI/CVD窗格
-⑧ 输出：多周期定位表、关键位矩阵、多源交叉验证、矛盾点、AB方案、评分、管线完成度
+①  TV 健康与品种校验：chart_get_state；价格数量级与品种必须匹配
+②  主指标 13 行行动格（pine_tables，study-filter SVP）—— 决策首读
+③  副指标 6 行行动格（study-filter 副指标名）
+④  主指标 DW：先读 Side/Grade/EntryValid/RR/NoTradeReason 五件套
+⑤  副指标 DW：State Pack / Valid Code / Confirm / Composite / Coverage
+⑥  解码：NoTrade 位掩码 → 原因链；EntryValid → 准入结论；RR → 闸门结论
+⑦  外部验证：Binance OI/Funding/Taker/多空比/Depth、F&G、CoinGecko、Jin10/X
+⑧  截图：全屏，含价格轴 + 主行动格 + 副行动格/CVD 窗格
+⑨  输出：多周期定位 → 关键位矩阵 → 多源交叉验证 → 矛盾点 → 方案 → 评分 → 完成度
 ```
 
-## 4. 合成裁决
+## 7. 合成裁决（**已落成代码**：`scripts/decision_matrix.py`）
+
+### 7.1 主副九宫格 `synthesis_verdict()`
+
+输入：主指标等级 × 副指标状态 S0-S4 × R:R × 是否加密。
+输出：`verdict / authority / sub_role / executable / hard_block / rr / reason`。
+
+| 主指标 | 副指标 | 裁决 | 可执行 |
+|---|---|---|---|
+| A 多 | S1 支持多 | **A执行** | ✅ |
+| A 空 | S2 支持空 | **A执行** | ✅ |
+| A | S3 冲突 | **不执行·副冲突** | ❌ 硬阻断，清空三件套 |
+| A | S4 降权 | **A降级候选** | ❌ 降为 B 档人工候选 |
+| A | S0 / 未接 | **A降级候选** | ❌ 副未接不得假装同意 |
+| A | 反向（A多+S2） | **A降级候选** | ❌ |
+| B/C | 顺向 + R:R≥1.5 | **B/C人工候选** | ❌ 给触发与候选价，不给执行指令 |
+| X | 任意 | **X禁做** | ❌（副指标不覆盖 X） |
+| 非加密 | 任意 | **副不参与** | 按主指标，不得被副指标否决 |
+
+**不变量**：全网格扫描（9 等级 × 6 副状态 × 5 R:R = 270 组）证明**合成永不升级** ——
+副指标只能确认/降权/否决，任何组合都不可能把 B/C 变成 A。
+代码位置 `_apply_matrix_guard()`（auto_card）：在 FinalVerdict 落定后做最后一次保守化，只降不升。
+
+### 7.2 解除条件 `release_plan()` / `format_release()`
+
+回答「现在是 A 禁，那我在等什么」。每个 NoTrade 位置对应一句**可验证**的等待条件：
+
+| 位 | 解除条件 |
+|---:|---|
+| 1 | 等 HTF 与本级同向 |
+| 2 | 等过热回落（回到结构位/ATR 正常范围） |
+| 4 | 等流动性窗口（避开低流动时段） |
+| 8 | 等价格几何成立（入场与止损顺序正确、贴近结构位） |
+| 16 | 等 R:R ≥ 2.0 |
+| 32 | 等 CVD 质量达标（采样源恢复） |
+| 64 | 等 ADR 空间打开（当日波动耗尽，隔日再看） |
+| 128 | 等溢价/折价回到允许侧 |
+| 256 | 等本根收线 ★临时 |
+| 512 | 等新触发出现（旧触发已过期） ★临时 |
+| 1024 | 先修副指标总线 ★临时 |
+
+★ 临时项排在最前 —— 先做能立刻做的。
+
+### 7.3 R:R 档位 `rr_tier()`
+
+`≥2.0` A级（过硬闸）｜`≥1.5` 仅 B/C 直通｜`<1.5` 不足｜缺失 → 不给执行价。
+与指标侧 `rrHardOk / bcDirectOk` 同源同阈值。
+
+### 7.4 旧版文字规则（保留供理解）
 
 | 情况 | 裁决 |
 |---|---|
-| 主A + 副确认分≥3/5 + OI/CVD顺向 + 覆盖正常 | A机会，可盯执行 |
-| 主A + 副CVD不配/回补/缩量/低覆盖 | 降B，等二次确认 |
-| 主B/C + 副强 + 贴关键位/FVG/磁吸 | B偏A，给确认触发，不给无条件挂单 |
-| 主X + 副强 | 不直接反向；拆质量码与风险，写解除X条件 |
-| 主指标FVG✓HTF + MSS✓ + 副顺向 | FVG回踩/CE位优先级上调 |
-| 副单所主导/低覆盖 | 数据降权，不作为单独方向源 |
+| 主A + 副顺向 + 覆盖正常 + R:R≥2.0 | A 机会，可盯执行 |
+| 主A + 副 S3 冲突 | **不执行**（硬阻断，不得降级放行） |
+| 主A + 副 S4 降权 / S0未接 | 降权为人工候选 |
+| 主B/C + 副强 + R:R≥1.5 + 贴关键位/FVG | B/C 人工观察候选 |
+| 主X | 不出价；读 NoTrade 掩码写「解除条件」 |
+| NoTrade 含 1024 | 先修总线（主指标「免费版唯一总线」未指向副指标 `Basic Packed Bus`） |
+| NoTrade 含 256/512 | 等收线 / 等新触发，不得提前挂单 |
 
-## 5. 禁止事项
+## 8. 禁止事项
 
-- 禁止再说“主指标没有显式FVG代码”。当前主指标已内置FVG与HTF FVG确认。
-- 禁止再按“主指标Data Window编码已移除”处理。当前已恢复 MCP Data Window 导出。
-- 禁止用旧 `SVP+ICT+VWAP+EMA+CVD`/旧HALDRO字段假设覆盖用户本次上传指标。
-- 禁止只读 `study_values` 不读行动格；行动格是进场/止损/目标的权威文本。
-- 禁止强依赖副指标“占比”行；当前占比并入“量能”行，新增“覆盖”行。
-- 禁止把副指标加密 OI/Funding/Spot-Perp 逻辑套到 XAU/外汇/股票。
+- 禁止用 v1.2 的 10 行旧行名（进场/止损/目标/确认/核对）解析 v13 面板 —— 会静默丢 9 行。
+- 禁止只认字面「风控」行 —— v13 是动态四态标签。
+- 禁止把「风控·观察」里的候选价当成 A 级授权价（那是 B/C 人工观察档）。
+- 禁止强依赖副指标 `OI Total` / `Estimated CVD Value` —— 已不存在。
+- 禁止把副指标加密的 OI/Funding/Spot-Perp 逻辑套到 XAU/外汇/股票。
+- 禁止在指标侧改完行名/字段名后不改 `scripts/tv_indicator_contract.py` —— 那是唯一契约源。

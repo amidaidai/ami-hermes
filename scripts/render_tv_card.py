@@ -41,7 +41,9 @@ def _clean_text(text: object, limit: int | None = None) -> str:
         s = s.replace(old, new)
     s = s.replace("|", "／")
     s = re.sub(r"\s+", " ", s).strip(" ·")
-    return s[:limit].rstrip(" ·") if limit else s
+    # Legacy callers pass width hints. Never cut semantic text: a suffix
+    # can contain a price, percent sign, negation, or source-state qualifier.
+    return s
 
 
 def _fmt_num(v):
@@ -84,15 +86,21 @@ def _tf_mini(main: dict, symbol: str = "") -> str:
             main_tf = timeframe_info(symbol).get("main", "")
     except Exception:
         pass
-    if not isinstance(kl, dict) or not kl:
-        return "5m⚪ · 15m⚪ · 1h⚪ · 4h⚪ · D⚪"
+    if not isinstance(kl, dict):
+        kl = {}
     out = []
     for tf in TF_ORDER:
-        k = kl.get(tf, {}) if isinstance(kl, dict) else {}
+        k = kl.get(tf) or (kl.get("1D") if tf == "D" else None)
+        mark = "⭐" if tf == main_tf else ""
+        if not isinstance(k, dict) or not k:
+            out.append(f"{tf}{mark}未取")
+            continue
         desc = str(k.get("description") or k.get("svp") or k.get("direction") or "") if isinstance(k, dict) else ""
         emo = "🟢" if any(x in desc for x in ("多", "涨", "long")) else "🔴" if any(x in desc for x in ("空", "跌", "short")) else "⚠️" if "禁" in desc else "🔵" if desc else "⚪"
-        mark = "⭐" if tf == main_tf else ""
-        out.append(f"{tf}{mark}{emo}")
+        inherited = ""
+        if k.get("inherited") is True:
+            inherited = "继承" + str(k.get("timestamp") or "时间未提供")
+        out.append(f"{tf}{mark}{emo}{inherited}")
     return " · ".join(out)
 
 
@@ -173,6 +181,45 @@ def _dual_verdict_for_final(main: dict, dual: dict) -> str:
     return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "主副待读")
 
 
+def _final_is_executable(final: dict) -> bool:
+    """Defensively verify the canonical execution tuple before rendering it."""
+    if str(final.get("state") or "").upper() != "GO-A" or final.get("executable") is not True:
+        return False
+    try:
+        entry, stop, target = (float(final[key]) for key in ("entry", "stop", "target"))
+    except (KeyError, TypeError, ValueError):
+        return False
+    side = str(final.get("side") or "").lower()
+    grade = str(final.get("grade") or "")
+    side_matches = (side == "long" and grade.startswith("A多")) or (side == "short" and grade.startswith("A空"))
+    geometry_ok = (side == "long" and stop < entry < target) or (side == "short" and stop > entry > target)
+    return side_matches and geometry_ok
+
+
+def _matrix_line(main: dict) -> str:
+    """裁决矩阵一行：结论 + 理由 + 解除条件（没有就不占行）。"""
+    if not isinstance(main, dict):
+        return ""
+    final = main.get("_final_verdict") if isinstance(main.get("_final_verdict"), dict) else {}
+    syn = main.get("synthesis") if isinstance(main.get("synthesis"), dict) else {}
+    verdict = str(final.get("matrix_verdict") or syn.get("verdict") or "")
+    if not verdict:
+        return ""
+    reason = str(final.get("matrix_reason") or syn.get("reason") or "")
+    head = f"⚖ 裁决：{verdict}"
+    if verdict == "A执行":
+        rr = syn.get("rr") or {}
+        tail = str(rr.get("text") or "") if isinstance(rr, dict) else ""
+        return _clean_text(f"{head} · {reason}" + (f" · {tail}" if tail else ""), 150)
+    parts = [head]
+    if reason:
+        parts.append(_clean_text(reason, 52))
+    rel = str(main.get("release_text") or "")
+    if rel:
+        parts.append(f"解除：{_clean_text(rel, 96)}")
+    return _clean_text(" · ".join(parts), 200)
+
+
 def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: str = "BTCUSDT", price: float = 0, mode: str = "push") -> str:
     main = main or {}
     sub = sub or {}
@@ -194,11 +241,7 @@ def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: st
         raw_entry = main.get("entry") or main.get("进场") or main.get("position")
         main["grade"] = final.get("grade") or main.get("grade") or "C等待"
         main["treatment"] = final.get("reason") or main.get("treatment") or ""
-        executable = (
-            str(final.get("state") or "").upper() == "GO-A"
-            and final.get("executable") is True
-            and all(final.get(k) not in (None, "", "—", "--") for k in ("entry", "stop", "target"))
-        )
+        executable = _final_is_executable(final)
         if executable:
             main["entry"], main["stop"], main["target"] = final.get("entry"), final.get("stop"), final.get("target")
         else:
@@ -260,58 +303,79 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
     magnet_down_clean = _clean_text(magnet_down, 18) if magnet_down and magnet_down != "--" else "—"
     dual_verdict = _clean_text(_dual_verdict_for_final(main, dual), 18) if isinstance(dual, dict) else "主副待读"
 
+    # Telegram mobile layout: one visual hierarchy, narrow tables, and no
+    # standalone heading immediately before a RichMarkdown table block.
+    # Keep the first screen actionable instead of repeating the same verdict
+    # in four different sections.
+    high = main.get("high") if isinstance(main, dict) else None
+    low = main.get("low") if isinstance(main, dict) else None
+    change = main.get("change_pct") if isinstance(main, dict) else None
+    quote_line = f"现价 `{_fmt_num(price)}`"
+    if high not in (None, "") and low not in (None, ""):
+        quote_line += f" · 日高 `{_fmt_num(high)}` · 日低 `{_fmt_num(low)}`"
+    if change not in (None, ""):
+        try:
+            quote_line += f" · {float(change):+.2f}%"
+        except (TypeError, ValueError):
+            quote_line += f" · {_clean_text(change)}"
     lines = [
         f"📊 {short_sym} · {_now_chinese()}",
-        _level_table(vwap, vah, val, poc, price),
-        f"{_dir_icon(direction)}{direction} · {_grade_icon(grade)}{grade} · {conclusion_clean}",
+        f"{_dir_icon(direction)}{direction} · {_grade_icon(grade)}{grade}",
+        f"**{conclusion_clean}**",
+        quote_line,
         tf_line,
         "",
-        "| 优先级 | 触发价 | 操作 |",
-        "|:---|:---:|:---|",
+        _level_table(vwap, vah, val, poc, price),
+        "",
+        "| 执行 | 触发/价格 | 风险与目标 |",
+        "|:---|:---|:---|",
     ]
     decision_line = _decision_line(main)
     if decision_line:
         lines.insert(4, decision_line)
-    source_line = _source_summary(main)
-    if source_line:
-        lines.insert(5, source_line)
     if direction == "做多":
-        lines.append(f"| ⭐主推 多 | {entry_clean} | 多 损{stop_clean} 标{target_clean} |")
-        lines.append(f"| 🔁备选 空 | {magnet_up_clean} | 主推失效后再看空 |")
+        lines.append(f"| ⭐主推 多 | {entry_clean} | 损{stop_clean} · 标{target_clean} |")
+        lines.append(f"| 🔁失效看空 | {magnet_up_clean} | 主推失效后再看 |")
     elif direction == "做空":
-        lines.append(f"| ⭐主推 空 | {entry_clean} | 空 损{stop_clean} 标{target_clean} |")
-        lines.append(f"| 🔁备选 多 | {magnet_down_clean} | 主推失效后再看多 |")
+        lines.append(f"| ⭐主推 空 | {entry_clean} | 损{stop_clean} · 标{target_clean} |")
+        lines.append(f"| 🔁失效看多 | {magnet_down_clean} | 主推失效后再看 |")
     else:
         if str(grade).startswith(("B多", "B空", "C反多", "C反空")):
             # P0-1 (2026-08-31): B/C反 只渲染触发条件+人工候选价，禁止"损/标"执行指令
             _trigger = _clean_text(treatment or "等结构位触发", 34)
             _cand = _clean_text(main.get("candidate_entry"), 22) or "—"
-            lines.append(f"| 🔵主推 等 | {_trigger} | 候选 {_cand}·人工判断 |")
-            lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
+            lines.append(f"| 🔵等待触发 | {_trigger} | 候选 {_cand}·人工判断 |")
+            lines.append(f"| 🔁反向观察 | {magnet_up_clean} | 仅作失效路径 |")
         else:
-            lines.append("| 🔵主推 等 | — | 等结构位确认 |")
-            lines.append(f"| 🔁备选 | {magnet_up_clean} | 只作失效路径 |")
+            lines.append("| 🔵等待确认 | — | 不追现价 |")
+            lines.append(f"| 🔁反向观察 | {magnet_up_clean} | 仅作失效路径 |")
     lines.append("| ⚠️禁止 | 追单/冲突 | 主副不共振不做 |")
     lines.append("")
-    # SVP + HALDRO 双指标行（精简合并为一行）
+    # Evidence stays as short labeled lines.  The screenshot carries the
+    # detailed indicator view; the Telegram text card should remain a quick
+    # decision companion rather than a second full report.
     svp_line = _clean_text(str(grade) + ' ' + (treatment or ''), 28)
     hal_line = _clean_text((signal or ''), 24)
-    lines.append(f"SVP {svp_line} · HALDRO {hal_line} · {dual_verdict}")
-    # 订单流一行
-    verify_parts = []
-    if oi_status:
-        verify_parts.append(f"持仓{_clean_text(oi_status, 10)}")
-    if cvd_flow:
-        verify_parts.append(f"CVD{_clean_text(cvd_flow, 10)}")
-    if vol_status:
-        verify_parts.append(f"量{_clean_text(vol_status, 8)}")
-    if share_data:
-        verify_parts.append(f"覆盖{_clean_text(share_data, 10)}")
-    if verify_parts:
-        lines.append(" · ".join(verify_parts[:4]))
-    # 裁决收尾
+    flow_parts = []
+    if oi_status: flow_parts.append(f"持仓{_clean_text(oi_status, 12)}")
+    if cvd_flow: flow_parts.append(f"CVD{_clean_text(cvd_flow, 12)}")
+    if vol_status: flow_parts.append(f"量{_clean_text(vol_status, 10)}")
+    if share_data: flow_parts.append(f"覆盖{_clean_text(share_data, 10)}")
+    _ml = _matrix_line(main)
+    lines.append(f"依据：SVP {svp_line} · HALDRO {hal_line} · {dual_verdict}")
+    if _ml:
+        lines.append(_ml)
+    lines.append(f"订单流：{' · '.join(flow_parts) or '待采集'}")
+    source_line = _source_summary(main)
+    if source_line:
+        source_line = source_line.replace("来源 ", "")
+        lines.append(f"数据状态：{_clean_text(source_line, 52)}")
     verdict_text = f"{_dir_icon(direction)}{direction}" if direction != "观望" else "🔵等确认"
-    lines.append(f"【裁决】{verdict_text} · 主副指标已纳入 · 不追单")
+    lines.extend([
+        "",
+        f"**下一步**：{verdict_text} · 主副指标已纳入 · 不追单",
+        f"**失效**：{_clean_text(check or '结构位失效后重算', 42)}",
+    ])
     return "\n".join(lines) + "\n"
 
 

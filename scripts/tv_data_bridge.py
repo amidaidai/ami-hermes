@@ -153,6 +153,111 @@ def tv_available():
     return bool(data and data.get("cdp_connected"))
 
 
+EVIDENCE_VERSION = 20260905
+
+
+def _evidence_integer(value):
+    """Exact Data Window integer; K/M/B/T display rounding loses flag digits."""
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool) or value is None:
+        return None
+    text = str(value).strip().replace("−", "-")
+    # TradingView can group digits with commas or narrow/no-break spaces.
+    if not re.fullmatch(r"[+-]?(?:[0-9]+|[0-9]{1,3}(?:[,\u202f\u00a0][0-9]{3})+)(?:\.0+)?", text):
+        return None
+    try:
+        number = Decimal(text.replace(",", "").replace("\u202f", "").replace("\u00a0", ""))
+        return int(number) if 0 <= number < 2 ** 53 else None
+    except (InvalidOperation, ValueError, OverflowError):
+        return None
+
+
+def _read_evidence(data):
+    """Decode only an unambiguous main SVP source; never borrow chart identity."""
+    studies = data.get("studies")
+    if not isinstance(studies, list):
+        return {}
+    main = [s for s in studies if isinstance(s, dict)
+            and isinstance(s.get("name"), str)
+            and re.match(r"^SVP(?:$|[+\s])", s["name"], re.IGNORECASE)]
+    if len(main) != 1 or not isinstance(main[0].get("values"), dict):
+        return {}
+    study = main[0]
+    fields = {}
+    for title, value in study["values"].items():
+        if not isinstance(title, str):
+            continue
+        match = re.fullmatch(r"MCP Evidence (Pack|Bar Time|Close Time)(?: \([^\n]*\))?", title)
+        if match:
+            field = match.group(1)
+            if field in fields:
+                return {}  # Ambiguous titles must not be last-write-wins.
+            fields[field] = _evidence_integer(value)
+    pack = fields.get("Pack")
+    if pack is None:
+        return {}
+    version, digits = divmod(pack, 10000)
+    direction, digits = divmod(digits, 1000)
+    location, digits = divmod(digits, 100)
+    trigger, closed = divmod(digits, 10)
+    if version != EVIDENCE_VERSION or direction not in (0, 1, 2) or any(
+            flag not in (0, 1) for flag in (location, trigger, closed)):
+        return {}
+    result = {
+        "mcp_evidence_version": version,
+        "mcp_evidence_direction": direction - 1,
+        "mcp_location_valid": bool(location),
+        "mcp_trigger_confirmed": bool(trigger),
+        "mcp_bar_closed": bool(closed),
+    }
+    bar, close = fields.get("Bar Time"), fields.get("Close Time")
+    if bar and close and close > bar:
+        result["mcp_evidence_bar_time"] = bar
+        result["mcp_evidence_close_time"] = close
+    # Current values transport omits all three. Do not use the requested symbol,
+    # a separate state read, or the study display name as evidence identity.
+    symbol = data.get("symbol")
+    if isinstance(symbol, str) and symbol.strip() and symbol.strip().upper() not in (
+            "0", "UNKNOWN", "NULL", "NONE", "N/A"):
+        result["mcp_evidence_symbol"] = symbol
+    timeframe = data.get("timeframe", data.get("resolution"))
+    if not isinstance(timeframe, bool) and isinstance(timeframe, (str, int)) and re.fullmatch(
+            r"(?:[1-9][0-9]*[SDWM]?|[DWM])", str(timeframe)):
+        result["mcp_evidence_timeframe"] = str(timeframe)
+    study_id = study.get("id")
+    if isinstance(study_id, str) and study_id.strip() and study_id.strip().upper() not in (
+            "0", "UNKNOWN", "NULL", "NONE", "N/A"):
+        result["mcp_evidence_study_id"] = study_id
+    return result
+
+
+_CONTRACT_DW_LOOKUP = None
+
+
+def _contract_dw_aliases():
+    """DW 原名 → 内部 snake_case 键，取自 scripts/tv_indicator_contract.py。
+
+    契约缺失时返回空表：宁可少几个别名，也不能让指标读取整体失败。
+    """
+    global _CONTRACT_DW_LOOKUP
+    if _CONTRACT_DW_LOOKUP is None:
+        table = {}
+        try:
+            import tv_indicator_contract as _TVC
+            merged = {}
+            merged.update(getattr(_TVC, "DW_ALIASES_MAIN", {}) or {})
+            merged.update(getattr(_TVC, "DW_ALIASES_SUB", {}) or {})
+            merged.update(getattr(_TVC, "LEGACY_DW_ALIASES_SUB", {}) or {})
+            for src, dw in merged.items():
+                table[dw] = src
+                table[dw.split(" (")[0]] = src   # 允许不带括号后缀的短名
+        except Exception:
+            pass
+        _CONTRACT_DW_LOOKUP = table
+    return _CONTRACT_DW_LOOKUP
+
+
 def read_indicators(symbol=None):
     """读取指标值：VWAP/EMA/CVD/POC/VAH/VAL等。
 
@@ -162,13 +267,32 @@ def read_indicators(symbol=None):
     if symbol:
         args += ["--symbol", symbol]
     data = _tv_json(*args, timeout=15)
-    if not data:
+    if not isinstance(data, dict):
         return {}
     indicators = {}
-    for study in data.get("studies", []):
-        for key, val in (study.get("values") or {}).items():
+    studies = data.get("studies")
+    if not isinstance(studies, list):
+        return {}
+    for study in studies:
+        if not isinstance(study, dict) or not isinstance(study.get("values"), dict):
+            continue
+        for key, val in study["values"].items():
+            if not isinstance(key, str):
+                continue
             norm = key.lower().replace(" ", "_")
+            # Evidence may only enter through the validated main-study decoder.
+            # Generic aliases must not leak malformed or foreign packed flags.
+            if norm.startswith("mcp_evidence_") or norm in (
+                    "mcp_location_valid", "mcp_trigger_confirmed", "mcp_bar_closed"):
+                continue
             indicators[norm] = val
+            # v13：契约驱动的稳定别名（覆盖带括号/百分号/中文后缀的 DW 名）。
+            # 必须跳过 evidence 前缀 —— 那是 _read_evidence() 专属，
+            # 不能让通用别名把未校验的证据标志漏进缓存。
+            _aliases = _contract_dw_aliases()
+            _hit = _aliases.get(key) or _aliases.get(key.split(" (")[0])
+            if _hit and not _hit.startswith("mcp_evidence_"):
+                indicators[_hit] = val
             # 带公式说明的 Data Window 标题需要稳定别名，避免下游无法命中。
             if key.startswith("MCP StructPack"):
                 indicators["mcp_struct_pack"] = val
@@ -184,6 +308,7 @@ def read_indicators(symbol=None):
                 indicators["haldro_risk_code"] = val
             elif key == "HALDRO Valid Code":
                 indicators["haldro_valid_code"] = val
+    indicators.update(_read_evidence(data))
     return indicators
 
 
