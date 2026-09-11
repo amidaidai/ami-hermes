@@ -10,33 +10,42 @@
 ## 机制
 
 ```
-~/AppData/Local/hermes/skills  ──(单向镜像)──▶  D:/Hermes agent/hermes/skills  ──git──▶  远端
+~/AppData/Local/hermes/skills  ──(单向镜像)──▶  D:/Hermes agent/hermes/skills  ──git──▶  GitHub 远端
         ↑ 真实源（唯一可写）                        ↑ 只读快照 + _snapshot_manifest.json
 ```
 
 执行者 `scripts/maintenance/skills_snapshot.py`，cron 任务 **技能快照备份**（`948f28dfaf76`，
 每日 04:20，`no_agent` + `deliver=local`）。
 
-### 必知的四条
+### 必知的五条
 
 1. **fail-closed**：源文件数骤降到上次 60% 以下、或少于 100 个 → **拒绝镜像并报错**，
    绝不擦掉仓库里的备份。盘未挂载/路径写错时不会造成灾难。
 2. **只提交 `hermes/skills` 这一条路径**（`git commit -- hermes/skills`）：
-   同时存在别的已暂存改动也不会被顺手带走。**不推送**。
-3. **内容级密钥扫描**：命中 `sk-`/`ghp_`/`AIza`/Telegram bot token/私钥块/JWT 等特征的文件
+   同时存在别的已暂存改动也不会被顺手带走。
+3. **推送也有护栏**：只在**待推提交全部是技能快照**时才 `git push`。
+   本地只要有一条在途的功能提交，就停下并报告「未推送：待推提交里有 N 条非快照提交」
+   —— 自动推送等于替你发布，不允许。
+4. **内容级密钥扫描**：命中 `sk-`/`ghp_`/`AIza`/Telegram bot token/私钥块/JWT 等特征的文件
    **拒绝入库**并写进清单 `blocked_secrets`。
    这条比 `.gitignore` 的 `*token*` 文件名规则强得多——后者会误伤文档
    （「CE10117 token 上限」「jbbtoken 渠道」「如何写密钥」）。
-4. **静默=健康**：无漂移不输出。有漂移才打印 `+新增/~/变更/-删除`。
+5. **静默=健康**：无漂移不输出。有漂移才打印 `+新增/~/变更/-删除`。
 
 ## 日常用法
 
 ```bash
-python scripts/maintenance/skills_snapshot.py              # 镜像 + 提交（默认）
+python scripts/maintenance/skills_snapshot.py              # 镜像 + 提交 + 推送（默认）
 python scripts/maintenance/skills_snapshot.py --status     # 0=同步 / 2=有漂移（可做巡检）
 python scripts/maintenance/skills_snapshot.py --dry-run    # 只看差异
 python scripts/maintenance/skills_snapshot.py --no-commit  # 只镜像
+python scripts/maintenance/skills_snapshot.py --no-push    # 镜像+提交但不推
 ```
+
+## 首次推送
+
+2026-09-11：`4883e1b..c89fc1e main -> main`，远端 `hermes/skills` 1913 文件已核实
+（`git cat-file -e origin/main:hermes/skills/_snapshot_manifest.json`）。
 
 ## 别踩的坑
 

@@ -1391,7 +1391,7 @@
   "trading/tangxi-runtime-audit-and-cleanup/references/keylevel-expiry-recovery-2026-09-02.md": "6657fea364a8f503",
   "trading/tangxi-runtime-audit-and-cleanup/references/pydantic-version-compatibility.md": "ab984d3935dd6d00",
   "trading/tangxi-runtime-audit-and-cleanup/references/script-lifecycle-management-20260829.md": "483b3c340a709bdb",
-  "trading/tangxi-runtime-audit-and-cleanup/references/skills-backup-mechanism-20260911.md": "f1c02bffa0dc6dc0",
+  "trading/tangxi-runtime-audit-and-cleanup/references/skills-backup-mechanism-20260911.md": "34f9ec5df05e9f47",
   "trading/tangxi-runtime-audit-and-cleanup/references/unsatisfiable-safety-gate-recovery-20260910.md": "0aee83cb89246ea3",
   "trading/tangxi-runtime-audit-and-cleanup/references/user-report-cross-validation-2026-08-31.md": "bd06de3ea3fb237b",
   "trading/tangxi-system-audit/SKILL.md": "4d0f4176701a0be9",
@@ -1917,8 +1917,8 @@
   "web/DESCRIPTION.md": "1cee33fe7aaddc9d",
   "yuanbao/SKILL.md": "239e4875f511124f"
  },
- "generated_at": "2026-09-11T13:37:35+0800",
+ "generated_at": "2026-09-11T13:44:18+0800",
  "oversized": {},
  "source": "C:/Users/Administrator/AppData/Local/hermes/skills",
- "total_bytes": 15697696
+ "total_bytes": 15698247
 }
