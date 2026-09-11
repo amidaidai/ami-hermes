@@ -15,7 +15,13 @@
 
 分级:
     LIVE       = SKILL.md 本体，或文件名不含日期的参考文档 —— 这是当下真会被人读的
-    HISTORICAL = 文件名含日期（2026-06-xx 等）的历史记录 —— 只报告，不改写（它们是当时的实况）
+    HISTORICAL = 文件名/文头日期早于定版（2026-09-01）的历史记录 —— 只报告，不改写（它们是当时的实况）
+
+抑制规则（避免噪声淹没真问题）:
+    · 行内含「已废止/已移入/已归档/退役/示意名/历史记录」等标记 → 已显式声明，不算漂移
+    · 文件顶部 60 行内含 `dead-script-index.md`（文件级退役横幅）→ 该文件的「脚本名」类不再逐行报
+      （字段/行名类仍报，因为横幅没覆盖它们）
+    · 指针文件 `dead-script-index.md` / `tv-dual-indicator-field-map.md` 整体跳过
 """
 from __future__ import annotations
 
@@ -86,7 +92,7 @@ def classify(path: Path, lines: list[str] | None = None) -> str:
 
 # 已经**显式标注**为废止的段落不算漂移：那正是我们希望文档做的事。
 ANNOTATED = ("已废止", "已作废", "作废", "已不存在", "已删除", "不可读", "勿再当现行",
-             "历史记录", "已被删除")
+             "历史记录", "已被删除", "已移入", "已归档", "退役", "示意名", "不要照抄")
 
 
 def main() -> int:
@@ -98,6 +104,8 @@ def main() -> int:
     for path in sorted(SKILLS.rglob("*.md")):
         if any(part in {"node_modules", "__pycache__"} for part in path.parts):
             continue
+        if path.name in {"dead-script-index.md", "tv-dual-indicator-field-map.md"}:
+            continue  # 指针/索引文件本身就要列废止名，不算漂移
         if path.stat().st_size > 900_000:
             continue
         try:
@@ -107,6 +115,9 @@ def main() -> int:
         level = classify(path, lines)
         if live_only and level != "LIVE":
             continue
+        # 已带文件级退役横幅的文件：横幅已声明「本篇提到的这些脚本已退役」，
+        # 再逐行报「脚本名」是噪声（但字段/行名类仍要报 —— 横幅没覆盖它们）。
+        banner_declared = any("dead-script-index.md" in ln for ln in lines[:60])
         for lineno, line in enumerate(lines, 1):
             if any(mark in line for mark in ANNOTATED):
                 continue  # 已显式标注废止的段落：不是漂移，是正确做法
@@ -115,6 +126,8 @@ def main() -> int:
                     findings.append({"level": level, "category": category, "file": str(path),
                                      "line": lineno, "text": line.strip()[:220], "fix": fix})
             for name in DEAD_SCRIPTS:
+                if banner_declared and level == "LIVE":
+                    break  # 横幅已声明的脚本类提及，跳过
                 if name in line and (REPO / "scripts" / f"{name}.py").exists() is False:
                     findings.append({"level": level, "category": "不存在/被取代的脚本",
                                      "file": str(path), "line": lineno,
