@@ -1,0 +1,212 @@
+Open Interest Aggregated (Lite) — Indicator by mxdvt07 — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+OPEN-SOURCE SCRIPT
+Updated
+Mar 11
+Open Interest Aggregated (Lite)
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+6
+7
+1 684
+Sep 14, 2025
+The Open Interest Aggregated (Lite) indicator consolidates open interest data across multiple major cryptocurrency exchanges into a single, easy-to-interpret visual. By aggregating open interest from Binance, Bybit, OKX, Bitget, and Coinbase (configurable per user preference), this indicator provides a holistic view of market positioning and trader sentiment in real time. It is designed for overlay-independent analysis, giving traders insight into derivatives market dynamics without cluttering price charts.
+Key Features and Technical Details:
+Aggregates open interest for USD, USDT, and USDC denominated perpetual contracts where available.
+Supports configurable exchange inclusion: Binance, Bybit, OKX, Bitget, and Coinbase.
+Normalizes USD-denominated open interest relative to the asset price for cross-exchange comparison.
+Generates candlestick plots representing aggregated open interest: open, high, low, and close, allowing traditional technical analysis techniques (trend detection, breakouts, reversals) to be applied to derivatives positioning.
+Provides optional hidden plots for each aggregated value (open, high, low, close) to support custom scripting or further analysis in Pine Script.
+Color-coded candles: teal indicates an increase in open interest for the period, red indicates a decrease, highlighting shifts in trader sentiment.
+Use Cases in Trading:
+Trend Confirmation: Rising aggregated open interest in tandem with price increases can confirm bullish market participation, while decreasing open interest may signal weakening conviction.
+Divergence Detection: Compare price action against aggregated open interest to detect potential reversals or exhaustion points.
+Cross-Exchange Market Insight: By combining multiple exchanges, traders can identify shifts in global derivatives exposure rather than relying on a single market, reducing bias from localized trading anomalies.
+Risk Assessment: Monitoring aggregated open interest can help anticipate periods of heightened leverage, which may correspond to increased volatility and potential liquidation events.
+Why It’s Useful:
+Open interest is a leading indicator of market sentiment and participation in futures markets. However, individual exchange data often provides an incomplete picture. Open Interest Aggregated (Lite) simplifies this by consolidating data across major platforms, enabling traders to make more informed decisions, assess market strength, and identify strategic entry or exit points with a clearer understanding of global positioning.
+Application Notes:
+Best used in combination with price analysis and volume metrics for robust trading signals.
+Timeframe-independent: works on any chart interval, ensuring flexibility across intraday and longer-term strategies.
+Lightweight “Lite” version ensures fast calculation while maintaining critical insights from multiple exchanges.
+Dec 7, 2025
+Release Notes
+Changes in Version 2:
+- Added option to change denomination between COINS and USD
+- Added information about pairs
+- Updated precision
+- UI improvements
+Mar 11
+Release Notes
+Changes in Version 3:
+- Added option to change display mode between Candles, Change & Change (%).
+- Changed globally used OI open value to the last bars OI close to improve readability and logic.
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+mxdvt07
+Follow
+Following
+Also on
+:
+sentiment
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+sentiment
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+mxdvt07
+Follow
+Following
+Also on
+:
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

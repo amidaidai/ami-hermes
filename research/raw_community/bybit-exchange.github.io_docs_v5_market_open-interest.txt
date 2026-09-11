@@ -1,0 +1,625 @@
+Get Open Interest | Bybit API Documentation
+Skip to main content
+V5 API
+P2P Trading
+Bybit Pay
+Tax API V3
+Extras
+Pilot Features
+Changelog
+API Explorer
+FAQ
+How To Start Copy Trading
+Institution
+Self Match Prevention
+Spot DMM Listing Integration
+MMWS
+Get Whitelist IP
+Get IP Change Log
+Institutional Loan
+SBE
+English
+English
+中文（台灣）
+Search
+Integration Guidance
+Bybit Platform
+Market
+Get Bybit Server Time
+Get Kline
+Get Mark Price Kline
+Get Index Price Kline
+Get Premium Index Price Kline
+Get Instruments Info
+Get Orderbook
+Get RPI Orderbook
+Get Full Depth Orderbook
+Get Tickers
+Get Funding Rate History
+Get Recent Public Trades
+Get Open Interest
+Get Historical Volatility
+Get Insurance Pool
+Get Risk Limit
+Get Delivery Price
+Get New Delivery Price
+Get Long Short Ratio
+Get Index Price Components
+Get Order Price Limit
+Get ADL Alert
+Get Fee Group Structure
+Trade
+Spot Margin Trade
+Position
+Account
+Asset
+User
+Spread Trading
+RFQ Trading
+Affiliate
+Crypto Loan
+Institution
+Broker
+Finance
+Bybit Card
+Web3
+Pre-upgrade
+WebSocket Stream
+Rate Limit
+Enums Definitions
+Error Codes
+Abandoned Endpoints
+Market
+Get Open Interest
+On this page
+Get Open Interest
+Get the
+open interest
+of each symbol.
+Covers: USDT contract / USDC contract / Inverse contract
+info
+The upper limit time you can query is the launch time of the symbol.
+During periods of extreme market volatility, this interface may experience increased latency or temporary delays in data delivery
+HTTP Request
+​
+GET
+/v5/market/open-interest
+Copy
+Request Parameters
+​
+Parameter
+Required
+Type
+Comments
+category
+true
+string
+Product type.
+linear
+,
+inverse
+symbol
+true
+string
+Symbol name, like
+BTCUSDT
+, uppercase only
+intervalTime
+true
+string
+Interval time.
+5min
+,
+15min
+,
+30min
+,
+1h
+,
+4h
+,
+1d
+startTime
+false
+integer
+The start timestamp (ms)
+endTime
+false
+integer
+The end timestamp (ms)
+limit
+false
+integer
+Limit for data size per page.
+[
+1
+,
+200
+]
+. Default:
+50
+cursor
+false
+string
+Cursor. Used to paginate
+Response Parameters
+​
+Parameter
+Type
+Comments
+category
+string
+Product type
+symbol
+string
+Symbol name
+list
+array
+Object
+> openInterest
+string
+Open interest. The value is the sum of both sides.
+The unit of value, e.g., BTCUSD(inverse) is USD, BTCUSDT(linear) is BTC
+> singleOpenInterest
+string
+Open interest. The value is the single side.
+The unit of value, e.g., BTCUSD(inverse) is USD, BTCUSDT(linear) is BTC
+> timestamp
+string
+The timestamp (ms)
+nextPageCursor
+string
+Used to paginate
+RUN >>
+Request Example
+​
+HTTP
+Python
+GO
+Java
+Node.js
+GET
+/v5/market/open-interest?limit=5&category=inverse&intervalTime=1d&symbol=BTCUSD
+HTTP/1.1
+Host
+:
+api-testnet.bybit.com
+from
+pybit
+.
+unified_trading
+import
+HTTP
+session
+=
+HTTP
+(
+testnet
+=
+True
+)
+print
+(
+session
+.
+get_open_interest
+(
+category
+=
+"inverse"
+,
+symbol
+=
+"BTCUSD"
+,
+intervalTime
+=
+"5min"
+,
+startTime
+=
+1669571100000
+,
+endTime
+=
+1669571400000
+,
+)
+)
+import
+(
+"context"
+"fmt"
+bybit
+"github.com/bybit-exchange/bybit.go.api"
+)
+client
+:=
+bybit
+.
+NewBybitHttpClient
+(
+""
+,
+""
+,
+bybit
+.
+WithBaseURL
+(
+bybit
+.
+TESTNET
+)
+)
+params
+:=
+map
+[
+string
+]
+interface
+{
+}
+{
+"category"
+:
+"linear"
+,
+"symbol"
+:
+"BTCUSDT"
+}
+client
+.
+NewUtaBybitServiceWithParams
+(
+params
+)
+.
+GetOpenInterests
+(
+context
+.
+Background
+(
+)
+)
+import
+com
+.
+bybit
+.
+api
+.
+client
+.
+domain
+.
+CategoryType
+;
+import
+com
+.
+bybit
+.
+api
+.
+client
+.
+domain
+.
+market
+.
+*
+;
+import
+com
+.
+bybit
+.
+api
+.
+client
+.
+domain
+.
+market
+.
+request
+.
+MarketDataRequest
+;
+import
+com
+.
+bybit
+.
+api
+.
+client
+.
+service
+.
+BybitApiClientFactory
+;
+var
+client
+=
+BybitApiClientFactory
+.
+newInstance
+(
+)
+.
+newAsyncMarketDataRestClient
+(
+)
+;
+var
+openInterest
+=
+MarketDataRequest
+.
+builder
+(
+)
+.
+category
+(
+CategoryType
+.
+LINEAR
+)
+.
+symbol
+(
+"BTCUSDT"
+)
+.
+marketInterval
+(
+MarketInterval
+.
+FIVE_MINUTES
+)
+.
+build
+(
+)
+;
+client
+.
+getOpenInterest
+(
+openInterest
+,
+System
+.
+out
+::
+println
+)
+;
+const
+{
+RestClientV5
+}
+=
+require
+(
+'bybit-api'
+)
+;
+const
+client
+=
+new
+RestClientV5
+(
+{
+testnet
+:
+true
+,
+}
+)
+;
+client
+.
+getOpenInterest
+(
+{
+category
+:
+'inverse'
+,
+symbol
+:
+'BTCUSD'
+,
+intervalTime
+:
+'5min'
+,
+startTime
+:
+1669571100000
+,
+endTime
+:
+1669571400000
+,
+}
+)
+.
+then
+(
+(
+response
+)
+=>
+{
+console
+.
+log
+(
+response
+)
+;
+}
+)
+.
+catch
+(
+(
+error
+)
+=>
+{
+console
+.
+error
+(
+error
+)
+;
+}
+)
+;
+Response Example
+​
+{
+"retCode"
+:
+0
+,
+"retMsg"
+:
+"OK"
+,
+"result"
+:
+{
+"symbol"
+:
+"BTCUSD"
+,
+"category"
+:
+"inverse"
+,
+"list"
+:
+[
+{
+"openInterest"
+:
+"63910691.00000000"
+,
+"singleOpenInterest"
+:
+"31955346"
+,
+"timestamp"
+:
+"1780963200000"
+}
+,
+{
+"openInterest"
+:
+"63910691.00000000"
+,
+"singleOpenInterest"
+:
+"31955346"
+,
+"timestamp"
+:
+"1780876800000"
+}
+,
+{
+"openInterest"
+:
+"63910691.00000000"
+,
+"singleOpenInterest"
+:
+"31955346"
+,
+"timestamp"
+:
+"1780790400000"
+}
+,
+{
+"openInterest"
+:
+"63942311.00000000"
+,
+"singleOpenInterest"
+:
+"31971156"
+,
+"timestamp"
+:
+"1780704000000"
+}
+,
+{
+"openInterest"
+:
+"63942311.00000000"
+,
+"singleOpenInterest"
+:
+"31971156"
+,
+"timestamp"
+:
+"1780617600000"
+}
+]
+,
+"nextPageCursor"
+:
+"lastid%3D19408935%26lasttime%3D1780617600"
+}
+,
+"retExtInfo"
+:
+{
+}
+,
+"time"
+:
+1780994051392
+}
+Previous
+Get Recent Public Trades
+Next
+Get Historical Volatility
+HTTP Request
+Request Parameters
+Response Parameters
+Request Example
+Response Example
+Community
+Telegram – English
+Telegram – Chinese
+Discord
+GitHub
+API usage examples
+Postman collection
+Official Python SDK – pybit
+Community Node.js SDK – bybit-api
+Official Go SDK – bybit-go-api
+Official Java SDK – bybit-java-api
+Official .Net SDK – bybit.net.api
+Byreal
+About Byreal
+Skills
+Byreal API
+SDK

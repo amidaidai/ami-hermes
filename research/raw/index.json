@@ -1,0 +1,184 @@
+[
+  {
+    "requested_url": "https://www.tradingview.com/pine-script-docs/writing/limitations/",
+    "final_url": "https://www.tradingview.com/pine-script-docs/writing/limitations/",
+    "status": 200,
+    "title": "Writing / Limitations",
+    "canonical": "https://www.tradingview.com/pine-script-docs/writing/limitations/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": "Fri, 07 Aug 2026 14:48:56 GMT"
+    },
+    "retrieved_utc": "2026-08-08T03:25:43.469799+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/pine-script-docs/concepts/other-timeframes-and-data/",
+    "final_url": "https://www.tradingview.com/pine-script-docs/concepts/other-timeframes-and-data/",
+    "status": 200,
+    "title": "Concepts / Other timeframes and data",
+    "canonical": "https://www.tradingview.com/pine-script-docs/concepts/other-timeframes-and-data/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": "Fri, 07 Aug 2026 14:48:47 GMT"
+    },
+    "retrieved_utc": "2026-08-08T03:25:44.101387+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/pine-script-docs/release-notes/",
+    "final_url": "https://www.tradingview.com/pine-script-docs/release-notes/",
+    "status": 200,
+    "title": "Release notes",
+    "canonical": "https://www.tradingview.com/pine-script-docs/release-notes/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": "Fri, 07 Aug 2026 14:48:52 GMT"
+    },
+    "retrieved_utc": "2026-08-08T03:25:44.670305+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/pine-script-docs/concepts/repainting/",
+    "final_url": "https://www.tradingview.com/pine-script-docs/concepts/repainting/",
+    "status": 200,
+    "title": "Concepts / Repainting",
+    "canonical": "https://www.tradingview.com/pine-script-docs/concepts/repainting/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": "Fri, 07 Aug 2026 14:48:47 GMT"
+    },
+    "retrieved_utc": "2026-08-08T03:25:45.162653+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/pine-script-docs/writing/profiling-and-optimization/",
+    "final_url": "https://www.tradingview.com/pine-script-docs/writing/profiling-and-optimization/",
+    "status": 200,
+    "title": "Writing / Profiling and optimization",
+    "canonical": "https://www.tradingview.com/pine-script-docs/writing/profiling-and-optimization/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": "Fri, 07 Aug 2026 14:48:56 GMT"
+    },
+    "retrieved_utc": "2026-08-08T03:25:45.690472+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/pine-script-docs/concepts/alerts/",
+    "final_url": "https://www.tradingview.com/pine-script-docs/concepts/alerts/",
+    "status": 200,
+    "title": "Concepts / Alerts",
+    "canonical": "https://www.tradingview.com/pine-script-docs/concepts/alerts/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": "Fri, 07 Aug 2026 14:48:46 GMT"
+    },
+    "retrieved_utc": "2026-08-08T03:25:46.188073+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/support/solutions/43000725058-cumulative-volume-delta/",
+    "final_url": "https://www.tradingview.com/support/solutions/43000725058-cumulative-volume-delta/",
+    "status": 200,
+    "title": "Cumulative Volume Delta — TradingView",
+    "canonical": "https://www.tradingview.com/support/solutions/43000725058-cumulative-volume-delta/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:46.919047+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/support/solutions/43000725057-volume-delta/",
+    "final_url": "https://www.tradingview.com/support/solutions/43000725057-volume-delta/",
+    "status": 200,
+    "title": "Volume Delta — TradingView",
+    "canonical": "https://www.tradingview.com/support/solutions/43000725057-volume-delta/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:47.664276+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/support/solutions/43000502040-volume-profile-indicators-basic-concepts/",
+    "final_url": "https://www.tradingview.com/support/solutions/43000502040-volume-profile-indicators-basic-concepts/",
+    "status": 200,
+    "title": "Volume profile indicators: basic concepts — TradingView",
+    "canonical": "https://www.tradingview.com/support/solutions/43000502040-volume-profile-indicators-basic-concepts/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:48.431948+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/support/solutions/43000685269-open-interest/",
+    "final_url": "https://www.tradingview.com/support/solutions/43000685269-open-interest/",
+    "status": 200,
+    "title": "Open Interest — TradingView",
+    "canonical": "https://www.tradingview.com/support/solutions/43000685269-open-interest/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:49.173923+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/support/solutions/43000726164-volume-footprint-charts-a-complete-guide/",
+    "final_url": "https://www.tradingview.com/support/solutions/43000726164-volume-footprint-charts-a-complete-guide/",
+    "status": 200,
+    "title": "Volume footprint charts: a complete guide — TradingView",
+    "canonical": "https://www.tradingview.com/support/solutions/43000726164-volume-footprint-charts-a-complete-guide/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:49.931518+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/support/solutions/43000762399-long-short-ratio-accounts/",
+    "final_url": "https://www.tradingview.com/support/solutions/43000762399-long-short-ratio-accounts/",
+    "status": 200,
+    "title": "Long / Short Ratio Accounts — TradingView",
+    "canonical": "https://www.tradingview.com/support/solutions/43000762399-long-short-ratio-accounts/",
+    "dates": {
+      "article_published_time": null,
+      "article_modified_time": null,
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:50.674337+00:00"
+  },
+  {
+    "requested_url": "https://www.tradingview.com/blog/en/volume-footprints-in-pine-scripts-56908/",
+    "final_url": "https://www.tradingview.com/blog/en/volume-footprints-in-pine-scripts-56908/",
+    "status": 200,
+    "title": "Volume footprints are now available in Pine scripts — TradingView Blog",
+    "canonical": "https://www.tradingview.com/blog/en/volume-footprints-in-pine-scripts-56908/",
+    "dates": {
+      "article_published_time": "2026-03-02T09:37:31+00:00",
+      "article_modified_time": "2026-03-17T13:50:06+00:00",
+      "date": null,
+      "last_modified_header": null
+    },
+    "retrieved_utc": "2026-08-08T03:25:51.384051+00:00"
+  }
+]

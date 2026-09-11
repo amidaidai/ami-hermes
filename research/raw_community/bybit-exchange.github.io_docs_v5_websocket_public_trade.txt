@@ -1,0 +1,294 @@
+Trade | Bybit API Documentation
+Skip to main content
+V5 API
+P2P Trading
+Bybit Pay
+Tax API V3
+Extras
+Pilot Features
+Changelog
+API Explorer
+FAQ
+How To Start Copy Trading
+Institution
+Self Match Prevention
+Spot DMM Listing Integration
+MMWS
+Get Whitelist IP
+Get IP Change Log
+Institutional Loan
+SBE
+English
+English
+中文（台灣）
+Search
+Integration Guidance
+Bybit Platform
+Market
+Trade
+Spot Margin Trade
+Position
+Account
+Asset
+User
+Spread Trading
+RFQ Trading
+Affiliate
+Crypto Loan
+Institution
+Broker
+Finance
+Bybit Card
+Web3
+Pre-upgrade
+WebSocket Stream
+Connect
+Public
+Orderbook
+RPI Orderbook
+Full Orderbook
+Trade
+Ticker
+Kline
+All Liquidation
+Insurance Pool
+Order Price Limit
+ADL Alert
+Private
+Trade
+System
+Spread Trading
+RFQ Trading
+Rate Limit
+Enums Definitions
+Error Codes
+Abandoned Endpoints
+WebSocket Stream
+Public
+Trade
+On this page
+Trade
+Subscribe to the recent trades stream.
+After subscription, you will be pushed trade messages in real-time.
+Push frequency:
+real-time
+Topic:
+publicTrade.{symbol}
+Note
+: option uses baseCoin, e.g., publicTrade.BTC
+note
+For Futures and Spot, a single message may have up to 1024 trades. As such, multiple messages may be sent for the same
+seq
+.
+PreLaunch contracts
+: there is no feed until
+ContinuousTrading
+stage
+Response Parameters
+​
+Parameter
+Type
+Comments
+id
+string
+Message id.
+Unique field for option
+topic
+string
+Topic name
+type
+string
+Data type.
+snapshot
+ts
+number
+The timestamp (ms) that the system generates the data
+data
+array
+Object. Sorted by the time the trade was matched in ascending order
+> T
+number
+The timestamp (ms) that the order is filled
+> s
+string
+Symbol name
+> S
+string
+Side of taker.
+Buy
+,
+Sell
+> v
+string
+Trade size
+> p
+string
+Trade price
+>
+L
+string
+Direction of price change.
+Unique field for Perps & futures
+> i
+string
+Trade ID
+> BT
+boolean
+Whether it is a block trade order or not
+> RPI
+boolean
+Whether it is a RPI trade or not
+> seq
+integer
+cross sequence
+> mP
+string
+Mark price, unique field for
+option
+> iP
+string
+Index price, unique field for
+option
+> mIv
+string
+Mark iv, unique field for
+option
+> iv
+string
+iv, unique field for
+option
+Subscribe Example
+​
+from
+pybit
+.
+unified_trading
+import
+WebSocket
+from
+time
+import
+sleep
+ws
+=
+WebSocket
+(
+testnet
+=
+True
+,
+channel_type
+=
+"linear"
+,
+)
+def
+handle_message
+(
+message
+)
+:
+print
+(
+message
+)
+ws
+.
+trade_stream
+(
+symbol
+=
+"BTCUSDT"
+,
+callback
+=
+handle_message
+)
+while
+True
+:
+sleep
+(
+1
+)
+Response Example
+​
+{
+"topic"
+:
+"publicTrade.BTCUSDT"
+,
+"type"
+:
+"snapshot"
+,
+"ts"
+:
+1672304486868
+,
+"data"
+:
+[
+{
+"T"
+:
+1672304486865
+,
+"s"
+:
+"BTCUSDT"
+,
+"S"
+:
+"Buy"
+,
+"v"
+:
+"0.001"
+,
+"p"
+:
+"16578.50"
+,
+"L"
+:
+"PlusTick"
+,
+"i"
+:
+"20f43950-d8dd-5b31-9112-a178eb6023af"
+,
+"BT"
+:
+false
+,
+"seq"
+:
+1783284617
+}
+]
+}
+Previous
+Full Orderbook
+Next
+Ticker
+Response Parameters
+Subscribe Example
+Response Example
+Community
+Telegram – English
+Telegram – Chinese
+Discord
+GitHub
+API usage examples
+Postman collection
+Official Python SDK – pybit
+Community Node.js SDK – bybit-api
+Official Go SDK – bybit-go-api
+Official Java SDK – bybit-java-api
+Official .Net SDK – bybit.net.api
+Byreal
+About Byreal
+Skills
+Byreal API
+SDK

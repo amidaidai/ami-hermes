@@ -1,0 +1,502 @@
+Mirage Liquidity Sweep Pro [WillyAlgoTrader] — Indicator by WillyAlgoTrader — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+OPEN-SOURCE SCRIPT
+Jun 17
+Mirage Liquidity Sweep Pro [WillyAlgoTrader]
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+7.4 K
+57
+57
+91 287
+💧 Mirage Liquidity Sweep Pro
+is a free overlay toolkit that detects liquidity sweeps (stop-hunts), scores each one on a transparent 0-100 quality scale, optionally waits for a market-structure shift (CHoCH) to confirm, and then auto-builds a complete trade plan — wick-based stop, three take-profits, break-even logic, and a projected liquidity target — all on the bar the signal fires.
+The core insight: price doesn't reverse at random support and resistance — it reverses where resting orders (liquidity) get consumed. A swing high above the market holds Buy-Side Liquidity (BSL); a swing low below it holds Sell-Side Liquidity (SSL). When price spikes through one of those levels and then closes back inside, that is a sweep: the move grabbed liquidity and rejected. Mirage finds those exact events, measures how clean the rejection was, and turns the strong ones into structured setups. It works on any market and any timeframe.
+🧩 WHY THESE COMPONENTS WORK TOGETHER
+A raw sweep detector fires on every wick that pokes a level — most of which go nowhere. A pure structure tool (CHoCH/BOS) tells you the trend flipped but not whether liquidity was actually taken first. A risk calculator gives you a stop and targets but has no idea where the trade should go. Used separately, each one leaves a gap the others could fill.
+Mirage fuses them into a single pipeline:
+Swing memory → Liquidity sweep detection → 5-factor quality score → CHoCH structure confirmation → Wick-anchored risk engine (SL / TP1-3 / break-even) → Liquidity target projection → Outcome tracking & stats
+The swing engine remembers recent highs and lows and tags them as resting liquidity. The sweep detector only triggers when a level is pierced and reclaimed on the close — a stop-hunt, not a clean break. The quality score then rates that sweep so weak pokes are filtered out before they ever become signals. CHoCH confirmation (optional) makes price prove the reversal by breaking minor structure before you commit. The risk engine anchors the stop to the actual sweep wick — the precise point invalidating the idea — and projects the next opposite pool of liquidity as the logical objective. Finally, every closed setup is tracked so you can see the strategy's behavior in real time.
+Without the score, you drown in low-quality sweeps. Without CHoCH, you front-run reversals that never come. Without wick-anchored risk, your stop sits in an arbitrary place. Without the liquidity target, you have no idea where the move is actually drawn. The combination is what turns "a wick touched a level" into a complete, rule-based trade.
+🔍 WHAT MAKES IT ORIGINAL
+1️⃣
+5-factor sweep quality score (0-100) — the heart of the system.
+Every detected sweep is scored before it can qualify. The score blends five independent, normalized factors:
+— 📐
+Wick depth (weight 0.30):
+wickComp = min( max(wick, 0) / ATR , 1.0 ). For a bullish sweep, wick = min(open, close) − low; for bearish, wick = high − max(open, close). Bigger rejection wick relative to ATR = stronger grab.
+— 🔄
+Reclaim (weight 0.25):
+rclComp = min( max(reclaim, 0) / ATR , 1.0 ). Bullish reclaim = close − level; bearish = level − close. Measures how decisively price closed back on the right side of the swept level.
+— 🕯️
+Close position (weight 0.20):
+closePos = (close − low) / (high − low). For bulls the raw value is used; for bears it is inverted (1 − closePos). Rewards candles that close near the rejection extreme.
+— 📊
+Volume (weight 0.15):
+volComp = clamp( (volRatio − 1) / (volMult − 1) , 0, 1 ), where volRatio = volume / SMA(volume, 21) and volMult defaults to 1.5×. On volume-less feeds this factor neutralizes to 0.5 automatically.
+— 🧭
+HTF bias (weight 0.10):
+htfComp = 1.0 if the sweep aligns with the higher-timeframe EMA trend, else 0 (or 0.5 if the filter is off).
+Final score = (wickComp×0.30 + rclComp×0.25 + cpComp×0.20 + volComp×0.15 + htfComp×0.10) × 100.
+A sweep only qualifies when its score ≥ Min Sweep Score (default 50). This single number is your master quality dial.
+2️⃣
+Sweep vs. break distinction — closes decide everything.
+A stored level is treated three ways. For a swing low: if price closes below it, the level is simply consumed (a real breakdown — no signal). If price wicks below but closes back above, that is a bullish sweep. The mirror logic applies to swing highs. This close-based rule is what separates a genuine liquidity grab from a trend break, and it is why the detector ignores most noise wicks.
+3️⃣
+Two-stage signal — sweep then CHoCH confirmation.
+With confirmation on (default), a qualifying sweep becomes a pending setup rather than an instant entry. The signal only fires when price then breaks the most recent minor pivot (Change of Character) within the Confirmation Window (default 13 bars). Minor structure is tracked with its own pivot length (default 8). Turn confirmation off and the signal fires on the sweep bar itself — responsive, but earlier. Pending setups expire automatically if no CHoCH arrives in time.
+4️⃣
+Wick-anchored risk engine with a minimum-distance guard.
+Entry = close of the signal bar. The stop is placed beyond the actual sweep wick:
+— Long: SL = sweepLow − ATR×buffer
+— Short: SL = sweepHigh + ATR×buffer
+If the resulting stop sits closer than ATR×0.5 to entry, it is widened to exactly ATR×0.5 to avoid an unrealistically tight stop. Risk distance dist = |entry − SL|, and targets are pure R-multiples: TP1/TP2/TP3 = entry ± dist × multiplier.
+5️⃣
+Risk presets — one click from scalp to swing.
+Five presets set buffer / TP1 / TP2 / TP3 instantly (SL buffer in ×ATR, TPs in R):
+— Conservative: 0.50 / 1R / 2R / 4R
+— Balanced (default): 0.25 / 1R / 2R / 3R
+— Aggressive: 0.15 / 1.5R / 2.5R / 4R
+— Scalping: 0.10 / 0.8R / 1.5R / 2R
+— Custom: your own values
+6️⃣
+Break-even automation after TP1.
+When TP1 is touched, the stop moves to entry. From the next bar a wick back to entry closes the trade at break-even — protecting the position once it has paid out its first target. The SL line dims and the entry label annotates "→ SL (BE)" so the state is always visible.
+7️⃣
+Resting liquidity map — BSL / SSL + EQH / EQL.
+Every un-swept swing high is drawn as Buy-Side Liquidity and every un-swept swing low as Sell-Side Liquidity (most recent N per side, default 6). A level disappears the instant it is swept, so the map always shows live, untapped pools. Consecutive near-equal swings (within Equal H/L Tolerance × ATR, default 0.15) are connected as Equal Highs / Equal Lows — the strongest liquidity magnets and the most common sweep targets.
+8️⃣
+Liquidity target projection — the draw-on-liquidity objective.
+On each entry, Mirage projects a line to the nearest opposite un-swept liquidity pool: a long aims at the closest BSL above entry, a short at the closest SSL below. This is the logical place the move is "drawn" toward, independent of the fixed R-multiple TPs.
+9️⃣
+Higher-timeframe bias as a soft, non-repainting filter.
+The HTF trend (close vs. EMA, default 4H / EMA-50) is requested with confirmed prior-bar values and contributes only 10% of the score — it nudges quality rather than hard-blocking signals, so counter-trend sweeps can still fire if they are clean enough.
+🔟
+Honest, transparent outcome tracking.
+The dashboard records every closed setup: wins, losses, win rate (with a visual gauge), and a recent-form strip of the last 10 results. A setup is counted as a WIN the moment TP1 is touched, and a trade closes on a stop-out or when TP3 is reached. This definition is stated openly so you always know exactly what the numbers mean — see Important Notes for the full caveats.
+🧠 HOW IT WORKS — CALCULATION FLOW
+Step 1 — Map the swings:
+Confirmed pivot highs/lows (length 21) are stored in bounded memory and tagged as un-swept BSL/SSL.
+Step 2 — Detect a sweep:
+On each new bar, un-swept levels within Max Sweep Distance (default 80 bars) are checked. A wick-through-then-close-back-inside event is flagged as a sweep; a close beyond the level just marks it consumed.
+Step 3 — Score it:
+The 5-factor formula rates the sweep 0-100. Only sweeps at or above Min Sweep Score, after warm-up, on a confirmed bar, qualify.
+Step 4 — Resolve the signal:
+If CHoCH confirmation is on, the sweep becomes a pending setup and waits for a minor-structure break within the window; otherwise it fires immediately.
+Step 5 — Build the trade:
+Entry, wick-based SL (with the ATR×0.5 minimum guard), and TP1/TP2/TP3 as R-multiples are calculated. Only one position runs at a time.
+Step 6 — Manage it:
+Bar by bar, hits are checked on confirmed bars. TP1 triggers break-even; a stop-out or TP3 closes and records the result.
+Step 7 — Visualize & report:
+Lines, labels, the liquidity map, the target projection, and the dashboard all update live.
+📖 HOW TO USE (beginner-friendly)
+🎯
+Quick start — 5 steps:
+1. Add the indicator to any chart and any timeframe (15m–4H is a good starting range).
+2. Leave every setting on default. The Balanced preset and a Min Score of 50 are a sensible baseline.
+3. Wait for a green
+Long ▲
+or red
+Short ▼
+marker. That is your entry signal — and it only appears once a sweep has passed the quality score (and, by default, a CHoCH confirmation).
+4. Read the entry, stop, and three targets straight off the chart lines and labels. The numbers are already calculated for you.
+5. Manage the trade using TP1/TP2/TP3 and the automatic break-even — see the dashboard for live status.
+👁️
+Reading the chart — what each thing means:
+— 🟢
+Long ▲ / 🔴 Short ▼
+= a confirmed signal (a trade opened here).
+— ✖️
+Small × mark
+= a raw sweep (liquidity was grabbed) — shown even when no trade opens.
+—
+Dashed level line
+= the swing high/low that was swept, drawn from where it formed.
+—
+Thick vertical tick
+= the penetration depth — how far the wick pierced beyond the level.
+—
+ENTRY line
+= where the trade opened.
+SL line (red)
+= stop.
+TP1/TP2/TP3 lines
+= targets; a target turns solid teal with a ✓ once touched.
+—
+Gold dashed line "◎ Liquidity Target"
+= the nearest opposite liquidity pool the move is drawn toward.
+—
+Dotted BSL / SSL lines
+= un-swept resting liquidity above (BSL) and below (SSL) — likely future sweep targets.
+—
+EQH / EQL connectors
+= near-equal highs/lows = the strongest liquidity magnets.
+—
+% on labels
+= distance from entry to each level, e.g. "SL 1.2300 (−0.36%)".
+📊
+Dashboard fields:
+—
+Trend:
+direction of the most recent qualifying signal.
+—
+HTF Bias:
+higher-timeframe EMA bias (the soft 10% score factor).
+—
+Signal:
+LONG / SHORT when in a trade, "Wait" when flat (a new trade opens only while flat).
+—
+Last sweep:
+most recent qualifying sweep and its 0-100 score.
+—
+SL / TP1 / TP2 / TP3:
+live levels; ✓ marks a target already touched; "BE @" marks a stop moved to break-even.
+—
+R:R (TP1):
+reward-to-risk at the first target.
+—
+SL Dist %:
+stop distance as a percent of entry.
+—
+Trades / W-L / Win rate / Form:
+session results, with a gauge and a ▰/▱ strip of the last 10 outcomes (newest on the right).
+🔧
+Tuning guide (common fixes):
+—
+Too few signals?
+Lower Min Sweep Score (e.g. 40-45), shorten Swing Length, or turn off CHoCH confirmation for earlier entries.
+—
+Too many weak signals?
+Raise Min Sweep Score (60+), keep CHoCH on, and enable the Volume filter.
+—
+Stops feel too tight/wide?
+Switch presets (Conservative widens, Scalping tightens) or set the SL buffer manually in Custom.
+—
+Choppy market?
+Increase Swing Length and lean on the HTF bias filter so only trend-aligned sweeps score highly.
+💡
+Trading ideas:
+—
+EQH/EQL hunt:
+watch a marked Equal High/Low — when it is swept and reclaimed with a high score, the rejection is often clean.
+—
+Draw-on-liquidity:
+use the gold target line as a partial-exit zone; price frequently reaches the next opposite pool.
+—
+Confirmation toggle:
+use CHoCH-on for selective swing entries, CHoCH-off on lower timeframes for faster scalps.
+—
+Bias stacking:
+take only signals whose direction matches the HTF Bias field for higher-conviction entries.
+⚙️ KEY SETTINGS
+⚙️
+Main:
+—
+Swing Length
+(default 21): pivot lookback for the liquidity pools to sweep. Higher = bigger, cleaner pools.
+—
+Max Sweep Distance
+(default 80 bars): a swing can only be swept within this many bars of forming.
+—
+Min Sweep Score
+(default 50): master quality gate, 0-100.
+🧩
+Confirmation:
+—
+Require CHoCH Confirmation
+(default on): wait for a structure break after the sweep.
+—
+Structure Pivot Length
+(default 8): minor pivots used to detect the CHoCH.
+—
+Confirmation Window
+(default 13 bars): how long a pending setup waits before expiring.
+🔍
+Filters:
+—
+Use Volume Filter
+(default on) /
+Volume MA Length
+(21) /
+Volume Spike ×MA
+(1.5).
+—
+Use HTF Bias
+(default on) /
+HTF Timeframe
+(240) /
+HTF EMA Length
+(50).
+🛡️
+Risk Management:
+—
+Risk Preset
+(default Balanced): Conservative / Balanced / Aggressive / Scalping / Custom.
+—
+ATR Length
+(14) /
+SL Buffer ×ATR
+(0.25, Custom) /
+TP1/TP2/TP3 ×Risk
+(1.0 / 2.0 / 3.0, Custom).
+—
+Break-Even After TP1
+(default on), plus SL/TP line and label visibility, % distance, and line styles.
+💧
+Liquidity:
+—
+Show Resting Liquidity (BSL/SSL)
+(on) /
+Max Levels / Side
+(6) /
+Line Extend
+(10 bars).
+—
+Show Equal Highs/Lows
+(on) /
+Equal H/L Tolerance ×ATR
+(0.15) /
+Show Liquidity Target
+(on).
+🎨
+Visual & Dashboard:
+—
+Theme
+(Auto / Dark / Light), raw sweep marks, swept-level line, penetration, signals, score labels, watermark, label font size.
+—
+Dashboard
+position, font size, and Market / Trade / Stats section toggles.
+🔔 ALERTS
+— 🟢
+LONG entry
+— ticker, timeframe, score, price, SL, TP1, TP2, TP3, R:R.
+— 🔴
+SHORT entry
+— same payload.
+— 🛑
+SL Hit
+(and 🛡️ Break-Even stop-out) — entry and stop levels.
+— 🛡️
+Break-Even activated
+— when the stop moves to entry.
+— 🎯
+TP1 / TP2 / TP3 touched
+— price at each target.
+All alerts support plain-text and JSON webhook formats and fire on bar close (alert.freq_once_per_bar_close).
+⚠️ IMPORTANT NOTES
+— 🚫
+No repainting.
+Signals require confirmed bars (barstate.isconfirmed); swing pivots use equal left/right lookback, so the actual pivot is in the past by Swing Length bars and is drawn only once confirmed — this is delayed confirmation, not repainting of future values. The HTF bias is requested with confirmed prior-bar values, and all alerts fire on bar close.
+— 📊
+How wins are counted:
+a setup is marked a WIN as soon as TP1 is touched (1R by default). A trade that reaches TP1 and then reverses to break-even still counts as a win. This is a deliberately transparent definition, not an inflated one — read it that way when interpreting the win rate.
+— 📐
+Stats are session-based and simulated.
+The dashboard reflects the indicator's own single-position logic on the loaded history and resets when the chart reloads. It is not a broker-accurate backtest and includes no fees, slippage, or funding.
+— ⚖️
+One position at a time.
+A new signal can only open while flat — sweeps that occur mid-trade are shown but not traded.
+— 🛠️
+This is an analysis tool, not an automated trading bot.
+It detects sweeps, scores them, confirms with structure, and builds a structured trade plan — trade decisions remain yours.
+— 🌐
+Universal.
+Works on all markets and all timeframes. Volume-dependent scoring auto-neutralizes on feeds without volume.
+Free to use — add it to your chart and explore. Feedback and feature requests are welcome.
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+WillyAlgoTrader
+Follow
+Following
+10 years in trading. For all inquiries, contact me on my Telegram channel:
+t.me/WillyAlgoTrader
+or Instagram: @willytraderbtc
+Also on
+:
+buysellsignal
+choch
+educational
+ict
+liquidity
+liquiditysweep
+multitimeframe
+setup
+sfp
+SMC
+sweep
+Volume
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+buysellsignal
+choch
+educational
+ict
+liquidity
+liquiditysweep
+multitimeframe
+setup
+sfp
+SMC
+sweep
+Volume
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+WillyAlgoTrader
+Follow
+Following
+10 years in trading. For all inquiries, contact me on my Telegram channel:
+t.me/WillyAlgoTrader
+or Instagram: @willytraderbtc
+Also on
+:
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

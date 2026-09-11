@@ -1,0 +1,160 @@
+Long / Short Ratio Accounts — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+Help Center
+/
+Knowledge base
+/
+Indicators
+/
+Built-in Indicators
+/
+Long / Short Ratio Accounts
+Long / Short Ratio Accounts
+A trader sentiment metric that shows the proportion of accounts holding long versus short positions for a specific trading pair or symbol. This metric reflects the number of accounts with a net position — not the trade volume or position size. If an account holds a net long position, it is counted as one long account, regardless of how large the position is; the same applies to accounts with a net short position.
+The ratio is calculated as Long/Short Ratio = Number of Long Accounts / Number of Short Accounts.
+On the chart, the data is available as the "Long / Short Ratio Accounts" indicator in the "Financials" tab.
+"Long / Short Ratio Accounts" is available for crypto derivatives of the following exchanges: BYBIT, BINANCE.
+Previous
+Previous
+Liquidation data: what to watch and why it matters
+Next
+Next
+Long Short Accounts %
+Launch Supercharts
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

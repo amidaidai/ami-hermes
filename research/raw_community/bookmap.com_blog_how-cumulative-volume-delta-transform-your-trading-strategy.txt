@@ -1,0 +1,440 @@
+Cumulative Volume Delta Trading Strategy | CVD Trading | CVD Divergence
+Why Bookmap
+Features
+Pricing
+Education
+B2B
+More
+Resources
+Learning Center
+Knowledge base
+Symbol Table
+Glossary
+Pro Trader Webinars
+Core Trading Topics
+Blog
+Careers
+Product
+Connectivity Guide
+Features
+Pricing & Packages
+FAQ
+Solutions
+Bookmap Market Data
+Bookmap Web
+Bookmap for Business
+Bookmap for crypto
+Bookmap for Brazil
+dxFeed Market Data
+API
+Community
+Support
+Chatroom (Discord)
+Forum
+Affiliates
+Partners
+Insights
+Bookmap Academy
+Bruce’s Pilot Program
+Marketplace
+Add-ons
+Market Data
+Courses
+MBO Bundle
+LOG IN
+​
+See cvd more clearly in real time.
+Compare plans to access deeper market visibility for cvd.
+Compare Plans
+Education
+January 21, 2026
+Updated
+SHARE
+How Cumulative Volume Delta Can Transform Your Trading Strategy
+In today’s trading world, the right tools can be the difference between success and missed opportunities. Among the various tools traders use, the Cumulative Volume Delta (CVD) is gaining attention for its valuable insights.
+This essential element of order flow analysis has the power to transform trading strategies, offering a deeper understanding of market dynamics. Join us as we explore the impact of CVD on refining and elevating trading decisions.
+What is Cumulative Volume Delta (CVD)?
+Cumulative Volume Delta (CVD) is a metric used in trading to analyze market dynamics by tracking the net difference between buying and selling volumes over a specific timeframe.
+It offers traders a window into the prevailing buying or selling pressure, revealing insights into price movement dynamics influenced by supply and demand shifts.
+Cumulative Volume Delta (CVD) is a technical indicator that helps traders visualize the balance of power between buyers and sellers. It tracks the cumulative difference between buying and selling volume over time to reveal who is driving the market. When the CVD line trends upward, it shows strong buying pressure from aggressive buyers; when it trends downward, it signals that sellers are taking control.
+By showing the underlying intensity of market participation, CVD gives traders insight into whether current price movements are genuine or losing strength.
+Explaining Cumulative Volume Delta
+<br />
+At its core, Cumulative Volume Delta is a measure of net order flow. It calculates the difference between the total market buy volume (orders executed at the ask) and market sell volume (orders executed at the bid) and sums that difference continuously over time.
+This running total forms a line that visually represents whether buyers or sellers have maintained dominance over a chosen period. Because CVD reflects real transaction data—not lagging indicators—it provides one of the clearest pictures of market intent and momentum.
+Calculating CVD: Step-By-Step
+CVD is calculated by accumulating the volume traded on the “bid” (selling) side and
+subtracting
+the volume traded on the “ask” (buying) side, or vice versa—depending on the specific market you’re examining.
+Now, let’s take a closer look at the step-by-step process of calculating CVD using a scenario from a fictional market:
+Consider this scenario: You are a day trader specializing in e-mini S&P 500 futures. You’ve been monitoring the market and noticed that the market has been trading in a tight range
+around a key resistance level
+. You’re looking for signs of a potential breakout or reversal. With that in mind, you’ve decided to calculate and analyze CVD.
+Formula:
+CVD = Σ (Buy Volume – Sell Volume)
+Each time period (for example, a one-minute candle) produces a
+Volume Delta
+, which is the difference between aggressive buy and sell orders. These deltas are continuously summed to form the CVD line, showing whether buyers or sellers dominate over time.
+Guide:
+Steps
+Explanation
+Indication
+1. Gathering Data
+You start by collecting price and volume data for the e-mini S&P 500 futures over the past few days.
+2. Calculating Cumulative Volume Delta
+You calculate the Cumulative Volume Delta (CVD) by:
+Calculating the delta for each interval as (buy volume – sell volume), then adding each interval’s delta to a running total.
+You get a running total of the net buying or selling pressure.
+3. Analyzing CVD Patterns
+You plot the CVD values on a chart alongside the price movement.
+You notice that the CVD has been consistently negative as the market approaches the key resistance level, indicating a higher selling volume.
+4. Divergence and Reversal Signal
+You observe that despite the negative CVD and the selling pressure,
+the price has failed to break below a certain support level.
+This divergence between the negative CVD and the lack of downward price movement
+signals that sellers are losing momentum.
+5. Positive CVD Spike
+During the trading session, you see a sudden positive spike in CVD as the market attempts to breach the resistance level.
+This indicates that buyers are aggressively entering the market at that level.
+6. Confirming with Volume
+You check the volume accompanying the positive CVD spike and find that it’s significantly higher than the average volume.
+This confirms strong buying interest.
+7. Acting
+You decide to initiate a long position (buy) just above the resistance level.
+Based on the positive CVD spike, volume confirmation, and the lack of downward price movement despite negative CVD, you interpret that the market sentiment is shifting.
+8. Risk Management
+To manage risk, you set a stop-loss order just below the recent support level.
+This ensures that if the market reverses unexpectedly, your potential losses are limited.
+9. Monitoring the Trade
+As the market progresses, you notice that the price continues to move higher, and the CVD remains positive.
+This confirms your decision to stay in the trade.
+10. Exit Strategy
+You establish an exit strategy based on your profit target or a specific technical level.
+When the price reaches your target, you exit the trade, locking in your profits.
+It could be understood from this example that Cumulative Volume Delta (CVD) played a pivotal role in providing insights into the market’s order flow and sentiment.
+This tool facilitated the identification of shifts in market aggression, ultimately bolstering the trader’s confidence needed to execute a trading decision. Importantly, it is not merely a standalone signal but rather a
+confluence of events
+that collectively contribute to interpreting key aspects of the market, including:
+Market trends
+Potential reversals
+Shifts in sentiments
+How is CVD Used in Trading
+CVD is widely used to measure market sentiment and confirm price action. Traders monitor the direction of the CVD line to determine whether price movement aligns with buying or selling strength.
+If price is rising but CVD is falling, the move may lack real demand — a possible fakeout.
+If both price and CVD rise together, it suggests sustained buyer aggression and a stronger uptrend.
+By reading these relationships, traders can identify exhaustion points, reversals, and fake breakouts with greater accuracy.
+Cumulative Volume Delta Strategy Basics
+A cumulative volume delta strategy focuses on whether aggressive buying or aggressive selling is actually driving price. You’ll also see this described as a cumulative volume difference approach, an aggregate delta volume method, or a total volume imbalance system — all referring to the same core idea: track the net imbalance between executed buys and sells over time, then trade around what that imbalance suggests about intent.
+At a practical level, CVD strategies tend to fall into two buckets:
+Divergence setups:
+price pushes to a new extreme while CVD fails to confirm, hinting at weakening aggression.
+Absorption and continuation setups:
+CVD shows participation building into a level (support/resistance) and price either rejects (absorption) or accepts (continuation).
+The Significance of CVD in Trading
+Cumulative Volume Delta (CVD) offers traders nuanced insights beyond what traditional price charts provide. Here’s a breakdown of how traders incorporate CVD to enhance their decision-making:
+1. Identifying Aggressive Buyers and Sellers:
+Traders use CVD to identify which side of the market is more aggressive.
+If the CVD is positive
+, it suggests that buyers are more aggressive, possibly indicating upward price momentum.
+Conversely,
+a negative CVD implies
+that sellers are dominating, potentially signaling a downward price movement.
+By understanding the aggressor’s side, traders can adjust their strategies accordingly.
+2. Confirming Reversals and Breakouts:
+CVD can be used to confirm potential trend reversals or breakout points.
+For example,
+If prices are making higher highs while CVD is making lower highs, it could indicate that the buying pressure is weakening, and a reversal might be imminent.
+This insight aids traders in avoiding traps like false breakouts
+.
+3. Support and Resistance Validation:
+Analyzing CVD when the price nears key support or resistance can gauge the strength of these levels.
+For instance, if the price is approaching a resistance level and CVD shows increased selling pressure, it indicates a price reversal from that level.
+4. Divergence Analysis:
+A bullish divergence
+occurs when the price makes lower lows while CVD makes higher lows, indicating potential buying interest.
+Conversely,
+a bearish divergence
+occurs when the price makes higher highs while CVD makes lower highs, suggesting a possible reversal.
+How to Spot CVD Divergence
+CVD divergence happens when price and aggressive participation stop telling the same story.
+Common divergence patterns:
+Bearish divergence:
+price makes a higher high, but CVD makes a lower high or stalls. This can signal buyer exhaustion (price is rising without expanding aggressive buying).
+Bullish divergence:
+price makes a lower low, but CVD makes a higher low or stabilizes. This can suggest selling is losing control and absorption may be forming.
+For scalping and short-term trading, the key is timing:
+Look for divergence
+at a known reference level
+(prior high/low, VWAP area, a visible liquidity zone).
+Then wait for a
+reaction
+(failure to continue + shift in CVD direction) before treating it as actionable.
+Intraday CVD Exhaustion
+Intraday exhaustion shows up when CVD surges late in a push (one-sided aggression), but price stops gaining ground. That mismatch can be an early warning that the move is running out of fuel — especially near session extremes or after a strong directional run. Traders often use this to tighten risk, take profits, or look for reversal confirmation rather than “chasing” the final push.
+5. Volume Confirmation:
+CVD can also confirm the significance of price movements by considering volume alongside price action.
+For example, a price move accompanied by a positive CVD and high volume suggests strong buying interest, enhancing the likelihood of a sustainable trend.
+6. Intraday Trading Strategies:
+Intraday traders can use CVD to make their day-to-day trading decisions.
+For example, if CVD starts to spike positively and the price is also moving up, it could indicate a surge of buying interest, potentially supporting a scalping or day trading strategy.
+Cumulative Volume Delta becomes even more effective when combined with other indicators. Pairing CVD with tools such as RSI, MACD, Volume Profile, or Moving Averages can confirm momentum and improve accuracy. For example, a bullish CVD divergence together with an oversold RSI reinforces the case for a rebound.
+How Does CVD Relate to Order Flow
+CVD is a simplified view of order flow. While a full order flow display (like a heatmap or footprint chart) shows every individual trade and the order book depth, CVD compresses all that information into a single, easy-to-read line
+Think of it this way:
+order flow
+is the raw data, and
+CVD
+is the refined result. It provides a quick snapshot of whether buying or selling pressure dominates without needing to read every tick of data.
+What are Volume Indicators in Trading
+Volume indicators use traded volume to measure the strength of a market move. They help confirm whether price changes are backed by genuine participation.
+High volume
+= conviction and strong momentum.
+Low volume
+= indecision or weak follow-through.
+Examples: Cumulative Volume Delta (CVD), Volume Profile, and On-Balance Volume (OBV).
+What is Technical Analysis in Trading
+Technical analysis studies past price and volume to predict future movements. Within this framework, CVD adds context by showing
+why
+price moved — exposing whether buyers or sellers were responsible for each shift.
+This bridges the gap between traditional chart analysis and real order flow data.
+How to Use Indicators to Analyze Market Trends
+Professional traders rarely rely on one indicator. Combining signals improves reliability:
+If
+price
+,
+volume
+, and
+CVD
+all make higher highs → strong bullish trend.
+If
+price
+rises but
+CVD
+makes lower highs → weakening momentum, possible reversal.
+Blending CVD with momentum or trend indicators helps confirm whether a market move is sustainable.
+How to Use CVD for Scalping
+Scalpers use CVD to capture small, fast moves. Because CVD updates in real time, sudden shifts in buying or selling pressure are visible immediately.
+A sharp uptick in CVD = burst of aggressive buying → short-term long setup.
+A sharp drop = sudden selling → quick short or exit signal.
+Top Cumulative Volume Delta Indicator
+The top choice for visualizing and interpreting Cumulative Volume Delta is Bookmap’s CVD indicator. It gives traders a clear and precise way to measure net buying and selling pressure, showing not just how price moves but why it moves.
+Best Volume Delta Analysis Software
+Bookmap’s CVD tool updates in real time and displays cumulative delta values alongside a heatmap, volume histogram, and delta bars. This combination helps traders see shifts in momentum before they appear on traditional price charts.
+Leading Cumulative Volume Indicator Tools
+Within Bookmap, the CVD panel can be customized for your market, timeframe, and style. Whether you trade futures, stocks, or crypto, CVD gives insight into aggressive participation, divergences, and order flow patterns that can help refine entries and exits.
+How Bookmap’s CVD Indicator Enhances Trading Strategies
+The
+Cumulative Volume Delta (CVD) indicator
+is a powerful tool included Bookmap that offers traders insights into market liquidity and order flow dynamics.
+By visualizing the net buying and selling pressure at different price levels, CVD assists traders in understanding market momentum and making informed trading decisions.
+Using Bookmap’s CVD Indicator
+Accessing the CVD Indicator
+:
+To access the CVD indicator, open Bookmap and click on the “Studies Configuration Tool.”
+From the list, select “Cumulative Volume Delta.”
+Open the sub-chart by clicking on the arrow located at the bottom of the price ladder.
+Configuring the CVD Indicator:
+To customize the appearance and settings of the CVD indicator, click on the widget configuration icon.
+In both the sub-chart and the widget panel, ensure that “CVD” is selected.
+Understanding CVD Calculation:
+CVD calculates the difference between market buy orders (considered as positive values) and market sell orders (considered as negative values).
+This calculation is plotted over time in the sub-chart and updated in real time in the widget panel.
+The resulting values offer valuable insights into market momentum and the behaviors of buyers and sellers.
+Incorporating CVD into Decision-Making
+CVD’s ability to visualize market liquidity, momentum, and order flow dynamics allows traders to navigate the markets more effectively, ultimately enhancing their trading strategies and outcomes. This is how traders incorporate the different elements of CVD into their decision-making:
+Price Chart
+: Bookmap displays the price chart of the asset, showing the price movement over time.
+Heatmap
+: A heatmap overlays the price chart, visually representing the CVD values at different price levels. The heatmap color intensity indicates the magnitude of the CVD at each price level.
+Cumulative Delta Bars
+: Vertical bars alongside the price chart represent the cumulative delta values. Positive bars indicate net buying pressure, while negative bars indicate net selling pressure.
+Volume Histogram
+: Below the price chart, a histogram shows the volume traded at each price level, allowing traders to correlate volume with CVD.
+Interpreting and Applying the Visualization
+Bookmap’s CVD visualization empowers traders to go beyond traditional price charts and understand the dynamics of order flow, which drives price movements. Most traders interpret and apply the insights gained from heatmaps, histograms, price charts, and delta bars in the following manner:
+Analysis
+Explanation
+Practical Application
+Identifying Key Levels
+You can identify key support and resistance levels by observing where the CVD values are concentrated.
+High CVD values at a specific level indicate significant buying or selling interest.
+Aggression Analysis
+By looking at the cumulative delta bars, you can gauge the intensity of buying or selling aggression.
+Rapidly increasing positive bars may signal strong buying interest, while sharp negative bars indicate strong selling interest.
+Divergence Detection
+You can detect divergences between price and CVD.
+If the price is making higher highs but the cumulative delta bars are not rising proportionally, it might suggest a potential reversal or weakening trend.
+Confirmation with Volume
+Comparing the volume histogram with the CVD heatmap can validate buying or selling pressure.
+High volume accompanied by intense CVD can confirm the strength of a price movement.
+Order Flow Analysis
+Analyzing how the heatmap changes over time allows you to understand how market participants are interacting with the order book.
+Sudden shifts in CVD intensity might signal shifts in market sentiment.
+Intraday Decision-Making
+Active traders can rely on real-time CVD data for instantaneous decisions.
+If you see a sudden surge in positive CVD alongside increasing volume, it might indicate a potential breakout opportunity.
+How to Use Cumulative Volume Delta for Day Trading
+Day traders use CVD to track intraday shifts in buying or selling aggression. In Bookmap, a sudden spike in positive CVD with rising volume may indicate strong buying interest that can support a breakout. A sharp drop in CVD with heavy volume can suggest selling pressure building before a move lower. Monitoring these shifts throughout the session helps refine entries, exits, and stop placement.
+Best Timeframes for Cumulative Volume Delta
+The best timeframe depends on your trading horizon, but CVD is typically most useful when it matches how you manage trades.
+Scalping:
+very short windows to catch bursts of aggression and quick shifts.
+Day trading:
+intraday windows that reflect session behavior and help confirm breakouts, fades, and rotations.
+Swing context:
+longer windows can help confirm whether participation supported the move, but interpretation should be paired with market structure and key levels.
+The main rule is consistency: use a timeframe that aligns with your entry/exit decisions, then compare CVD behavior at the same types of levels and conditions.
+Combining CVD with VWAP
+VWAP is a widely watched execution benchmark, and CVD helps explain whether price behavior around VWAP is driven by real aggression or just low-participation drift.
+Common ways traders combine them:
+VWAP reclaim with CVD confirmation:
+price reclaims VWAP and CVD turns up, suggesting buyers are participating in the move.
+VWAP test with absorption:
+price tags VWAP (or a VWAP band), but CVD shows the opposite side failing to push through, hinting at absorption and a potential rotation.
+VWAP breakout filter:
+if price breaks away from VWAP but CVD does not expand, traders treat the breakout as lower quality and look for additional confirmation.
+Trading Strategies with Cumulative Volume Delta
+Futures Application:
+Futures markets are ideal for CVD due to centralized data.
+Price making a new high while CVD lags = buyer exhaustion (possible reversal).
+Price dipping while CVD rises = absorption (buyers absorbing selling pressure).
+CVD Absorption Patterns at Support
+Absorption at support often appears when selling pressure is active (CVD negative or falling), but price stops making progress lower and repeatedly holds the same area. This can signal that passive buyers are absorbing aggressive sells. Traders treat this as an order flow clue — not a standalone entry — and look for confirmation that selling is no longer getting follow-through.
+CVD Trend Continuation Setups
+CVD can also help confirm continuation. In a healthy trend, price advances are usually accompanied by CVD expanding in the same direction, showing that aggression is supporting the move rather than fading.
+A common continuation read:
+Price breaks a key level.
+CVD expands with the break and stays supportive on the first pullback.
+The next push holds better structure because participation remains aligned.
+Common approaches include:
+Breakout confirmation
+when CVD moves in the same direction as price with strong volume.
+Fade trades
+when CVD shows exhaustion despite a final push in price.
+Support/resistance validation
+by checking if CVD aligns with price reaction at key levels.
+How to Identify Divergence with Cumulative Volume Delta
+Divergences occur when price and CVD tell different stories. For example, if price is making new highs but CVD is flat or falling, it can be an early sign that buyers are losing strength. Conversely, if price is making lower lows but CVD is rising, it may signal accumulation and a possible reversal.
+Spotting divergences early allows traders to anticipate momentum shifts before they appear on price charts, offering a timing edge for entries and exits.
+How Cumulative Volume Delta Offers Additional Insights for Traders
+Cumulative Volume Delta (CVD) provides traders with a deeper insight into the inner workings of market dynamics. It allows them to meticulously dissect the interplay between buying and selling forces, presenting a lens through which market sentiments, order flows, and potential trend shifts can be analyzed.
+Far from the limits of conventional price chart analyses, CVD offers traders an unparalleled perspective into the market’s pulse.
+Leveraging CVD Insights for Success in Trading Competitions
+For participants in trading competitions, where precision and speed are of the essence, leveraging CVD insights can provide a significant competitive advantage.
+Let’s consider the example of Blue Jacket’s crypto segment:
+Picture yourself participating in a trading competition, particularly in
+Blue Jacket’s crypto segment
+.
+As you seek an edge, you turn to
+Bookmap’s Insights page
+and filter results using the ‘CVD’ tag. Your screen now displays an in-depth analysis of CVD patterns for a trending cryptocurrency, revealing:
+CVD Patterns
+: Visual representations of CVD patterns over various time frames.
+Interpretation
+: Insights into how CVD patterns correlate with price movements and market trends.
+Entry and Exit Points
+: Notable trading opportunities were identified using CVD analysis.
+How Do You Gain A Competitive Advantage?
+By exploring these CVD insights, you gain a deeper understanding of how the cryptocurrency market behaves. This, in turn, enables you to identify potential trading opportunities that others might have overlooked.
+Your adeptness in reacting to real-time market shifts, based on real-time CVD data, gives you an edge in executing well-timed trades and maximizing your gains during the trading competition.
+Ready to put your knowledge of Cumulative Volume Delta into action and test your trading strategies? Join Bookmap’s Blue Jacket competition for a chance to compete and potentially win three months of free access to Bookmap’s Global+ package.
+This premium package offers advanced features like CVD, enhanced market visualization, and a plethora of educational resources. Don’t miss out on this exciting opportunity!
+Join the Blue Jacket Competition now
+.
+What are the Best Indicators to Use with CVD
+CVD integrates best with:
+RSI
+– measures overbought/oversold levels.
+MACD
+– confirms momentum.
+Volume Profile
+– shows concentration of activity.
+Moving Averages
+– define broader trends.
+Combining these provides a stronger confirmation framework for trend or reversal setups.
+Best Volume Analysis Tools
+Bookmap offers a full set of volume-based tools including the CVD indicator, volume profile, and volume dots. These work together to give traders an in-depth view of where trading activity is concentrated and how it changes over time.
+Advanced Financial Trading Indicators
+Bookmap’s suite of indicators includes tools for visualizing liquidity, tracking executed trades, and analyzing volume patterns. CVD is one of the most valuable because it directly shows which side is more aggressive and how that aggression changes during the trading day.
+Difference Between Volume Profile and Cumulative Delta
+Volume Profile
+shows how much volume traded at each price level over a period of time.
+Cumulative Delta
+tracks the net buying and selling pressure over time.
+While both are volume-based, Volume Profile maps out areas of interest, whereas CVD reveals the ongoing battle between buyers and sellers.
+Cumulative Delta Indicator for Cryptocurrency
+Bookmap’s CVD can be applied to crypto markets to track aggressive buyers and sellers across different price levels. This can help crypto traders spot momentum shifts in volatile conditions and confirm breakout or reversal setups.
+Crypto Perpetual Swap CVD Strategy Notes
+In crypto perpetual swaps, traders often use CVD to track whether directional moves are supported by aggressive participation or driven by thin liquidity. Because these markets can move quickly and trade around key liquidation and funding dynamics, CVD is typically used as a confirmation layer: divergence can warn of a fading push, while aligned CVD can support continuation reads.
+CVD Conclusion
+Cumulative Volume Delta (CVD) offers traders a deeper look into market dynamics, acting as a
+confluence indicator
+that melds buying and selling forces. Rather than just showing price moves, CVD gives insights into the ‘why’ behind those moves.
+Bookmap’s tools further simplify CVD, making it easier to spot key market moments and adjust strategies. For traders aiming for consistency and an edge, understanding and mastering CVD is essential.
+Ready to tackle the markets with in-depth insights?
+Sign up to Bookmap for FREE now
+and level up your trading.
+Summary
+Cumulative Volume Delta (CVD) transforms raw order flow into a clear picture of market aggression. Whether you trade futures, stocks, or crypto, understanding how CVD aligns with price helps anticipate reversals, confirm sentiment, and refine entries with precision.
+FAQ
+What is Cumulative Volume Delta (CVD) in trading?
+Cumulative Volume Delta (CVD) measures the net difference between buying and selling volume over time. It tracks whether aggressive buyers or sellers dominate the market, helping traders interpret the true strength behind price movements beyond what simple candlesticks show.
+How does Cumulative Volume Delta improve trading strategies?
+CVD offers real-time insights into market sentiment, allowing traders to detect shifts in buying and selling pressure. It helps confirm trend strength, spot potential reversals through divergence, validate support and resistance levels, and fine-tune trade entries and exits based on actual liquidity flows rather than just price action alone.
+How is Cumulative Volume Delta calculated?
+CVD is calculated by subtracting the volume traded at the bid (selling side) from the volume traded at the ask (buying side) for each price movement. This net difference is continuously summed over time to produce a cumulative reading that reflects the dominance of buyers or sellers during a session.
+How can traders use Bookmap’s CVD indicator effectively?
+Bookmap’s CVD indicator visualizes real-time buying and selling pressure with heatmaps, cumulative delta bars, and volume histograms. Traders use it to identify key support/resistance areas, monitor market aggression, spot divergences, and confirm trend strength — enabling smarter, faster trading decisions especially during intraday setups or volatile market conditions.
+What is the difference between cumulative volume and regular volume?
+Regular volume measures the total number of contracts or shares traded in a given period, without distinguishing between buying and selling pressure. Cumulative Volume Delta measures the net difference between aggressive buying and aggressive selling, offering more detail on which side is in control.
+Are you looking for trend following or reversal signals?
+CVD can be used for both. Trend traders look for CVD alignment with price, where participation supports the move. Reversal traders look for divergence or absorption, where price stops responding to aggressive buying or selling.
+Which trading platform are you using for delta data?
+Delta calculations can vary depending on data quality and how trades are classified as buys versus sells. Knowing your platform helps ensure you interpret CVD consistently.
+Do you want to focus on spot or futures markets?
+CVD is commonly used in both, but it tends to be most straightforward in centralized venues. The best approach is to apply it to your market with consistent settings and clear reference levels.
+Are you interested in divergence or absorption?
+Divergence focuses on price making new extremes without CVD confirmation. Absorption focuses on aggressive activity failing to move price through a level. Many traders use both, depending on context.
+Unlock
+Full Access to Bookmap
+Sign Up Now
+Get Started
+Latest Posts:
+Loading...
+Loading...
+Loading...
+Loading...
+Loading...
+Loading...
+Loading...
+Loading...
+Loading...
+Loading...
+Trustpilot
+Features
+Pricing
+Education
+Resources
+Knowledge base
+FAQ
+Symbol table
+Blog
+Forum
+Support
+Careers
+Solutions
+Bookmap Market Data
+US stocks data
+Bookmap Crypto
+Bookmap API
+BOOKMAP B2B
+Bookmap®️ B2B
+Bookmap Web
+1 Lampousas Street 1095 Nicosia, Cyprus
+support@bookmap.com
+Community
+All rights reserved, Bookmap Ltd.
+RISK DISCLOSURE: Futures trading contains substantial risk and is not for every investor. An investor could potentially lose all or more than the initial investment. Risk capital is money that can be lost without jeopardizing one's financial security or lifestyle. Only risk capital should be used for trading and only those with sufficient risk capital should consider trading. Past Performance is not necessarily indicative of future results.
+Full Disclaimer
+|
+Privacy Policy

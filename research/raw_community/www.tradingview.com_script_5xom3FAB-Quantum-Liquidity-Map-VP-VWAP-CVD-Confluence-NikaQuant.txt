@@ -1,0 +1,297 @@
+Quantum Liquidity Map - VP, VWAP & CVD Confluence [NikaQuant] — Indicator by NikaQuant — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+OPEN-SOURCE SCRIPT
+Updated
+Apr 18
+Quantum Liquidity Map - VP, VWAP & CVD Confluence [NikaQuant]
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+4
+2
+8
+1
+1
+8 168
+Apr 14
+Info:
+An overlay that combines three institutional order-flow methods — visible-range Volume Profile, session-anchored VWAP with standard-deviation bands, and Cumulative Volume Delta with divergence detection — into one coordinated tool for reading liquidity and order-flow conviction.
+## Why This Combination Exists
+Each of the three methods answers a different question about price, and none of them can answer the others alone. Volume Profile answers "where has the market actually traded?" — it locates the price levels participants have defended with size. Anchored VWAP answers "how far is the current price from the session's true volume-weighted average?" — it measures stretch from fair value. CVD divergence answers "is this move real?" — it exposes when a new price high or low is being printed on weakening order-flow pressure.
+Used in isolation, each method produces false signals. A Value Area edge can be tagged without any participation. A VWAP band touch can continue for hours without mean-reverting. A CVD divergence can fire in a vacuum away from any structural level. The coordination is the entire point of this script: a Value Area edge touched while price is already two standard deviations stretched from VWAP, with a confirmed CVD divergence printing at the same bar — three independent systems agreeing — is a structurally different event than any one of them firing alone. The script exists to make that specific confluence visible in a single overlay without chart clutter or flipping between tools.
+## How It Works
+Volume Profile — The visible range is split into horizontal price buckets. Each completed bar's volume is distributed into the bucket containing its midpoint. The highest-volume bucket becomes the Point of Control (POC). From the POC outward, buckets are added alternately above and below (whichever neighbour carries more volume) until a configurable percentage of total volume is captured — 70% by default, following the CBOT value-area method. The upper and lower boundaries of that expansion become Value Area High (VAH) and Value Area Low (VAL). A previous-session POC that current price has not yet revisited is drawn as a "naked POC" — an untested volume cluster that tends to act as a magnet.
+Anchored VWAP — The volume-weighted average price is calculated from scratch each time the anchor period resets (thirteen anchor options from one hour through yearly). Two standard-deviation bands are derived from the running variance of the weighted price distribution, with multipliers adjustable for both the inner and outer bands. Bands are deliberately suppressed for the first five bars of every new anchor period, because variance is mathematically unstable immediately after a reset and early spikes would be misleading.
+CVD Divergence — Cumulative Volume Delta is estimated per bar using the close-location-within-range method: a bar that closes near its high is interpreted as predominantly buy-driven, one that closes near its low as sell-driven, and the net difference is summed across the session. Structural swing highs and lows are detected with equal left and right confirmation windows, which prevents repainting because a pivot is only recognised once both sides are closed. A divergence is flagged only when three conditions are met: (1) price prints a new swing extreme relative to the previous one, (2) the CVD value at that swing fails to confirm the new extreme, and (3) the swing itself exceeds 1.5 times the 14-bar Average True Range. The ATR gate is the key noise filter — it throws out minor pivots that would otherwise generate meaningless divergences during tight consolidations.
+## How To Use It
+- Start with the profile: locate POC, VAH, and VAL. These are the decision levels.
+- Check the VWAP band zone (shown live in the dashboard). Inside ±1 standard deviation of VWAP, price is near fair value. Beyond ±2 standard deviations, it is statistically stretched and mean-reversion odds improve.
+- Look for confluence at profile levels. A rejection candle at VAH while price is also outside the +2 standard deviation band on VWAP and a bearish CVD divergence has just fired is the highest-probability setup the indicator produces. The inverse applies at VAL.
+- A naked POC tag accompanied by CVD trending in the same direction as the test is more likely to hold than one where CVD disagrees.
+- Recommended timeframes: 5-minute through 4-hour for intraday; 1-hour through daily for swing. The VWAP anchor period should match the trading horizon — Session for intraday, Weekly or Monthly for swing.
+- Recommended markets: liquid futures, major FX pairs, large-cap equities, and liquid crypto perpetuals — any market where per-bar volume is meaningful enough for the close-location-within-range buy/sell estimate to be informative.
+- Avoid using on illiquid symbols where volume is sparse or spiky, and on non-standard chart types (Heikin Ashi, Renko, Kagi, Point & Figure, Range) — they distort both the profile inputs and the CVD calculation.
+## Settings
+- Profile Rows (default 60): number of horizontal buckets. Higher values give finer resolution at the cost of more noise per bucket.
+- Value Area % (default 0.70): volume percentage that defines the value area, following the CBOT convention.
+- Lookback Bars (default 48): how many completed bars of history feed the profile.
+- Show Naked POC (default on): draws previous-session POCs that current price has not yet revisited.
+- Profile Width (default 0.30): horizontal footprint of the heatmap as a fraction of the lookback window.
+- CVD Pivot Lookback (default 5): bars required on each side to confirm a swing. Higher values produce fewer but stronger divergence signals.
+- VWAP Period (default Session): anchor period from one hour through yearly.
+- Inner SD Multiplier (default 1.0) and Outer SD Multiplier (default 2.0): standard-deviation band widths.
+- Dashboard position, size, and dark-mode toggle: cosmetic only.
+## Alerts
+Four alert conditions are included, each with a JSON payload suitable for webhook routing:
+- Price touches POC (within half an ATR)
+- Price enters the VAH zone
+- Price enters the VAL zone
+- CVD divergence detected (bullish or bearish)
+## Notes
+- Non-repainting. Divergence signals fire only on confirmed (closed) bars and require both-sided pivot confirmation. The profile, VWAP and CVD values use historical bar data only, with no lookahead.
+- The CVD estimate is range-based (close-location-within-range), not tick-based. On very short timeframes, where a single bar can contain many aggressive sweeps, this is an approximation of true order flow — it correlates well with tick CVD on liquid instruments but is not a substitute for it on sub-minute scalping.
+- Overlay indicator, pinned to the right scale. Pine Script v6.
+─────────────────────────────────────────
+════════════════════════
+Apr 18
+Release Notes
+🆕 WHAT'S NEW IN V3
+V2 was a Volume Profile + VWAP + CVD. V3 is a full liquidity suite.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• HVN / LVN auto-detection
+Scans every profile bucket and flags High-Volume Nodes (≥1.5× mean
+= magnet zones, ◆) and Low-Volume Nodes (≤0.35× mean = fast-travel
+/ rejection gaps, ◇). Thresholds and max-label count configurable.
+• Developing POC (dPOC)
+Live intra-session POC that updates bar-by-bar instead of only on
+session close, so you see fair value move with the auction in real
+time.
+• Initial Balance module (IBH / IBL) + ±50% and ±100% extensions
+Captures the first-N-minutes auction range (default 60) and
+projects four target levels. Confirmed-close break alerts fire on
+IBH up and IBL down.
+• Liquidity Sweep detector
+Flags classic stop-hunts: swing pierce → reversal → close back
+inside → relative volume ≥1.3× 20-bar avg. Bullish and bearish
+variants, ATR-gated, with confirmation markers.
+• Confluence Scoring Engine (0–100)
+Composite score across 5 sub-systems, ±20 points each:
+– Price vs. VWAP
+– Price vs. Value Area
+– Delta trend
+– CVD vs. CVD-EMA
+– Relative volume
+Positive = bullish, negative = bearish. Alert fires when |score|
+≥ threshold (default 80).
+• Session / Auction classifier
+Real-time Balance / Rotation / Trend typing by session range vs.
+ATR, plus auction shape recognition (Profile D, etc.).
+• Previous-session anchors + Naked POCs
+pPOC / pVAH / pVAL persist as reference levels. Un-revisited POCs
+from prior sessions are tracked and auto-removed the moment price
+touches them.
+• CVD divergence detector
+Hidden buyers (price LL, CVD HL) and hidden sellers (price HH,
+CVD LH). Requires >1.5× ATR swing to confirm.
+• Volume spike markers
+Tiny diamonds flag bars with volume > threshold × 20-bar average
+(default 2.5×).
+• Hover-anywhere tooltips
+Every level, label, and HUD row has a multi-line tooltip with
+price context, meaning, and how to read it.
+• 19-row live HUD dashboard
+Day volume, delta %, rel volume, confluence, session type, auction
+shape, VWAP distance, band zone, VAH/VAL distance, dPOC, pPOC, CVD
+state, last event. 7 positions, 4 sizes, dark/light themes.
+• Easy / Advanced mode toggle
+Easy = VP + VWAP + CVD only. Advanced = full V3 cockpit.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+New alerts in V3: Liquidity Sweep (bull/bear), IB Break Up, IB Break
+Down, Strong Confluence Signal.
+Stays locked to the main chart price scale — no scale B drift.
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+NikaQuant
+Follow
+Following
+Also on
+:
+CVD
+initialbalance
+liquidity
+marketprofile
+orderflow
+POC
+Support and Resistance
+valuearea
+Volume
+Volume Weighted Average Price (VWAP)
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+CVD
+initialbalance
+liquidity
+marketprofile
+orderflow
+POC
+Support and Resistance
+valuearea
+Volume
+Volume Weighted Average Price (VWAP)
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+NikaQuant
+Follow
+Following
+Also on
+:
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

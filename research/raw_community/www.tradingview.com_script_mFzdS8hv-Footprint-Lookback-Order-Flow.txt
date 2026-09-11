@@ -1,0 +1,212 @@
+Footprint Lookback [Order Flow] — Indicator by ElisTools — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+OPEN-SOURCE SCRIPT
+Jun 22
+Footprint Lookback [Order Flow]
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+1
+7
+7
+3
+3
+2 653
+A footprint shows the real buy and sell volume at every price inside a bar. Read candle by candle it is a wall of numbers you have to zoom into one bar at a time. Footprint Lookback takes a different angle: you pick a period — say one hour — and it aggregates the real footprint of the last hour of bars into a single, readable profile pinned to the right of your chart, between the window's high and low. The window rolls forward with each new bar. It is a factual aggregation of bid and ask volume, not a signal service — it shows you where, in price, real buying and selling happened over the period you chose, and leaves the read to you. It uses TradingView's native footprint data, which is available on the Premium and Ultimate plans.
+HOW IT WORKS
+A footprint records, for each bar, how much volume traded as buying (at the ask) and selling (at the bid) at each price level. Footprint Lookback reads that real data with a single request and aggregates it across a rolling window instead of showing it one candle at a time.
+Rolling lookback window — you choose a period (for example, 1 hour). The tool converts it into a number of chart bars — the last N bars — and aggregates the footprint of those bars. The window slides forward as new bars close, so the profile always describes the most recent period. For performance the window is capped at 300 bars, and the tool marks on the chart when that cap is reached rather than silently shortening it.
+The profile — a panel to the right of the last bar, bounded by the window's high and low. Each row is a price band: the real sell (bid) volume is drawn on the left, the buy (ask) volume on the right, shown by color intensity with the number on the outer edge. The row height is fixed and the number of rows follows the price range, so rows stay consistent and non-overlapping on any instrument and timeframe. Auto sizes the row height from ATR (volatility-adaptive); Manual lets you set ticks per row.
+Point of Control and Value Area — the Point of Control (POC) is the price band that traded the most total volume. The Value Area expands outward from the POC until it covers your chosen share of the window's volume (default 70%). POC, VAH and VAL are drawn as levels extending to the right.
+Diagonal imbalance — footprint imbalance compares the buy volume at one price against the sell volume at the level below it — the diagonal. When one side exceeds the other by your threshold, that cell is highlighted. Runs of consecutive same-side imbalances are boxed as stacked-imbalance zones (B-IMB for buy, S-IMB for sell).
+Stats — a fixed corner box reads out the window's total volume, its delta (buy minus sell), and the buy/sell split.
+If no footprint data is available — an unsupported symbol, a plan without footprint access, or a market with no real volume — the tool does not invent anything. It shows "No footprint data" and draws no profile.
+A single footprint request pulls the real bid/ask volume rows for each bar; the last N bars of your chosen window are aggregated into price bands between the window's high and low
+Each band shows real sell and buy volume by color and number; the Point of Control, Value Area, diagonal imbalances and stacked-imbalance zones are derived from the aggregated data
+Confirmed bars stay fixed; the window rolls forward and the panel redraws at the latest bar — and where there is no footprint data, the tool says so instead of drawing
+HOW TO READ
+The profile answers one question: over the period you chose, at which prices did real buying and selling actually happen? Tall rows are prices that traded heavily; the Point of Control is the single price band that traded the most.
+The Value Area (POC, VAH, VAL) marks the price range where the bulk of the volume changed hands — a common reference for where the market accepted value versus where it rejected it.
+A row leaning strongly to the buy or sell side, or a highlighted diagonal imbalance, shows one side dominating at that price. It is a fact about what already happened inside the window, not a prediction.
+Stacked-imbalance zones (B-IMB, S-IMB) mark a run of one-sided pressure across several prices. They describe an order-flow condition — not a buy or sell instruction.
+The stats box gives the window totals: a positive delta means more volume traded into buys than sells over the period, negative the reverse. The tool maps the order flow; the read is yours.
+INPUTS
+Lookback period — the window the footprint is aggregated over (e.g. 60 = the last hour of chart bars).
+Source granularity (ticks per row) — the resolution of the underlying footprint request; keep it fine for accurate aggregation.
+Value Area % — the share of window volume the Value Area covers (default 70).
+Imbalance threshold % — how far one side must exceed its diagonal opposite to count as an imbalance.
+Row size mode / Manual ticks per row / ATR length — Auto sizes each row from ATR (volatility-adaptive); Manual fixes ticks per row. Either way the row count follows the range.
+Max rows — a safety cap on the number of rows.
+Panel — Gap from last bar, Panel width, Show numbers, Show stats box, Stats box position, Text size, Mark current price line: the placement and contents of the right-side panel.
+Colors — buy, sell, lookback high/low, POC, current price line.
+Value Area / Imbalance — Show POC/VAH/VAL, VAH-VAL color, Mark imbalance, Mark stacked-imbalance zones, Stacked count (how many consecutive imbalanced rows form a zone).
+NOTES & LIMITS
+This is an observation tool, not a forecast. It uses TradingView's native footprint data, which requires a Premium or Ultimate plan; on a symbol or plan where that data is not available, or a market with no real volume, it shows "No footprint data" rather than drawing something invented. It is a rolling-window footprint profile — it aggregates the available footprint of the last N bars into one profile — not a per-candle footprint. The volume it reads is only as good as the feed underneath it: on instruments with genuine traded volume (futures, crypto) it is at its most reliable, while on forex and CFDs the volume is tick volume (the number of price updates, not contracts traded), so the readings there are looser and should be treated with more caution. The lookback is capped at 300 bars for performance, and the tool marks on the chart when that cap is reached. The Point of Control, Value Area, imbalances and stacked-imbalance zones are a factual aggregation of what traded — not buy or sell instructions, and marking one says nothing about whether price will turn or continue. The profile is built from confirmed (closed) bars, which stay fixed; the live window updates to show the current state and the panel redraws at the latest bar, but past levels are not moved, and the footprint request reads completed data and does not leak the future. No profit, win-rate, or guarantee claim. Open-source under CC BY-NC-SA 4.0 — non-commercial use, attribution to ElisTools required for reuse or derivatives. TradingView (Pine v6) only.
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+ElisTools
+Follow
+Following
+"No-hype tools for serious chart traders — no profit promises, just clean tools that show their work."
+Trend Analysis
+Volume
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Trend Analysis
+Volume
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+ElisTools
+Follow
+Following
+"No-hype tools for serious chart traders — no profit promises, just clean tools that show their work."
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

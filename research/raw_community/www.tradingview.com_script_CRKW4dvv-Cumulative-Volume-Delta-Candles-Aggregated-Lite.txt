@@ -1,0 +1,222 @@
+Cumulative Volume Delta Candles Aggregated (Lite) — Indicator by mxdvt07 — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+OPEN-SOURCE SCRIPT
+Updated
+Oct 17, 2025
+Cumulative Volume Delta Candles Aggregated (Lite)
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+2
+1
+7
+7 115
+Sep 8, 2025
+Cumulative Volume Delta Candles Aggregated (Lite)
+Multi-Exchange CVD Visualization in Candle Format
+This indicator provides an aggregated Cumulative Volume Delta (CVD) view across multiple major perpetual futures exchanges in one chart. It is designed for traders who want a broader perspective on buying and selling pressure without switching between multiple charts or relying on a single exchange feed.
+What It Does
+Combines volume delta data from Binance, Bybit, OKX, Bitget, and Coinbase into a unified representation.
+Displays CVD as candlesticks, where each candle reflects the open, high, low, and close of cumulative delta for the selected period.
+Offers a clear visual of how buying and selling pressure evolves across markets in a structured, familiar candle format.
+Key Features
+✔ Exchange Aggregation: Incorporates data from several top futures markets available on TradingView.
+✔ Anchor Reset: Allows you to set an anchor timeframe (e.g., daily) to reset cumulative values for better readability and analysis.
+✔ Unit Normalization: Since exchanges report volumes in different units, the indicator normalizes all data and outputs values denominated in the base currency (coins) for consistency.
+✔ Hidden OHLC Outputs: Provides open, high, low, and close values as hidden plots for use with other indicators or strategies.
+✔ Lightweight Design: Optimized for efficiency while handling multiple real-time data requests.
+Why It’s Different
+Unlike standard single-exchange CVD tools, this indicator aggregates the majority of perpetual volume data available on TradingView, offering a more representative view of market sentiment. The candle-based representation of CVD introduces an additional layer of structure, helping traders identify shifts in momentum and pressure with more context than a simple cumulative line.
+Use Cases
+- Spotting aggregated buy/sell pressure trends across multiple exchanges.
+- Confirming breakout or reversal signals with broader volume delta context.
+- Serving as a custom data source for other indicators or algorithmic strategies.
+Sep 13, 2025
+Release Notes
+Changes in Version 2:
+- Added option to change denomination into the base currency (COINS) or USD.
+- Added vertical lines to show anchor period resets and option to modify the color of the baselines (vertical line & zero line).
+- Changed how enabling/disabling of exchanges is handled
+- Added ignore_invalid_symbol = true for error handling where the volume delta data is requested.
+Sep 14, 2025
+Release Notes
+Changes in Version 3:
+- Switched to Tradingview's official CVD calculation method because of data inaccuracy and code context issues.
+Oct 17, 2025
+Release Notes
+Changes in Version 4:
+- Imported the code from the library to reduce reliance on external sources
+Data Accuracy Disclosure:
+This script uses the same core logic as TradingView’s official Cumulative Volume Delta indicator and aggregates values from multiple perpetual futures tickers as described above.
+Because of data limitations on TradingView’s free plan and performance constraints in this "Lite" version, the script infers trade direction by comparing candle opens and closes on a lower timeframe—adding volume to positive or negative totals accordingly.
+This method produces a realistic estimation of buying and selling pressure but does not represent exchange-reported tick-level delta data. The results are directionally reliable yet approximate, intended for analytical and comparative purposes rather than precise quantitative measurement.
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+mxdvt07
+Follow
+Following
+Also on
+:
+Candlestick Analysis
+volumedelta
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Candlestick Analysis
+volumedelta
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+mxdvt07
+Follow
+Following
+Also on
+:
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

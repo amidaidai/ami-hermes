@@ -1,0 +1,435 @@
+Higher-timeframe requests — Indicator by PineCoders — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+Editors' picks
+OPEN-SOURCE SCRIPT
+Updated
+Mar 30, 2024
+Higher-timeframe requests
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+9
+4
+6
+16
+16
+63 865
+Mar 29, 2024
+█
+OVERVIEW
+This publication focuses on enhancing awareness of the best practices for accessing higher-timeframe (HTF) data via the
+request.security()
+function. Some "traditional" approaches, such as what we explored in our previous
+`security()` revisited
+publication, have shown limitations in their ability to retrieve non-repainting HTF data. The fundamental technique outlined in this script is currently the most effective in preventing repainting when requesting data from a higher timeframe. For detailed information about why it works, see
+this
+section in the Pine Script™
+User Manual
+.
+█
+CONCEPTS
+Understanding repainting
+Repainting
+is a behavior that occurs when a script's calculations or outputs behave differently after restarting it. There are several types of repainting behavior, not all of which are inherently useless or misleading. The most prevalent form of repainting occurs when a script's calculations or outputs exhibit different behaviors on historical and realtime bars.
+When a script calculates across historical data, it only needs to execute once per bar, as those values are confirmed and not subject to change. After each historical execution, the script
+commits
+the states of its calculations for later access.
+On a realtime, unconfirmed bar, values are
+fluid
+. They are subject to change on each new tick from the data provider until the bar closes. A script's code can execute on each tick in a realtime bar, meaning its calculations and outputs are subject to realtime fluctuations, just like the underlying data it uses. Each time a script executes on an unconfirmed bar, it first reverts applicable values to their last committed states, a process referred to as
+rollback
+. It only commits the new values from a realtime bar after the bar closes. See the User Manual's
+Execution model
+page to learn more.
+In essence, a script can repaint when it calculates on realtime bars due to fluctuations before a bar's confirmation, which it cannot reproduce on historical data. A common strategy to avoid repainting when necessary involves forcing only
+confirmed
+values on realtime bars, which remain unchanged until each bar's conclusion.
+Repainting in higher-timeframe (HTF) requests
+When working with a script that retrieves data from higher timeframes with
+request.security()
+, it's crucial to understand the differences in how such requests behave on
+historical and realtime bars
+.
+The
+request.security()
+function executes all code required by its `expression` argument using data from the specified
+context
+(symbol, timeframe, or modifiers) rather than on the chart's data. As when executing code in the chart's context,
+request.security()
+only returns new historical values when a bar closes in the requested context. However, the values it returns on realtime HTF bars can also update
+before
+confirmation, akin to the rollback and recalculation process that scripts perform in the chart's context on the open bar. Similar to how scripts operate in the chart's context,
+request.security()
+only confirms new values after a realtime bar closes in its specified context.
+Once a script's execution cycle restarts, what were previously realtime bars become historical bars, meaning the
+request.security()
+call will only return
+confirmed
+values from the HTF on those bars. Therefore, if the requested data fluctuates across an open HTF bar, the script will
+repaint
+those values after it restarts.
+This behavior is not a bug; it's simply the default behavior of
+request.security()
+. In some cases, having the latest information from an unconfirmed HTF bar is precisely what a script needs. However, in many other cases, traders will require confirmed, stable values that do not fluctuate across an open HTF bar. Below, we explain the most reliable approach to achieve such a result.
+Achieving consistent timing on all bars
+One can retrieve non-fluctuating values with consistent timing across historical and realtime feeds by exclusively using
+request.security()
+to fetch the data from confirmed HTF bars. The best way to achieve this result is offsetting the `expression` argument by at least one bar (e.g., `close[][1[]]`) and using
+barmerge.lookahead_on
+as the `lookahead` argument.
+We discourage the use of
+barmerge.lookahead_on
+alone since it prompts the function to look toward future values of HTF bars across historical data, which is heavily misleading. However, when paired with a requested `expression` that includes a one-bar historical offset, the "future" data the function retrieves is
+not
+from the future. Instead, it represents the last confirmed bar's values at the start of each HTF bar, thus preventing the results on realtime bars from fluctuating before confirmation from the timeframe.
+For example, this line of code uses a
+request.security()
+call with
+barmerge.lookahead_on
+to request the
+close
+price from the "1D" timeframe, offset by one bar with the history-referencing operator
+[][[]]
+. This line will return the daily price with consistent timing across all bars:
+Pine Script®
+Note that:
+• This technique only works as intended for
+higher-timeframe requests
+.
+• When designing a script to work specifically with HTFs, we recommend including conditions to prevent
+request.security()
+from accessing timeframes equal to or lower than the chart's timeframe, especially if you intend to
+publish
+it. In this script, we included an
+if
+structure that raises a
+runtime error
+when the requested timeframe is too small.
+• A necessary trade-off with this approach is that the script must wait for an HTF bar's confirmation to retrieve new data on realtime bars, thus delaying its availability until the
+open
+of the subsequent HTF bar. The time elapsed during such a delay varies with each market, but it's typically relatively small.
+👉 Failing to offset the function's `expression` argument while using
+barmerge.lookahead_on
+will produce historical results with
+lookahead bias
+, as it will look to the future states of historical HTF bars, retrieving values
+before
+the times at which they're available in the feed. See the
+`lookahead`
+and
+Future leak with `request.security()`
+sections in the Pine Script™ User Manual for more information.
+Evolving practices
+The fundamental technique outlined in this publication is currently the
+only
+reliable approach to requesting non-repainting HTF data with
+request.security()
+. It is the superior approach because it avoids the pitfalls of other methods, such as the one introduced in the
+`security()` revisited
+publication. That publication proposed using a custom `f_security()` function, which applied offsets to the `expression` and the requested result based on
+historical
+and
+realtime
+bar states. At that time, we explored techniques that didn't carry the risk of lookahead bias if misused (i.e., removing the historical offset on the `expression` while using lookahead), as requests that look ahead to the future on historical bars exhibit
+dangerously misleading
+behavior.
+Despite these efforts, we've unfortunately found that the bar state method employed by `f_security()` can produce inaccurate results with inconsistent timing in some scenarios, undermining its credibility as a universal non-repainting technique. As such, we've deprecated that approach, and the Pine Script™ User Manual no longer recommends it.
+█
+METHOD VARIANTS
+In this script, all non-repainting requests employ the same underlying technique to avoid repainting. However, we've applied
+variants
+to cater to specific use cases, as outlined below:
+Variant 1
+Variant 1, which the script displays using a
+lime
+plot, demonstrates a non-repainting HTF request in its simplest form, aligning with the concept explained in the "Achieving consistent timing" section above. It uses
+barmerge.lookahead_on
+and offsets the `expression` argument in
+request.security()
+by one bar to retrieve the value from the last confirmed HTF bar. For detailed information about why this works, see the
+Avoiding Repainting
+section of the User Manual's
+Other timeframes and data
+page.
+Variant 2
+Variant 2 (
+fuchsia
+) introduces a custom function, `htfSecurity()`, which wraps the
+request.security()
+function to facilitate convenient repainting control. By specifying a value for its `repaint` parameter, users can determine whether to allow repainting HTF data. When the `repaint` value is `false`, the function applies lookahead and a one-bar offset to request the last confirmed value from the specified `timeframe`. When the value is `true`, the function requests the `expression` using the default behavior of
+request.security()
+, meaning the results can fluctuate across chart bars within realtime HTF bars and
+repaint
+when the script restarts.
+Note that:
+• This function
+exclusively
+handles HTF requests. If the requested timeframe is not higher than the chart's, it will raise a
+runtime error
+.
+• We prefer this approach since it provides optional repainting control. Sometimes, a script's calculations need to respond immediately to realtime HTF changes, which `repaint = true` allows. In other cases, such as when issuing alerts, triggering strategy commands, and more, one will typically need stable values that do not repaint, in which case `repaint = false` will produce the desired behavior.
+Variant 3
+Variant 3 (
+white
+) builds upon the same fundamental non-repainting approach used by the first two. The difference in this variant is that it applies repainting control to
+tuples
+, which one cannot pass as the `expression` argument in our `htfSecurity()` function. Tuples are handy for consolidating `request.*()` calls when a script requires several values from the same context, as one can request a single tuple from the context rather than executing multiple separate
+request.security()
+calls.
+This variant applies the internal logic of our `htfSecurity()` function in the script's
+global scope
+to
+request a tuple
+containing
+open
+and `srcInput` values from a higher timeframe with repainting control. Historically, Pine Script™ did not allow the history-referencing operator
+[][[]]
+when requesting tuples unless the tuple came from a function call, which limited this technique. However, updates to Pine over time have lifted this restriction, allowing us to pass tuples with historical offsets directly as the `expression` in
+request.security()
+. By offsetting all items in a tuple `expression` by one bar and using
+barmerge.lookahead_on
+, we effectively retrieve a tuple of stable, non-repainting HTF values.
+Since we cannot encapsulate this method within the `htfSecurity()` function and must execute the calculations in the global scope, the script's "Repainting" input directly controls the global `offset` and `lookahead` values to ensure it behaves as intended.
+Variant 4 (Control)
+Variant 4, which the script displays as a translucent
+orange
+plot, uses a default
+request.security()
+call, providing a reference point to compare the difference between a repainting request and the non-repainting variants outlined above. Whenever the script restarts its execution cycle,
+realtime
+bars become
+historical
+bars, and the
+request.security()
+call here will repaint the results on those bars.
+█
+Inputs
+Repainting
+The "Repainting" input (`repaintInput` variable) controls whether Variant 2 and Variant 3 are allowed to use fluctuating values from an unconfirmed HTF bar. If its value is `false` (default), these requests will only retrieve stable values from the last
+confirmed
+HTF bar.
+Source
+The "Source" input (`srcInput` variable) determines the series the script will use in the `expression` for all HTF data requests. Its default value is
+close
+.
+HTF Selection
+This script features two ways to specify the higher timeframe for all its data requests, which users can control with the "HTF Selection" input (`tfTypeInput` variable):
+1) If its value is "Fixed TF", the script uses the timeframe value specified by the "Fixed Higher Timeframe" input (`fixedTfInput` variable). The script will raise a
+runtime error
+if the selected timeframe is not larger than the chart's.
+2) If the input's value is "Multiple of chart TF", the script multiplies the value of the "Timeframe Multiple" input (`tfMultInput` variable) by the chart's
+timeframe.in_seconds()
+value, then converts the result to a
+valid timeframe string
+via
+timeframe.from_seconds()
+.
+Timeframe Display
+This script features the option to display an "information box", i.e., a single-cell
+table
+that shows the higher timeframe the script is currently using. Users can toggle the display and determine the table's size, location, and color scheme via the inputs in the "Timeframe Display" group.
+█
+Outputs
+This script produces the following outputs:
+• It plots the results from all four of the above variants for visual comparison.
+• It highlights the chart's background
+gray
+whenever a new bar starts on the higher timeframe, signifying when confirmations occur in the requested context.
+• To demarcate which bars the script considers
+historical
+or
+realtime
+bars, it plots squares with contrasting colors corresponding to bar states at the bottom of the chart pane.
+• It displays the higher timeframe string in a single-cell
+table
+with a user-specified size, location, and color scheme.
+Look first. Then leap.
+Mar 30, 2024
+Release Notes
+We've applied a minor change to the runtime error in the `htfSecurity()` function. While the condition in the script's global scope prevented requests using the chart's timeframe, the function itself did not. We fixed the condition inside the function to ensure it can only request data from higher timeframes when users copy it into their own code.
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+PineCoders
+Mod
+Follow
+Following
+Who are PineCoders?
+tradingview.com/chart/SSP/yW5eOqtm-Who-are-PineCoders/
+Tools and ideas for all Pine coders:
+pinecoders.com
+Also on
+:
+highertimeframe
+HTF
+multitimeframe
+repainting
+requestsecurity
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+highertimeframe
+HTF
+multitimeframe
+repainting
+requestsecurity
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+PineCoders
+Mod
+Follow
+Following
+Who are PineCoders?
+tradingview.com/chart/SSP/yW5eOqtm-Who-are-PineCoders/
+Tools and ideas for all Pine coders:
+pinecoders.com
+Also on
+:
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program

@@ -1,0 +1,340 @@
+Volume footprints are now available in Pine scripts — TradingView Blog
+Main content
+Charts
+Screeners
+Trading and brokerage
+Data feeds and exchanges
+Pine Script®
+Business updates
+Clear
+en
+Clear
+Language
+English
+Deutsch
+Français
+Español
+Italiano
+Polski
+Türkçe
+Русский
+Português
+Bahasa Indonesia
+Bahasa Melayu
+ภาษาไทย
+Tiếng Việt
+日本語
+简体中文
+한국어
+繁體中文
+العربية
+עברית
+Charts
+Screeners
+Trading and brokerage
+Data feeds and exchanges
+Pine Script®
+Business updates
+Language
+English
+Return to TradingView
+Go to Blog homepage
+TradingView Blog
+/
+Pine Script®
+/
+Volume footprints are now available in Pine scripts
+PINE SCRIPT®
+Volume footprints are now available in Pine scripts
+Mar 2
+Pine scripts now support volume footprints, giving you direct access to detailed order flow inside each price bar.
+This update allows you to build custom footprint indicators, extract precise volume metrics, and analyze intrabar activity without relying on lower-timeframe workarounds.
+Why use footprints in Pine?
+Footprint requests allow you to instantly unlock advanced intra-bar data and map structurally important order flow levels, such as:
+Granular volume splits: Exact “buy” (ask) and “sell” (bid) volume totals for the entire bar and at specific price levels
+Precise volume delta: The specific difference between buying and selling pressure
+Key auction levels: Immediate access to the bar’s Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL)
+Imbalances: Data on buying and selling imbalances at specific price rows
+By combining
+request.footprint()
+with your custom scripts, you can programmatically monitor deep order flow data while staying focused on strategy and execution.
+How footprints and data structures work
+The
+request.footprint()
+function is the core tool used to request volume footprint information for the current bar. When called, it returns a
+footprint object
+, which contains all retrieved volume footprint data for that specific bar.
+The data is organized into two primary structures:
+Footprint Objects:
+These allow you to access a bar’s overall metrics. By using
+footprint.*()
+functions, you can retrieve data such as total buy volume, total sell volume, and volume delta.
+Volume_row Objects:
+These represent specific price rows within the footprint, such as the Point of Control (POC) or Value Area boundaries. By using
+volume_row.*()
+functions, you can retrieve a specific row’s price levels, volume values, volume delta, and imbalances.
+Note:
+if no footprint data is available for a given bar, the
+request.footprint()
+function will return
+na
+.
+Always ensure your script checks that the returned object is
+not na
+before attempting to extract metrics using
+footprint.*()
+or
+volume_row.*()
+functions.
+Usage example
+Below is a streamlined script demonstrating how to request the footprint and access its underlying data points:
+//@version=6
+indicator("Footprint Data Highlight", overlay = true)
+
+// Request the footprint object for the current bar (100 ticks per row, 70% Value Area)
+footprint reqFootprint = request.footprint(100, 70)
+
+// We use a block to ensure we only process data when the footprint is available
+if not na(reqFootprint)
+    // 1. Access overall bar metrics from the `footprint` object
+    float totalBuyVol = reqFootprint.buy_volume()
+    float totalSellVol = reqFootprint.sell_volume()
+    float volumeDelta = reqFootprint.delta()
+
+    // 2. Retrieve a specific `volume_row` object (the Point of Control)
+    volume_row pocRow = reqFootprint.poc()
+
+    // 3. Access specific price values from the `volume_row` object
+    float pocUpperPrice = pocRow.up_price()
+    float pocLowerPrice = pocRow.down_price()
+
+// --- USING THE VARIABLES ---
+
+// Use Buy/Sell Volume and Delta in a label
+    if barstate.islast
+        label.new(bar_index, high, 
+               text = "Buy: " + str.tostring(totalBuyVol, format.volume) + 
+               "\nSell: " + str.tostring(totalSellVol, format.volume) + 
+               "\nDelta: " + str.tostring(volumeDelta, format.volume),
+               color = color.new(color.blue, 20), 
+               textcolor = color.white,
+               style = label.style_label_down)
+
+    // Use POC prices to highlight the POC area on the chart
+    linefill.new(
+               line.new(bar_index, pocUpperPrice, bar_index[1], pocUpperPrice, color = color.orange),
+               line.new(bar_index, pocLowerPrice, bar_index[1], pocLowerPrice, color = color.orange),
+               color.new(color.orange, 80))
+
+// Plotting the volume delta on a separate pane (if moved to non-overlay) 
+// or as a reference value in the Data Window
+plot(not na(reqFootprint) ? reqFootprint.total_volume() : na, "Volume Delta", display = display.data_window)
+Please note that in order to use these footprint features, you’ll need to have a Premium or Ultimate plan.
+To stay updated on the latest improvements to the Pine Script® experience, keep an eye on the User Manual’s
+Release notes
+.
+We hope you find these features as useful as we think they’ll be, and please do keep sending us your feedback and suggestions so we can make the platform the best it can be. We build TradingView for you, and we’re always keen to hear your thoughts.
+Team TradingView
+Look first
+Then leap
+TradingView is built for you, so make sure you're getting the most of our awesome features
+Launch Supercharts
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC fillings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+More products
+Yield Curves
+Options
+Macro Maps
+News Flow
+Pine Script®
+Apps
+Mobile
+Desktop
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Top brokers
+Brokers comparison
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Community
+Social network
+Wall of Love
+Refer a friend
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+More products
+Yield Curves
+Options
+Macro Maps
+News Flow
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Top brokers
+Brokers comparison
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+English
+Deutsch
+Français
+Español
+Italiano
+Polski
+Türkçe
+Русский
+Português
+Bahasa Indonesia
+Bahasa Melayu
+ภาษาไทย
+Tiếng Việt
+日本語
+简体中文
+한국어
+繁體中文
+العربية
+עברית

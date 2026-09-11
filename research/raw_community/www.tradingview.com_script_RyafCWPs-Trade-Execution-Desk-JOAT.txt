@@ -1,0 +1,295 @@
+Trade Execution Desk [JOAT] — Indicator by officialjackofalltrades — TradingView
+Search
+Products
+Community
+Markets
+Brokers
+More
+EN
+Get started
+OPEN-SOURCE SCRIPT
+Jun 4
+Trade Execution Desk [JOAT]
+Chart
+Source code
+More
+Add to favorites
+Add to favorites
+Use on chart
+6
+8
+3
+8 365
+Trade Execution Desk is an open-source trade planning and session management tool designed for futures and structured discretionary traders who operate under daily loss limits, risk tier constraints, and session performance targets. It combines position sizing from account parameters, automatic pivot-based stop detection, three take-profit levels with risk-reward boxes, a 10-trade manual session log, and session status tracking into a single indicator.
+The problem this addresses is the gap between an indicator that shows signals and a tool that translates those signals into an actual trade plan. Trade Execution Desk does not generate signals — it helps the trader structure the trade after a signal has been identified, ensuring that position size, stop placement, and profit targets are consistent with the account's defined risk parameters before the order is placed.
+Core Concepts
+1. Risk-Based Position Sizing
+Position size is computed from the daily loss limit, maximum risk percentage, risk tier multiplier, and the calculated stop distance in ticks:
+Pine Script®
+This produces a contracts-allowed figure that respects the current risk tier and the actual stop distance on the current setup.
+2. Three Risk Tiers
+The FULL tier allows the full calculated position size. The HALF tier reduces it by 50%. The QUARTER tier reduces by 75%. Tier selection reflects the trader's confidence level or account drawdown state.
+3. Auto Pivot Stop Detection
+When auto stop is enabled, the indicator detects the most recent confirmed pivot high (for short trades) or pivot low (for long trades) and places the stop price at that level plus a configurable tick buffer. This anchors the stop to the nearest structural level automatically.
+4. Trade Block Visualization
+Entry, stop, and three TP levels are plotted as horizontal lines with right-edge labels. The risk zone (entry to stop) is shown as a translucent red box; the reward zone (entry to TP1) as translucent green. All objects extend rightward in real time.
+5. Session Management
+Four session-end conditions are tracked: daily target reached, maximum trade count reached, maximum loss count reached, and account rule violation. When any condition triggers, a session lockout overlay is displayed on the chart as a visual reminder that session trading is complete.
+6. Manual Trade Log
+Ten trade entries can be logged manually with tier type and result. Results are converted to the selected unit (points, ticks, dollars, or percent of account). Sequential processing chains each entry's outcome into running totals for session P&L, trade count, loss count, and violation flag. A promotion threshold tracks whether the session meets the criteria to advance to the next risk tier.
+Features
+Risk-based position sizing:
+Contracts calculated from loss limit, risk percent, tier multiplier, and actual stop distance
+Three risk tiers:
+FULL / HALF / QUARTER with independent position size scaling
+Auto pivot stop detection:
+Nearest confirmed pivot placed as stop with configurable tick buffer
+Three TP levels with gradient boxes:
+TP1, TP2, TP3 as horizontal lines with translucent colored boxes
+Session status tracking:
+Target, max trades, max losses, and violation triggers with visual lockout overlay
+Ten-entry manual trade log:
+Each entry processed with tier, result, and unit conversion
+Promotion threshold:
+Tracks whether session performance meets the criteria to advance risk tier
+Unit conversion:
+All results displayable in Points, Ticks, Dollar, or Percent
+Session lockout overlay:
+Full-chart colored overlay when session ends, with reason displayed
+17-row institutional dashboard:
+Account params, tier state, stop/entry/TP levels, session status, trade log summary, promotion progress
+Non-repainting:
+All pivot detections use confirmed pivot functions with symmetric lookback
+Input Parameters
+Risk Parameters:
+Account Size ($), Daily Loss Limit ($), Max Risk % Per Trade
+Tick Value ($), Ticks Per Point
+Daily Target ($), Max Trades Per Session, Max Losses Per Session
+Risk Tier and Carryover:
+Current Risk Tier: FULL / HALF / QUARTER
+Carryover Deficit ($), Quarter Violation Active toggle, Quarter Extra Deficit ($)
+Trade Planning:
+Trade Direction: Long / Short
+Enable Auto-Pivot Stop toggle, Pivot Left/Right Bars, Stop Buffer (Ticks)
+Manual Stop Price (0 = use auto)
+RR Levels:
+Show TP1, TP2, TP3 toggles with RR multiples and colors
+Risk Zone and Reward Zone toggles
+Result Unit: Points / Ticks / Dollar / Percent
+Trade Log:
+10 trade entries: Tier selector + Result value per entry
+How to Use This Indicator
+Step 1: Configure Account Parameters
+Set your account size, daily loss limit, tick value, and ticks per point to match your trading instrument. Set the daily target and maximum trades/losses for your session rules.
+Step 2: Select Risk Tier
+Choose FULL, HALF, or QUARTER based on your current account standing or confidence level. The contracts-allowed figure in the dashboard updates automatically.
+Step 3: Read the Entry/Stop/TP Levels
+After identifying a trade direction, the auto-pivot stop places your stop at the nearest confirmed structural level. TP1, TP2, and TP3 are calculated automatically based on the stop distance and your configured RR multiples.
+Step 4: Log Trades Manually
+After each trade, enter the tier and result in the trade log section. The dashboard updates session P&L, win rate, and promotion progress in real time.
+Step 5: Respect the Session Lockout
+When the session lockout overlay appears, the reason is displayed prominently on the chart. The lockout is a visual reminder only — it does not interact with your broker.
+Indicator Limitations
+Position sizing uses tick value and ticks-per-point inputs specific to the traded instrument. These must be configured correctly for the output to be meaningful
+The session lockout overlay is a visual reminder only. It does not block order placement
+The manual trade log requires manual input after each trade. It does not auto-detect executions
+Promotion threshold calculation uses simple arithmetic from input values and may not account for all possible rule variations across different prop firm structures
+This indicator is a planning and logging tool. It does not generate entry or exit signals
+Originality Statement
+The combination of risk-tier-aware position sizing, session-end condition tracking with visual chart lockout, a 10-entry chained trade log with unit conversion, and a promotion threshold tracker in a single open-source overlay indicator is not replicated in existing Pine Script v6 publications
+The sequential chaining of manual trade log entries through a processing function that propagates trade count, loss count, running P&L, and violation flag forward through ten entries provides structured session accounting within a chart indicator
+Disclaimer
+This indicator is provided for educational and informational purposes only. It is not financial advice. Position sizing outputs are mathematical calculations based on user-provided inputs and do not account for all real-world trade execution factors. Always verify position sizes and risk parameters independently before placing orders. The author accepts no responsibility for trading losses resulting from use of this indicator.
+Made with passion by jackofalltrades
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+officialjackofalltrades
+Follow
+Following
+The AI Trading Ecosystem, Built to win trades 📈
+Get Full Access 👇
+jackofalltrades.vip
+🌐
+t.me/jackofalltradesvip
+🃏
+Also on
+:
+autopivot
+buysellindicator
+Chart patterns
+entrystop
+highsandlows
+indicator-free
+indicators
+Pivot points and levels
+positionsizing
+riskmangement
+tpslindicator
+Trend Analysis
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+autopivot
+buysellindicator
+Chart patterns
+entrystop
+highsandlows
+indicator-free
+indicators
+Pivot points and levels
+positionsizing
+riskmangement
+tpslindicator
+Trend Analysis
+Open-source script
+In true TradingView spirit, the creator of this script has made it open-source, so that traders can review and verify its functionality. Kudos to the author! While you can use it for free, remember that republishing the code is subject to our
+House Rules
+.
+officialjackofalltrades
+Follow
+Following
+The AI Trading Ecosystem, Built to win trades 📈
+Get Full Access 👇
+jackofalltrades.vip
+🌐
+t.me/jackofalltradesvip
+🃏
+Also on
+:
+Disclaimer
+The information and publications are not meant to be, and do not constitute, financial, investment, trading, or other types of advice or recommendations supplied or endorsed by TradingView. Read more in the
+Terms of Use
+.
+Made by humans
+English
+English
+Select market data provided by
+ICE Data Services
+.
+Select reference data provided by FactSet. Copyright © 2026 FactSet Research Systems Inc.
+Copyright © 2026, American Bankers Association. CUSIP Database provided by FactSet Research Systems Inc. All rights reserved.
+SEC filings and other documents provided by
+Quartr
+.
+© 2026 TradingView, Inc.
+More than a product
+Supercharts
+Screeners
+Stocks
+ETFs
+Bonds
+Crypto coins
+CEX pairs
+DEX pairs
+Pine
+Heatmaps
+Stocks
+ETFs
+Crypto coins
+Calendars
+Economic
+Earnings
+Dividends
+IPOs
+More products
+News Flow
+Portfolios
+Fundamental Graphs
+Yield Curves
+Options
+Macro Maps
+Pine Script®
+Apps
+Mobile
+Desktop
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Tools & subscriptions
+Features
+Pricing
+Market data
+Gift plans
+Trading
+Overview
+Brokers
+Brokers comparison
+The Leap
+Special offers
+CME Group futures
+Eurex futures
+US stocks bundle
+About company
+Who we are
+Space mission
+Blog
+Help Center
+Careers
+Media kit
+Merch
+TradingView store
+Tarot cards for traders
+The C63 TradeTime
+Policies & security
+Terms of Use
+Disclaimer
+Privacy Policy
+Cookies Policy
+Accessibility Statement
+Security tips
+Bug Bounty program
+Status page
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
+Community
+Social network
+Wall of Love
+Refer a friend
+Creator program
+House Rules
+Moderators
+Ideas
+Trading
+Education
+Editors' picks
+Pine Script
+Indicators & strategies
+Wizards
+Freelancers
+Paid Spaces
+Business solutions
+Widgets
+Charting libraries
+Lightweight Charts™
+Advanced Charts
+Trading Platform
+Growth opportunities
+Advertising
+Brokerage integration
+Partner program
+Education program
