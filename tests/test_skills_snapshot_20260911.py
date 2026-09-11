@@ -23,6 +23,10 @@ def _load(tmp_root: Path, tmp_dest: Path):
     spec.loader.exec_module(mod)
     mod.SOURCE = tmp_root
     mod.DEST = tmp_dest
+    # 关键：REPO 也必须指向沙盒。否则 _git_push/_git_commit 会打到**真仓库**，
+    # 测试就会读到真实的待推提交并打印真实警告（曾因此让「静默」用例假失败）。
+    mod.REPO = tmp_dest.parent
+    assert mod.REPO != Path("D:/Hermes agent"), "测试绝不能指向真仓库"
     return mod
 
 
