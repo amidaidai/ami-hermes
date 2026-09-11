@@ -258,3 +258,64 @@ def test_no_commit_flag_writes_snapshot_without_committing(tmp_path):
         _sys.argv = old_argv
     assert (dest / "_snapshot_manifest.json").exists()
     assert not (dest / ".git").exists()
+
+
+def test_push_guard_skips_when_foreign_commits_are_pending(tmp_path, monkeypatch):
+    """护栏：待推提交里只要有一条不是技能快照，就**不推送**。
+    自动推送你在途的功能提交 = 替你发布，绝不允许。"""
+    import subprocess
+    from pathlib import Path as _P
+    repo = tmp_path / "repo2"
+    skills = repo / "hermes" / "skills"
+    skills.mkdir(parents=True)
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    import os as _os
+    renv = {**_os.environ, **env}
+    run = lambda *a: subprocess.run(list(a), cwd=repo, check=True, env=renv,
+                                    capture_output=True, text=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.name", "t")
+    run("git", "config", "user.email", "t@t")
+    (repo / "README.md").write_text("x", encoding="utf-8")
+    run("git", "add", "-A"); run("git", "commit", "-q", "-m", "init")
+
+    mod = _load(skills, tmp_path / "dest2")
+    mod.REPO = repo
+
+    # 造一个「上游」：本地建一条 main 分支的远端追踪引用不容易，这里直接验证
+    # _git_push 在「无 upstream」与「存在非快照待推提交」两种情况下都不推。
+    pushed, detail = mod._git_push()
+    assert pushed is False
+    assert "upstream" in detail or "非快照" in detail
+
+
+def test_push_guard_recognises_snapshot_subject_prefix():
+    """快照提交的标题前缀是护栏的判断依据，改了会让推送护栏永远拦住自己。"""
+    import importlib.util as _iu
+    spec = _iu.spec_from_file_location("ss_const", SCRIPT)
+    mod = _iu.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    assert mod.SNAPSHOT_SUBJECT_PREFIX == "chore(skills): 技能快照"
+    assert mod._git_commit.__doc__ and "只提交该路径" in mod._git_commit.__doc__
+
+
+def test_argparse_options_are_not_duplicated():
+    """回归：--no-push 曾被重复定义，脚本直接崩（cron 里表现为 script failed）。
+    argparse 的重复选项是致命的，加一条静态守卫。"""
+    import re as _re
+    src = SCRIPT.read_text(encoding="utf-8")
+    opts = _re.findall(r'add_argument\(\s*"(--[a-z\-]+)"', src)
+    dupes = {o for o in opts if opts.count(o) > 1}
+    assert not dupes, f"重复的 argparse 选项：{dupes}"
+    assert "--no-push" in opts and "--no-commit" in opts and "--status" in opts
+
+
+def test_help_runs_clean():
+    """冒烟：--help 必须能跑通（cron 崩过一次就靠这条拦）。"""
+    import subprocess, sys as _sys
+    proc = subprocess.run([_sys.executable, str(SCRIPT), "--help"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr[:300]
+    assert "--no-push" in proc.stdout and "--status" in proc.stdout

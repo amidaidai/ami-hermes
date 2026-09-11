@@ -23,7 +23,7 @@
   既是「快照可信」的证据，也是下次 fail-closed 判断的基线。
 
 用法:
-    python scripts/maintenance/skills_snapshot.py               # 镜像 + 提交（静默成功）
+    python scripts/maintenance/skills_snapshot.py               # 镜像 + 提交 + 推送（静默成功）
     python scripts/maintenance/skills_snapshot.py --no-commit    # 只镜像不提交
     python scripts/maintenance/skills_snapshot.py --dry-run      # 只看差异，不写
     python scripts/maintenance/skills_snapshot.py --status       # 只报漂移，不写（0=同步/2=有漂移）
@@ -150,10 +150,48 @@ def _git_commit() -> tuple[bool, str]:
         return False, f"git 调用异常: {exc}"
 
 
+SNAPSHOT_SUBJECT_PREFIX = "chore(skills): 技能快照"
+
+
+def _git_push() -> tuple[bool, str]:
+    """推送 —— 但**只在待推提交全部是技能快照时**才推。
+
+    本地随时可能有你在途的功能提交；自动推送等于替你发布，必须停下来报告而不是推上去。
+    这条护栏让「备份每天上云」与「不擅自发布工作成果」同时成立。
+    """
+    import subprocess
+    try:
+        upstream = subprocess.run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                                  cwd=REPO, capture_output=True, text=True)
+        if upstream.returncode != 0:
+            return False, "无 upstream 分支，跳过推送"
+        up = upstream.stdout.strip()
+        ahead = subprocess.run(["git", "log", "--format=%s", f"{up}..HEAD"],
+                               cwd=REPO, capture_output=True, text=True).stdout.splitlines()
+        ahead = [s for s in ahead if s.strip()]
+        if not ahead:
+            return False, ""                        # 没有待推内容
+        foreign = [s for s in ahead if not s.startswith(SNAPSHOT_SUBJECT_PREFIX)]
+        if foreign:
+            return False, (f"待推提交里有 {len(foreign)} 条非快照提交（如「{foreign[0][:40]}」）——"
+                           f"为免替你发布，本次不自动推送；需要时手动 git push")
+        branch = up.split("/", 1)[1] if "/" in up else "main"
+        proc = subprocess.run(["git", "push", "origin", branch], cwd=REPO,
+                              capture_output=True, text=True, timeout=280,
+                              env={**__import__("os").environ, "GIT_TERMINAL_PROMPT": "0"})
+        if proc.returncode != 0:
+            return False, f"git push 失败：{(proc.stderr or proc.stdout).strip()[:200]}"
+        return True, f"已推送 {len(ahead)} 条快照提交 → {up}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"git push 异常：{exc}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="只显示差异，不写盘")
     ap.add_argument("--status", action="store_true", help="只报漂移（有漂移则退出码 2）")
+    ap.add_argument("--no-push", action="store_true",
+                    help="不推送（默认推送，但只在待推提交全是技能快照时才推）")
     ap.add_argument("--no-commit", action="store_true",
                     help="只写快照，不提交（默认为提交：cron 无法传参数，默认才是有用的备份）")
     args = ap.parse_args()
@@ -272,11 +310,18 @@ def main() -> int:
         if not args.no_commit:
             ok, detail = _git_commit()
             if ok:
-                print(f"  已提交 hermes/skills（{detail}）；未推送")
+                print(f"  已提交 hermes/skills（{detail}）")
             elif detail:
                 print(f"  ⚠ 提交未完成：{detail}")
         else:
             print("  记得在仓库提交：git add hermes/skills && git commit")
+    # 推送刻意放在 drift 判断之外：即便本轮无漂移，也要补推上一次没推成功的快照提交。
+    if not args.no_commit and not args.no_push:
+        pushed, push_detail = _git_push()
+        if pushed:
+            print(f"  {push_detail}")
+        elif push_detail:
+            print(f"  ⚠ 未推送：{push_detail}")
     # 无漂移 = 静默（no_agent cron 约定）
     return 0
 
