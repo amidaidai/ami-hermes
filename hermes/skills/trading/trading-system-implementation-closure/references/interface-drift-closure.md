@@ -1,5 +1,7 @@
 # Interface-drift closure recipe
 
+> 示例命令中的旧字段名仅用于检测漂移，不代表当前生产字段。
+
 Companion to the `Interface-drift closure` section of SKILL.md. Reusable whenever a change
 touches a producer/consumer contract: indicator source ↔ Python contract, schema ↔ consumers,
 packed-code decoder ↔ encoder, renderer ↔ card schema.
@@ -7,7 +9,7 @@ packed-code decoder ↔ encoder, renderer ↔ card schema.
 ## 1. Hunt the duplicate definition sites
 
 ```bash
-grep -rn "MCP \|OI Total\|HALDRO " --include="*.py" scripts/ | grep -v <contract_module>
+grep -rn "MCP \|OI Total\|HALDRO " --include="*.py" scripts/ | grep -v <contract_module>  # 示意名/检测用
 grep -rln "<field-name>" --include="*.md" .        # skill/reference docs count as sites too
 ```
 

@@ -1,5 +1,7 @@
 # BTC Implementation Reference (v10)
 
+> Historical record (2026-08-31): legacy implementation reference; do not use as the current runtime entrypoint.
+
 ## File Structure
 
 ```

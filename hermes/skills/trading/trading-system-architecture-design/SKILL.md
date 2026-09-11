@@ -21,6 +21,8 @@ tags: [trading, architecture, decision-loop, regime, risk, backtesting, pine, sy
 
 ## 核心原则
 
+指标驱动决策闭环的源码验收、Entry Valid/NoTrade/HALDRO 状态接入、R:R 分层和可复用审计入口见 `pine-indicator-audit/references/indicator-driven-decision-closure-20260911.md`。当任务以用户提供的 Pine 主/副指标为依据时，先按该参考完成源码哈希、双向字段契约和 FinalVerdict 前置消费检查，再改策略或流程。
+
 ### 1. Pine 只做「指标计算器」
 - **仅输出数值**：SVP 结构位、HALDRO 组合/OI/CVD/确认、VWAP/EMA/ATR/ADX
 - **不输出业务逻辑**：无方向判断、无入场/止损/目标、无状态机、无模型评分

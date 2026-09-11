@@ -20,6 +20,9 @@ category: trading
   CDP 直查），不能信返回值。详见 `references/mcp-silent-noop-and-bus-wiring-20260911.md`。
 - 后台采集可以临时切换图表，但结束时必须恢复用户进入前的 symbol/timeframe；不得无条件停在某个默认品种。
 - 外部报价必须核验返回的 symbol、description、exchange、type 和数量级，防止请求BTC却拿到黄金报价。
+- **MCP 工具名必须用完整形 `mcp__<server>__<tool>`（2026-09-11 实测）**：`mcp` 后是**双**下划线，server 与 tool 之间也是**双**下划线。写成 `mcp_tradingview__tv_health_check`（单下划线夹 server）会直接报 `is not a deferrable tool`；改成 `mcp__tradingview__tv_health_check` 即通。本会话实测走通：`mcp__tradingview__tv_health_check` / `chart_get_state` / `chart_set_symbol` / `chart_set_timeframe` / `data_get_study_values` / `data_get_pine_tables` / `data_get_ohlcv` / `capture_screenshot` / `ui_fullscreen`。名字一律以工具目录为准，不凭肌肉记忆拼写；报 `not a deferrable` 九成是下划线数不对，重搜一次即可。
+
+9. 对已保存 Pine 源码的发布验收，不能只看本地哈希或 plot 对齐：分别 `pine_open` 主/副脚本并用 `pine_smart_compile` 验证 `has_errors=false`；随后回到活动图表，重新读 `chart_get_state`、`data_get_study_values` 和两张 action table。主 `协同` 行与副 `信号` 行的 S-code 必须一致；即使最终状态是 S3/WAIT，也证明 fail-closed 正常。最后在状态复核后立即生成 full 截图并记录 symbol、resolution、study IDs、source-bar time 和截图路径。
 
 ## 分析前置协议
 
@@ -166,6 +169,30 @@ return False
 - 若无法让人工调用纳入同一把锁，应在人工分析的最后重新设置目标品种/主周期并做最终 health check；不要仅凭脚本“打印恢复成功”认定状态稳定。
 - 现场验收至少包含：设置BTC/15m→运行一次黄金采集→等待并发窗口→health check仍为BTC/15；再反向测试黄金/5m。
 
+### 人工分析侧：被 cron 抢图时的读取协议（2026-09-11 实战）
+
+前面几节都站在**采集器**一侧（脚本怎么借图、怎么还图）。本节补上**人工分析**一侧：图被后台抢走时，分析该怎么读、怎么判、怎么诚实出卡。
+
+**场景**：`btc_tv_refresh`（排程 `7,27,47` 分）循环切图续航（1D→4h→1h→15m→5m），与人工分析共用同一张图。人工分析在两次 cron 之间抢时间窗。
+
+**症状指纹**（BTC 轻量档实况）：
+
+| 你以为 | 实际 | 判据 |
+|---|---|---|
+| 切周期已生效 | 图在另一个周期 | `chart_set_timeframe` 返回 `success:true, chart_ready:true`，但紧接着 `chart_get_state` 的 `resolution` 是 `1D`/`240`/`15` |
+| 该周期 SVP 不渲染 | 抢图瞬间读到空档 | `data_get_pine_tables` → `study_count: 0`（**这是争用信号，不是「无数据」，要重读**） |
+| 在看 5m 的副指标 | 读到的其实是 1D 的表 | 表内容格式正确但有**锚定词**：`月·单所1m…`=1D/4h 层，`日·单所1m…`=15m 层，`本锚` 指当前锚定周期 |
+
+**协议**：切周期 → `chart_get_state` 复核 `resolution` → 不一致就重切一次再复核（实战第二次即稳）→ 才读表。`study_count: 0` 一律按争用处理并重读。
+
+**截图时机**：主执行周期截图**切好并复核后立刻拍**，不要等把所有周期表格都读完再回头拍——那正是 cron 最可能介入的窗口。（本次 15m 图就是趁 14:06 空档抢下的。）
+
+**归属文件是判据、不是噪音**：`data/tv_chart_owner.json` 的 `user_timeframe` 记的是**用户**的周期。实战里 `user_timeframe=5` 而图先后停在 `1D`/`240`/`15` —— 这恰好说明归属机制在正常工作，是 cron 在借图，而不是归属坏了。**别急着改脚本**。
+
+**诚实出卡**：某周期多次重切仍读不到，就在「缺失备注」写明「被 btc_tv_refresh 抢图未能读到·仅取到 OHLCV」。**不得用别的周期数据冒充**，也不得标成「SVP 不渲染」—— 那是两种完全不同的原因，混淆会让人去查错方向。OHLCV（1–2 秒可用）比指标表格（15–30 秒重算）更难被抢，是可用的兜底。
+
+**与上文的关系**：采集器侧的「减少切换」修复并不能消除人工分析侧的争用 —— 只要 cron 还在借图，人工就必须按本协议复核。两侧都要。
+
 ### 先做「切换源普查」，再谈减少切换（2026-09-11）
 
 用户报「图表总自己切品种和周期」时，先量出**谁在切、切几次**，不要直接猜：
@@ -194,10 +221,17 @@ return False
   完全不读指标，即 **5/7 次切换是可省的**（K 线可换数据源）。代价是数值源改变、
   会与用户对图核对的习惯冲突 —— **属于产品取舍，需用户拍板，不要自行替换。**
 
+## 消费层证据读回（2026-09-11）
+
+图表对象已能通过 CLI/MCP 进入卡片时，仍要区分“读回完整”与“类型完整”：box 返回可能叫 `zones`，quote 必须保留同一响应的 O/H/L/C，不能只留 last；无类型标签的区域只能记录为通用 zone，不得猜成 FVG/OB。请求 symbol 与返回报价身份不一致时整份丢弃。`verified` 是身份、周期、价格栏和结构化证据通过，不代表每种 ICT 子类型都非空；缺少对象时 `partial/visual_only` 只允许 WAIT，identity mismatch 必须 NO-GO。
+
+完整复现、兼容字段和回归验收见 `references/consumer-layer-chart-evidence.md`；最新现场复核与可重跑命令见 `references/consumer-layer-live-recheck-20260912.md`。
+
 ## 最小验收清单
 
 - [ ] 目标 symbol 与实际 chart symbol 一致
-- [ ] 目标主周期与实际 resolution 一致
+- [ ] 目标主周期与实际 resolution 一致（**切周期后必须复核过 `chart_get_state.resolution`，不能只看 `success:true`**）
+- [ ] `data_get_pine_tables` 的 `study_count` 不为 0（为 0 先按抢图重读，不要当成「该周期无数据」）
 - [ ] studies 已加载且与目标分析匹配
 - [ ] action grid 与目标品种数量级相符
 - [ ] quote 的身份字段与目标资产相符
@@ -205,6 +239,8 @@ return False
 - [ ] 后台采集完成后最终状态仍是用户目标品种/周期
 
 ## 参考资料
+
+- **多源交叉验证别把同一数据数两次（2026-09-11 实测）**：TV 副指标 DW 的 `LSR` 与 Binance `futures/data/globalLongShortAccountRatio` 是**同一数据**（本会话两者同为 `1.6575`）。它们只能算 **1 个源**，写成「TV 说 1.66 + Binance 说 1.66 → 双源确认」是自证。真正独立的是**大户** `topLongShortPositionRatio`（本次 2.13）与**全局账户**（1.6575）—— 两者背离才是有效证据。凡是「两个源数字一模一样」，先怀疑同源，再算独立源数。
 
 - 共享状态污染的复现、恢复和验收细节见 `references/shared-chart-state-recovery.md`。
 - **MCP 静默空转的行为验收、主→副总线断线机理与重接 recipe、切换源普查与实测数字**

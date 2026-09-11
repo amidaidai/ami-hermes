@@ -111,6 +111,30 @@ Before parallelizing independent collectors, measure a baseline and add a thread
 
 See `references/p2-source-contract-and-concurrency.md` for the reusable envelope shape, RED/GREEN cases, and concurrency checklist.
 
+## Indicator packed-field closure and lease hygiene
+
+For a Pine producer with packed Data Window fields, decode through the single contract module before adding gates. The validated sequence is: source hash/plot alignment → packed-code unit tests → resolver gates → renderer/backtest consumer audit. The SVP buses `Trigger Pack`, `Evidence Pack`, `Regime Pack`, `Contract Pack`, `StructPack`, `Quality Code`, and `CVD Method Code` must be fail-closed when present; legacy payloads may omit them, but malformed supplied buses cannot become decorative text. For the AggVol side, `Coverage Feed Mode`, stale-venue count, CVD quality, OI presence, and OI agreement belong in FinalVerdict semantics, not only card annotations. Keep B/C as observation-only and never let the副指标 upgrade SVP authorization.
+
+When tests exercise TradingView background collectors, an interactive analysis lease can intentionally defer them. A full-suite failure that prints an explicit lease/defer message is usually shared runtime state, not a production regression: read the lease status, end only the stale/current test lease through the supported CLI, verify `active=false`, then rerun the failed tests and the full suite. Never weaken the lease guard or patch tests to bypass it.
+
+See `references/indicator-packed-field-closure.md` for pack formulas, gate mapping, and the lease-aware verification recipe.
+
+## Chart evidence closure: price bar + ICT + visual chart
+
+A complete TradingView review is not equivalent to reading the SVP/AggVol action tables. Build a `chart_evidence` record that binds the same live chart identity to the price bar, visible studies, Pine lines/boxes/labels, and ICT structure. At minimum capture: symbol, resolution, studies, last price, OHLC/day range when available, VAH/VAL/POC/nPOC/VWAP, FVG/OB/Breaker zones, BOS/MSS/CHoCH labels, and liquidity levels.
+
+Use explicit evidence states: `verified`, `partial`, `identity_mismatch`, and `unavailable`. `verified` requires the expected symbol/timeframe, required studies, a live price, and machine-readable ICT objects or equivalent structured evidence. `partial`/visual-only evidence may support an observation path but must never produce `GO-A`; `identity_mismatch` is a hard blocker. For BTC, 15m is the execution timeframe and 5m is only the trigger timeframe—never let a 5m chart silently stand in for the 15m decision layer.
+
+After any chart switch, read state again after recalculation, then read tables, Data Window, lines, boxes, and labels, and only then write the cache or screenshot. Treat an empty object read as missing evidence, not as proof that no FVG/OB/BOS/MSS exists. Preserve the chart evidence status and identity in `FinalVerdict` and add a dedicated gate so renderers cannot silently bypass it.
+
+See `references/chart-evidence-closure.md` for the reusable schema, fail-closed matrix, and live probe checklist.
+
+## Live TradingView acceptance evidence
+
+A Pine compile result is only one layer of proof. For a dual-indicator release, run the following independent acceptance sequence: compile/open the saved SVP script and saved AggVol script with the TradingView smart-compile path and require `has_errors=false`; read `chart_get_state` and require the exact symbol, resolution, and both study names; read `data_get_study_values` from that same active chart and require non-empty raw values plus source-bar time; read both action tables and compare the SVP `协同` S-code with the AggVol `信号` S-code; finally capture a full-chart screenshot after the identity/state read. A live S3 or WAIT result is valid evidence of the fail-closed contract, not a compile failure. Do not claim cloud/runtime acceptance from source hashes or local tests alone.
+
+The verified packed-field rule is: use raw Data Window values, not rounded display text; decode `Trigger/Evidence/Regime/Contract/Struct/Quality` through the single contract module; and treat supplied malformed or stale packs as gates. Preserve the exact observed `symbol`, `resolution`, study IDs, source-bar timestamps, and screenshot path in the closure report.
+
 ## Verification Result Semantics
 
 Treat verification as a matrix, not a boolean. After every subsequent edit, invalidate earlier full-suite evidence and rerun the affected regression; if shared infrastructure changed, rerun the full suite. Record exact command, scope, exit status, and whether the result is `passed`, `degraded`, `failed`, or `not run`. Runtime probes that report stale caches, zero active approvals, or watchdog errors are blockers/degradation even when tests pass.

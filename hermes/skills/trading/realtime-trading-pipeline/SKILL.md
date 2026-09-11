@@ -316,6 +316,10 @@ When the user says a one-minute check is too slow or asks for real-time price ar
 
 Disable/pause any overlapping minute sentinel after direct daemon delivery is enabled, otherwise duplicate alerts occur. After changing daemon code, restart the running daemon and verify its heartbeat PID/status and that the new alert hook is loaded. Keep the watchdog as the restart mechanism; do not claim “real-time” when only a cron job runs every minute.
 
+**Noise-control rule — all structures, not only FVG/OB:** The user's “similar alerts are too many” correction applies to every approved structure type: FVG, OB, VWAP, VAH, VAL, prior highs/lows, weekly highs/lows, and any other configured level. Deduplicate per structure key with an independent 30-minute cooldown. A reverse crossing during that cooldown must remain silent; do not bypass cooldown merely because `cross_direction` changed. Only a new crossing after cooldown expiry may send another arrival notice. Keep the alert as a neutral “到价→请查看 TradingView” reminder, not a directional signal.
+
+**Implementation pitfall:** Do not use `now >= cool_until or info.get("dir") != crossed` as the gate; the second clause defeats spam suppression when price oscillates around a level. Use `if now >= cool_until:` while retaining the latest crossing direction only as metadata.
+
 The approved-level monitor remains separate from dynamic analysis: automatic renewal may extend validity of existing approved levels, but must not promote candidates or replace levels from a one-off analysis. See `references/keylevel-monitor-contract-202608.md` for the event contract.
 
 ## Review update: direct real-time arrival alerts (2026-09-05)
@@ -558,6 +562,10 @@ if (far_down or far_up) and abs(taker - last_taker) > 0.5:
 if far_down and taker < 0.4:
     write_priority("空头延续 (Taker持续卖)", priority="high")
 ```
+## User noise policy: value-area levels are opt-out by default
+
+When the user says that alerts like `价值区·VAL` are unwanted, interpret this as a request to silence the entire value-area layer, not only the named level. Set `enabled: false` for all configured `layer: "价值区"` entries (VAH, VAL, POC, nPOC, DO, M-VWAP and equivalents), preserve the entries for auditability, and leave structural/HTF levels unchanged unless the user explicitly names them too. The daemon hot-reads `data/keylevels_config.json`, so verify the active count after editing; do not send a confirmation alert for a now-disabled value-area level. This is separate from the per-level cooldown rule: cooldown deduplicates enabled structures, while the value-area policy suppresses the category entirely.
+
 ## References
 
 - `references/btc-implementation.md` — session-specific implementation details (file structure, cron configs, full event rules)

@@ -1,5 +1,7 @@
 # v10 指标 Data Window 编码解码参考
 
+> 历史记录（2026-08-31）：旧版编码参考；当前编码以 `tv_indicator_contract.py` 为准。
+
 指标名称: `SVP+ICT+VWAP+EMA+CVD`  (v10 优化版, 2957行)
 文件: `指标svp_v10_优化版.txt`
 来源: Pine Script 源码 plot() 输出到 Data Window

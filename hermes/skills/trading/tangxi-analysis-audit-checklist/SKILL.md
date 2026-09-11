@@ -198,6 +198,21 @@ mcp_tradingview_tv_health_check()
 - **图表会被并发 cron 切走（2026-08-30 实测）**：XAU TV现场同步等任务会切共享标签页到 OANDA:XAUUSD/5m——读行动格/截图前必须 `chart_get_state` 核对 symbol+resolution（BTC=BINANCE:BTCUSDT.P+15m）；发现被切走先 `chart_set_symbol` + `chart_set_timeframe` 切回主执行周期，`chart_ready=true` 后再读/截，否则会截到错品种（违反复核铁律，旧截图冒充更新同罪）
 - `study_values` 大数被缩写(4.6K/1.1M) → 用 `pine_lines`/`pine_labels` 读精确价
 
+### 4.3 完整图表证据审计（价格栏 + ICT + 视觉复核）
+
+完整图表不是截图附件，而是独立证据层。每次BTC分析必须同时核对：
+
+1. **价格栏**：现价、当前K线OHLC、日高/日低、价格轴；并定位其相对 VAH/VAL/POC/nPOC/VWAP 的层级。
+2. **ICT主图**：FVG上/下沿与CE、OB/Breaker区间及质量、BOS/MSS/CHoCH方向与年龄、前日/前周及摆动高低点流动性、扫位/收回状态、溢价/折价。
+3. **订单流窗格**：CVD、成交量、持仓/OI、主动买卖与数据覆盖；区分新仓推动和回补/平仓。
+4. **视觉复核**：截图必须含价格轴、主图、行动格和底部窗格；视觉结论必须能与结构化字段、SVP行动格、Binance读数对应。
+
+**证据状态必须显式化**：`chart_verified`（对象和字段均可对应）、`chart_partial`（部分对象缺失）、`chart_visual_only`（仅能看截图）、`chart_identity_mismatch`（品种/周期错）、`chart_stale`（过期）。`chart_partial`/`chart_visual_only`不得给GO-A；身份错或过期必须fail-closed且不得覆盖最后有效缓存。
+
+**关键验证顺序**：`tv_health_check → chart_get_state → 必要时切回BTC/15m → 等待指标重算 → 读tables/values/lines/boxes/labels/OHLCV → 截图 → 再次核对symbol+resolution`。若截图视觉上有ICT对象但`lines/boxes/labels/tables`返回空，不能宣称ICT已被机器读取，应标记`chart_visual_only`或`chart_partial`，并只给人工观察路径。
+
+**周期边界**：BTC的15m是主执行层，5m只做触发；D/4h/1h是背景。当前图表若为5m，不得把5m视觉结构直接当成15m主裁决。
+
 ---
 
 ## 第五维：守护运行态
@@ -645,4 +660,5 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 - **C 全套修复闭环 Runbook（2026-08-31 落地 · 9 步标准动作 + 必查陷阱）**：`trading/tangxi-analysis-audit-checklist/references/audit-9-step-closure-runbook-2026-08-31.md`（用户选"全部修一遍/全部自动修复"时直接套用）
 - **分析逻辑代码级审计证据链（2026-08-31 · 3 个 P0：B等待→GO-B带价 / 观望改A兜底链 / R:R B级1.5 + 单元级复现法）**：`trading/tangxi-analysis-audit-checklist/references/analysis-logic-code-audit-2026-08-31.md`
 - TV缓存污染：`trading/tangxi-system-audit/references/2026-07-08-tv-cache-pollution-recurrence.md`
+- **完整图表证据（价格栏/ICT/截图与结构化读取一致性）**：本技能 `4.3`；审计时优先按该节执行
 - 预检脚本：`D:/Hermes agent/scripts/audit_preflight.py`

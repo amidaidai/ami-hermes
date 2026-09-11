@@ -62,6 +62,11 @@ description: TradingView 交易执行卡分析 — 默认低周期执行卡，�
 
 ### 默认：低周期执行卡
 用户只说"分析 XXX"、"看看 XXX"、"卡呀"时，默认走这个模式：
+- **防抢图（必做·2026-09-11）**：分析开始先声明租约，让后台切图任务让路：
+  `python scripts/tv_analysis_lease.py start --minutes 10 --symbol <TV符号>`；出卡后 `end`。
+  没这一步时 `btc_tv_refresh` / `xau_tv_sync` / `keylevels_collect` 会在读图中途切走图表，
+  表现是行动格突然读成空表、周期对不上（实测 2026-09-11 14:07 连抢两次）。
+  TTL 上限 30 分钟，忘了 end 也会自然过期；`tv_screenshot.py` 会自动续期。
 - **继承高周期**：在有效期内沿用最近一次 4h/1h 背景、关键位、方向判断；不要重新全扫。
 - **继承有效期**：1h 背景默认继承到下一根 1h K 收盘；4h 背景默认继承到下一根 4h K 收盘。若价格突破/跌破继承关键位，提前刷新。
 - **刷新执行周期**：加密刷 15m，黄金刷 5m；读取 table/labels/lines/study_values。

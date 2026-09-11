@@ -1,5 +1,7 @@
 # HALDRO Aggregated Volume 副指标 审计 + 与 SVP v10 主指标配对
 
+> 历史记录（2026-08-31）：旧版配对说明；当前双指标合同以定版源码和 `tv_indicator_contract.py` 为准。
+
 用户(安禾/棠溪)的双指标体系：**主指标 = 定位/分级**(SVP+ICT+VWAP+EMA+CVD 六合一, indicator-only, ~3100行)，
 **副指标 = 订单流验证**(HALDRO "Volume Aggregated Spot & Futures", @version=6, ~430行)。
 两者本来就是为配合设计。审计/改任一指标前先读取用户 Web UI 上传的当前版本文件，不要假设桌面/patched 是最新。

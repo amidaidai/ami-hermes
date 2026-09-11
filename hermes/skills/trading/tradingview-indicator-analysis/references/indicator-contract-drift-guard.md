@@ -11,7 +11,7 @@
 被写在多个模块里，各自漂移。查法：
 
 ```bash
-grep -rn "MCP \|OI Total\|HALDRO " --include="*.py" scripts/ | grep -v tv_indicator_contract
+grep -rn "MCP \|OI Total\|HALDRO " --include="*.py" scripts/ | grep -v tv_indicator_contract  # 示意名/检测用
 ```
 
 只要同一批字段名出现在两个以上文件里，就是在埋雷。

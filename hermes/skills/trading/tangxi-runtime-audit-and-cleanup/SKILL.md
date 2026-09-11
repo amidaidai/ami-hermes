@@ -10,6 +10,22 @@ tags: [audit, runtime, cleanup, script-management, tangxi]
 
 当用户说「审计」「全面检查」「全面盘一下」「怎么还没更新」「系统怎么样」 / 或者要求「看看哪些脚本有必要」「不要的删掉/清理一下」 时启动。不是分析卡（不会产出交易卡），是系统健康审查。若用户随后问「用上能力了吗」，再走 `crypto-multisource-analysis` 产出卡。
 
+### 审计的排序原则：先保分析平面（2026-09-11 用户明确纠正）
+
+> 「我这个可是分析系统。」
+
+棠溪的定位是**分析系统**：主业是**分析**（分析卡 / 分析流程 / 分析策略 / 指标契约 = 核心资产），
+监控、告警、备份、看门狗都是**配套**。
+
+含义（用于审计与清理时的排序，不是口号）：
+
+- **先保分析平面，再动配套**。清理/重构的默认优先级是：指标契约与字段映射 > 分析卡与分析流程 > 裁决层 > 监控告警 > 备份运维。
+- **「配套抢了分析的资源」是最该报的问题**：例如后台采集反复切走共享图表导致用户看不到分析图、
+  看门狗的假告警淹没了真正的分析链路故障。这类要往前提。
+- **不要为了“全绿”而拉停转旧监控**（会造成双重监控/重复告警），也不要为备份类改动
+  触碰分析链路。
+- 汇报时先讲分析平面的影响，再讲配套侧的整理 —— 用户关心的是「分析还能不能直接用」。
+
 ## 执行授权：修复类任务自主执行，不要来回确认（2026-09-10 用户明确）
 
 用户在系统改进/修复类任务上已给出**持久授权**，原话：
@@ -750,8 +766,8 @@ python -c "import sys; sys.path.insert(0,'scripts'); from cvd_analyzer import ch
 本轮给 6 个技能 + 1 个技能参考文件写了「下列脚本**已不存在/已删除**」，收尾核实时发现**是错的** ——
 `btc_keylevel_ws_guard` / `btc_keylevel_sentinel` / `btc_keylevel_rest_guard` /
 `btc_price_arrival_sentinel` **文件仍在 `scripts/`**，只是不在 cron、不在任何进程里。
-真正移入 `scripts/_archive/` 的只有 `btc_alert_watch_v3` / `btc_push_cron` /
-`btc_collector` / `btc_fast_daemon`。错误的断言已经写进了**未来会话会直接读取的技能**里 ——
+已移入 `scripts/_archive/` 的只有 `btc_alert_watch_v3` / `btc_push_cron` /
+`btc_collector` / `btc_fast_daemon`。上述为历史记录，错误的断言已经写进了**未来会话会直接读取的技能**里 ——
 比不写更糟，且必须再花一轮提交去更正。
 
 **脚本状态只有三态，写之前每条都要有命令证据**：
@@ -839,6 +855,107 @@ grep -c "^async def get_\|^def get_" scripts/fetch_tv_mcp.py
 维护/审计类脚本一律放 `scripts/maintenance/`（`scripts/` 已跟踪）。
 **目录选择前先 `git check-ignore -v <path>` 确认它会不会被提交。**
 
+## 仓库级维护：备份、受护栏的自动推送、脚本化批改（2026-09-11 建立）
+
+### 技能目录的备份链路（唯一一条）
+
+`~/AppData/Local/hermes/skills` 是**真实目录、不在仓库内** → 无版本、重装即丢。
+现行链路是**单向镜像**（源唯一可写、快照只读）：
+
+```
+~/AppData/Local/hermes/skills ──(skills_snapshot.py 单向镜像)──▶ 仓库 hermes/skills ──git──▶ GitHub 远端
+```
+
+- cron `948f28dfaf76`（`技能快照备份`，每日 04:20，`no_agent=true`，`deliver=local`）
+- **fail-closed**：源文件数塌到上次 60% 以下或 <100 个 → 拒绝镜像并报错，**绝不擦备份**
+  （备份脚本最贵的错误是「把备份擦成空」，宁可拒绝跑）
+- **只提交该路径**：`git commit -- hermes/skills`，不把工作区里其它在途改动一起扫进去
+- 四条必知 / 日常用法 / 备份洞自检见 `references/skills-backup-mechanism-20260911.md`
+
+### 自动推送的护栏（任何「自动发到外部」的脚本都适用）
+
+自动 push（同族：自动发消息、自动开 PR）= **替用户发布**，必须加闸 ——
+只推「本次任务自己产生」的提交，一旦混入别的提交就整体不推并说明：
+
+```python
+PREFIX = "chore(skills): 技能快照"
+ahead = git("log", "--format=%s", "origin/main..HEAD").splitlines()
+if ahead and not all(s.startswith(PREFIX) for s in ahead):
+    print(f"⚠ 未推送：待推提交里有 {len(ahead)} 条非本任务提交 —— 为免替你发布，本次不自动推送")
+    return
+```
+
+两条配套约定，缺一个就会长期出错：
+
+1. **推送判定要放在「本次有变化」的判断之外**。放在里面 → 上一次推送失败（断网）后，
+   下一轮没变化就永远不会补推 → 备份链**静默断掉**。
+2. **「无 upstream / 未配置」要静默，真失败才出声**。no_agent cron 的约定是
+   **健康即零输出**；把配置状态当事件报，就是给用户每天刷一行噪声
+   （同族问题见上文「监控器报警疲劳」）。
+
+### ⚠️ 脚本化批改文件时，不要相信自己的成功打印（2026-09-11 自己打脸·第三次）
+
+用 `execute_code` / Python 脚本做批量替换时，写了 `t = t.replace(old,new); print("OK 已加…")`
+—— 那个 `print` 是**无条件**的，于是替换没生效我也以为成功了。后续又只加了函数体、
+没加调用点，结果 `--no-push` 被定义两次 → `argument --no-push: conflicting option string`
+→ 脚本直接崩、cron 报 `script failed`。**同一个错误在同一轮里埋了三个坑。**
+
+```python
+# ❌ 自欺：成功打印与替换是否真的发生无关
+t = t.replace(old, new); print("OK 已替换")
+
+# ✅ 每一步都断言，并在写完后从磁盘读回复核
+assert t.count(old) == 1, "锚点不唯一，先看清楚"
+t = t.replace(old, new)
+assert new in t
+p.write_text(t, encoding="utf-8")
+assert new in p.read_text(encoding="utf-8")   # 回读，不信内存
+```
+
+**判据：脚本里任何「宣布成功」的输出都必须依赖一个自己算出来的断言，
+不能依赖「我这段代码跑到了」。** 写完还要**回读落盘内容** —— 本轮正是靠回读
+才发现 `mod.REPO = tmp_dest.parent` 那条根本没进文件，白排查了一轮假失败。
+（同族铁律见上文 heredoc 那条 pitfall：批量改源码用「Python 行替换脚本 + `assert count==N`」。）
+
+### ⚠️ 测试沙箱必须隔离**全部**模块级常量，否则测试会打到真实环境
+
+给「会读写真实仓库」的脚本写测试时，只覆盖一部分模块常量的后果是**测试打到真环境**：
+
+```python
+# 测试夹具只改了 SOURCE / DEST，忘了 REPO
+mod.SOURCE = tmp_root; mod.DEST = tmp_dest
+# → 内部 git 操作的 cwd 落在真仓库 → 读到真实的待推提交、打印真实警告
+# → 「无漂移应静默」用例假失败，看起来像被测脚本有 bug
+```
+
+**修法**：把**每个**指向真实世界的常量都换成沙盒，并加一条断言自证隔离：
+
+```python
+mod.REPO = tmp_dest.parent
+assert mod.REPO != Path("D:/Hermes agent"), "测试绝不能指向真仓库"
+```
+
+### 顺手记下的 git 坑（两个都会造成错判）
+
+| 坑 | 症状 | 正解 |
+|---|---|---|
+| `.gitignore` **不支持行尾注释** | `!hermes/skills/**/*token*  # 说明` 永不匹配（`#` 后的说明也成了 pattern 的一部分） | 注释**独占一行**；改完 `git check-ignore -v <path>` 逐条验证 |
+| `git ls-files` **默认转义非 ASCII 文件名** | 名字带中文时输出 `\346\226\207…`，集合比对虚报「上千个文件缺失」 | 加 `-c core.quotepath=false` |
+
+### 结构性防呆：静默的失败比报错更贵
+
+同轮在路由层发现三个同型缺陷 —— **未知输入不报错，而是安静地退化**：
+
+| 位置 | 退化形态 | 修法 |
+|---|---|---|
+| `route_pipeline` 未知品种 | 返回**空管线**（不分析，不报错） | 补类别 + `assert steps` |
+| `analysis_mode_spec` 未知档位 | **静默回落** quick | 返回 `mode_error` + `requested_mode` |
+| 契约缺失时的 stub | 静默出**空卡** | 置 `DEGRADED=True`，卡面必须说出「契约缺失」 |
+
+**判据：任何「查不到 → 走默认值」的分支都要问一句：用户能从输出里看出这是降级态吗？**
+看不出就是在埋静默失败。修法是**显式标记 + 断言**，不是把默认值调好一点。
+（完整 recipe 见 `references/repo-hygiene-and-guarded-push-20260911.md`。）
+
 ## 参考文件
 
 - `references/pydantic-version-compatibility.md` — pydantic 版本冲突完整修复记录
@@ -850,3 +967,5 @@ grep -c "^async def get_\|^def get_" scripts/fetch_tv_mcp.py
 - `references/unsatisfiable-safety-gate-recovery-20260910.md` — **不可满足的安全闸**（`structure_reviewed_at` 无生产者）取证链、真复核生产者代码骨架、全数通过才盖章的阈值设计教训+验收清单
 - `references/chart-switch-reduction-and-ohlcv-offload-20260911.md` — **共享图表被频繁切走**：量化谁在切/频率/条件短路、切换计数器、逐周期循环「读指标还是只读K线」的判据、把 OHLCV 采集移出图表的完整 recipe（选源顺序、密钥占位符、跨源 K 线口径陷阱、旁路-对账-阈值-回退、429 熔断、实测记录）、「第二标签页隔离」落地前必须先验能力、以及「还原正确但错偏好被永久传承」这个变体
 - `references/doc-and-skill-drift-cleanup-20260911.md` — **文档/技能漂移清理 + 根目录收口**：脚本三态分类（已归档/仍在但停用/现行）与实测命令、子代理事实性结论的复核规则、根目录分类算法（`.gitignore` 与技能点名要先查、引用计数要排除 `.gitignore`、归档 README 三要素）、漂移扫描器的三级+三类抑制设计、行数类正则的误报教训、模块遮蔽（仓根同名副本盖掉真模块）排查、维护工具不能放 gitignore 目录，以及「技能目录不在仓库内=无备份」这个结构缺口
+- `references/skills-backup-mechanism-20260911.md` — **技能目录的唯一备份路径**：单向镜像机制、四条必知、日常 `--status` 用法、fail-closed 阈值、备份洞自检命令
+- `references/repo-hygiene-and-guarded-push-20260911.md` — **仓库卫生与受护栏自动化**：自动推送护栏完整实现、fail-closed 快照阈值、内容级密钥扫描 vs 文件名级屏蔽、argparse 重复选项守卫、脚本化批改的自证与回读、测试沙箱隔离、git 坑、静默/出声约定

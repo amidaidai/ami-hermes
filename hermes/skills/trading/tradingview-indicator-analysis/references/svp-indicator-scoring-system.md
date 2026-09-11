@@ -1,5 +1,7 @@
 # SVP+ICT+VWAP+EMA+CVD 指标评级系统速查
 
+> 历史记录（2026-08-31）：旧版指标速查；当前字段以 `tv_indicator_contract.py` 和定版源码为准。
+
 来源：棠溪 TV 自定义指标源码(2025行)，已存档 `svp_indicator.txt`
 
 ## 评分四通道 (各0-10分封顶)

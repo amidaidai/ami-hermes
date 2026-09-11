@@ -1,5 +1,7 @@
 # BTC push cron encoding pattern
 
+> Historical record (2026-08-31): legacy delivery example; current delivery follows the active repository pipeline.
+
 Use this when a Windows no_agent cron or script-delivery path shows mojibake for Chinese alerts.
 
 ## Root cause
