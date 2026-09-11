@@ -287,7 +287,8 @@ def test_push_guard_skips_when_foreign_commits_are_pending(tmp_path, monkeypatch
     # _git_push 在「无 upstream」与「存在非快照待推提交」两种情况下都不推。
     pushed, detail = mod._git_push()
     assert pushed is False
-    assert "upstream" in detail or "非快照" in detail
+    # 沙盒无 upstream → 静默跳过（配置状态不是事件）；有非快照待推时才出声
+    assert detail == "" or "非快照" in detail
 
 
 def test_push_guard_recognises_snapshot_subject_prefix():

@@ -164,7 +164,8 @@ def _git_push() -> tuple[bool, str]:
         upstream = subprocess.run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
                                   cwd=REPO, capture_output=True, text=True)
         if upstream.returncode != 0:
-            return False, "无 upstream 分支，跳过推送"
+            # 「没有 upstream」是配置状态，不是事件：静默跳过，否则每天刷一行噪声
+            return False, ""
         up = upstream.stdout.strip()
         ahead = subprocess.run(["git", "log", "--format=%s", f"{up}..HEAD"],
                                cwd=REPO, capture_output=True, text=True).stdout.splitlines()
