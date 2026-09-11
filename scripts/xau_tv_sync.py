@@ -463,19 +463,54 @@ async def _run(sync_id: str):
                     "updated_at": datetime.now(TZ).isoformat(),
                     "timeframes": {},
                 }
-                for tf, resolution in TIMEFRAMES:
-                    await set_timeframe(session, resolution)
+
+                # 20260911：五周期 OHLCV 优先走 API。
+                # 原来这里逐周期切图，但循环体只读 get_chart_state + get_ohlcv，
+                # 【不读任何指标】—— 那 5 次周期切换纯粹为取 K 线，
+                # 正是用户看到「TV 图表自己在切品种和周期」的主要来源。
+                api_frames: dict = {}
+                api_source = ""
+                try:
+                    if str(ROOT / "scripts") not in sys.path:
+                        sys.path.insert(0, str(ROOT / "scripts"))
+                    import xau_ohlcv_source
+                    fetched = xau_ohlcv_source.fetch_all()
+                    if fetched:
+                        api_frames = fetched.get("timeframes") or {}
+                        api_source = str(fetched.get("source") or "")
+                except Exception as exc:
+                    print(f"  ⚠ XAU API 取数异常: {type(exc).__name__}: {str(exc)[:90]}",
+                          file=sys.stderr)
+
+                if api_frames:
+                    # 只切一次到 XAU 5m：这一趟本来就要（读 SVP 行动格），
+                    # 顺便用 TV 的 5m 已闭合 K 线与 API 对账。
+                    await set_symbol(session, SYMBOL)
+                    await set_timeframe(session, "5")
                     await asyncio.sleep(3)
-                    state = await get_chart_state(session)
-                    ohlcv = await get_ohlcv(session)
-                    st = parse_result(state)
-                    ov = parse_result(ohlcv)
-                    tf_data = _parse_ohlcv(ov, st)
-                    if tf_data:
-                        result["timeframes"][tf] = tf_data
-                        print(f"  ✅ {tf}: H{tf_data['high']:.1f} L{tf_data['low']:.1f} C{tf_data['close']:.1f}")
+                    st = parse_result(await get_chart_state(session))
+                    ov = parse_result(await get_ohlcv(session))
+                    tv_5m = _parse_ohlcv(ov, st)
+                    try:
+                        import xau_ohlcv_source as _xos
+                        ok, msg = _xos.cross_check(api_frames, tv_5m)
+                    except Exception as exc:
+                        ok, msg = False, f"校核异常 {type(exc).__name__}"
+                    if ok:
+                        print(f"  ✅ {msg} → 采用 API 五周期（{api_source}）")
+                        result["timeframes"] = {tf: dict(api_frames[tf])
+                                                for tf in api_frames}
+                        result["ohlcv_source"] = f"api:{api_source}"
                     else:
-                        print(f"  ⚠ {tf}: 解析失败", file=sys.stderr)
+                        print(f"  ⚠ {msg} → 回退逐周期切图", file=sys.stderr)
+                        await _collect_xau_tfs_via_chart(session, result,
+                                                         set_timeframe, get_chart_state,
+                                                         get_ohlcv, parse_result)
+                else:
+                    print("  ⚠ API 取数不可用 → 回退逐周期切图", file=sys.stderr)
+                    await _collect_xau_tfs_via_chart(session, result,
+                                                     set_timeframe, get_chart_state,
+                                                     get_ohlcv, parse_result)
 
                 required = {tf for tf, _resolution in TIMEFRAMES}
                 missing = sorted(required - set(result["timeframes"]))
@@ -508,6 +543,26 @@ async def _run(sync_id: str):
                 # cache has been validated and committed. Restoring here would
                 # let the next stage read another symbol's Data Window.
                 pass
+
+
+async def _collect_xau_tfs_via_chart(session, result: dict, set_timeframe,
+                                      get_chart_state, get_ohlcv, parse_result) -> None:
+    """回退路径：逐周期切图取 OHLCV（API 不可用或校核不过时的安全网）。
+
+    这是 20260911 之前唯一的老路径，一字未改地保留 ——
+    API 方案出任何问题时，行为与今天一致。
+    """
+    for tf, resolution in TIMEFRAMES:
+        await set_timeframe(session, resolution)
+        await asyncio.sleep(3)
+        state = await get_chart_state(session)
+        ohlcv = await get_ohlcv(session)
+        tf_data = _parse_ohlcv(parse_result(ohlcv), parse_result(state))
+        if tf_data:
+            result["timeframes"][tf] = tf_data
+            print(f"  ✅ {tf}: H{tf_data['high']:.1f} L{tf_data['low']:.1f} C{tf_data['close']:.1f}")
+        else:
+            print(f"  ⚠ {tf}: 解析失败", file=sys.stderr)
 
 
 def _build_xau_report(result: dict[str, Any]) -> str:
