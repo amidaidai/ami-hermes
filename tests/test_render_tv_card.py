@@ -23,8 +23,11 @@ def test_renderer_fails_closed_without_final_verdict_even_with_legacy_order_fiel
         {"grade": "A多", "entry": 100, "stop": 98, "target": 105},
         {}, "BTCUSDT", 100, mode="push",
     )
-    assert "⭐主推" not in card
+    # 无 FinalVerdict = 不可执行：只允许「等待」，不得出现任何方向主推。
+    assert "⭐主推 多" not in card and "⭐主推 空" not in card
     assert "多 损98 标105" not in card
+    assert "损98" not in card and "标105" not in card
+    assert "⭐主推 等待" in card
     assert "WAIT" in card or "等待" in card or "禁做" in card
 
 
@@ -179,8 +182,9 @@ def test_renderer_never_shows_star_order_when_final_verdict_is_no_go():
         },
         {"signal": "偏空"}, "BTCUSDT", 100, mode="push",
     )
-    assert "⭐主推" not in card
-    assert "等待确认" in card
+    # NO-GO 只允许「禁做」主推行，绝不允许把方向主推渲出来。
+    assert "⭐主推 多" not in card and "⭐主推 空" not in card
+    assert "⭐主推 禁做" in card
     assert "X禁做" in card
 
 
@@ -230,7 +234,8 @@ def test_wait_card_does_not_leak_raw_entry_as_a_trigger_price():
         },
         {"signal": "等待确认"}, "BTCUSDT", 99, mode="push",
     )
-    assert "| 🔵等待确认 | — | 不追现价 |" in card
+    assert "| ⭐主推 等待 | 等待确认 | 不追现价 |" in card
+    assert "损102" not in card and "标96" not in card
     assert "| 🔵主推 等 | 100 |" not in card
 
 

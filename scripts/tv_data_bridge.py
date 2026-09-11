@@ -248,6 +248,7 @@ def _contract_dw_aliases():
             merged = {}
             merged.update(getattr(_TVC, "DW_ALIASES_MAIN", {}) or {})
             merged.update(getattr(_TVC, "DW_ALIASES_SUB", {}) or {})
+            merged.update(getattr(_TVC, "LEGACY_DW_ALIASES_MAIN", {}) or {})
             merged.update(getattr(_TVC, "LEGACY_DW_ALIASES_SUB", {}) or {})
             for src, dw in merged.items():
                 table[dw] = src
@@ -293,21 +294,10 @@ def read_indicators(symbol=None):
             _hit = _aliases.get(key) or _aliases.get(key.split(" (")[0])
             if _hit and not _hit.startswith("mcp_evidence_"):
                 indicators[_hit] = val
-            # 带公式说明的 Data Window 标题需要稳定别名，避免下游无法命中。
-            if key.startswith("MCP StructPack"):
-                indicators["mcp_struct_pack"] = val
-            elif key.startswith("MCP Risk Pack"):
-                indicators["mcp_risk_pack"] = val
-            elif key.startswith("MCP EMA Length "):
-                indicators[key.lower().replace(" ", "_")] = val
-            elif key.startswith("MCP CVD Method Code"):
-                indicators["mcp_cvd_method_code"] = val
-            elif key == "OI Change % (Normalized)":
-                indicators["oi_change_pct_normalized"] = val
-            elif key == "HALDRO Risk Code":
-                indicators["haldro_risk_code"] = val
-            elif key == "HALDRO Valid Code":
-                indicators["haldro_valid_code"] = val
+            # 旧的 startswith 链已删：MCP StructPack / Risk Pack / EMA Length /
+            # CVD Method Code / OI Change % / HALDRO * 全部由上面的契约别名覆盖
+            # （含「带公式说明的长标题」用 key.split(" (")[0] 命中的短名）。
+            # 那是第 4 份手写白名单，正是本文件要终结的漂移来源。
     indicators.update(_read_evidence(data))
     return indicators
 

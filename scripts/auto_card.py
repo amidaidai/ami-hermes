@@ -49,6 +49,49 @@ except Exception:  # pragma: no cover - 契约缺失时退化为空壳，不阻�
         MAIN_ROW_LABELS: list = []
         SUB_ROW_LABELS: list = []
         RISK_ROW_VARIANTS = ["风控", "风控·观察", "风控·未授权", "禁做·不出价"]
+        # 空壳是**降级态**，不是正常态：DW 字段与行动格行会全部读不到。
+        # 卡面必须把它说出来（见 _source_summary 的「契约缺失」），不许静默出空卡。
+        DEGRADED = True
+        CONTRACT_CURRENT = 0
+        SUPPORTED_CONTRACT_VERSIONS: tuple = ()
+        DW_MAIN: list = []
+        DW_SUB: list = []
+        DW_ALIASES_MAIN: dict = {}
+        DW_ALIASES_SUB: dict = {}
+        LEGACY_DW_ALIASES_MAIN: dict = {}
+        LEGACY_DW_ALIASES_SUB: dict = {}
+        FEED_MODE: dict = {}
+        SVP_AUTHORIZATION_LABEL = "风控"
+        SVP_OBSERVATION_LABEL = "风控·观察"
+        SVP_UNAUTHORIZED_LABEL = "风控·未授权"
+        SVP_FORBIDDEN_VALUE = "禁做·不出价"
+        SVP_FORBIDDEN_LABELS: tuple = (SVP_FORBIDDEN_VALUE,)
+
+        @staticmethod
+        def risk_row_label(rows):
+            return ""
+
+        @staticmethod
+        def decode_basic_bus(pack, contract=None):
+            return None
+
+        @staticmethod
+        def decode_feed_mode(code):
+            return {"mode": None, "text": "缺失", "usable": False,
+                    "aggregated": False, "fallback": False, "single": False,
+                    "abnormal": False}
+
+        @staticmethod
+        def feed_mode_tail(code):
+            return ""
+
+        @staticmethod
+        def decode_oi_presence(pack, contract=None):
+            return {"present": False, "pct": None, "text": "OI未接"}
+
+        @staticmethod
+        def decode_trigger_pack(pack):
+            return None
 
         @staticmethod
         def ordered_main_rows(rows):
@@ -374,35 +417,10 @@ def _tv_cache_indicators_to_studies(cache: dict | None) -> list[dict]:
     if not isinstance(indicators, dict):
         return []
 
-    main_map = {
-        "s_vwap": "S VWAP", "vah_price": "VAH Price", "val_price": "VAL Price",
-        "poc_price": "POC Price", "npoc_price": "nPOC Price", "w_vwap_price": "W VWAP Price",
-        "m_vwap_price": "M VWAP Price", "do_price": "DO Price", "ema_9": "EMA 9",
-        "ema_21": "EMA 21", "ema_34": "EMA 34", "ema_55": "EMA 55",
-        "mcp_side_code": "MCP Side Code", "mcp_grade_code": "MCP Grade Code",
-        "mcp_setup_score": "MCP Setup Score", "mcp_entry_price": "MCP Entry Price",
-        "mcp_stop_price": "MCP Stop Price", "mcp_target_price": "MCP Target Price",
-        "mcp_cvd_value": "MCP CVD Value", "mcp_quality_code": "MCP Quality Code",
-        "mcp_cvd_method_code": "MCP CVD Method Code (2=lower-TF estimate,1=bar estimate)",
-        "mcp_ema_length_1": "MCP EMA Length 1", "mcp_ema_length_2": "MCP EMA Length 2",
-        "mcp_ema_length_3": "MCP EMA Length 3", "mcp_ema_length_4": "MCP EMA Length 4",
-        "mcp_struct_pack": "MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))",
-        "mcp_risk_pack": "MCP Risk Pack (Risk%*10000+DailyLoss%*100+WeeklyLoss%)",
-        "mcp_bull_fvg_ce": "MCP Bull FVG CE", "mcp_bear_fvg_ce": "MCP Bear FVG CE",
-        "mcp_fvg_quality_code": "MCP FVG Quality Code",
-        "mcp_fvg_quality_score": "MCP FVG Quality Score", "mcp_ob_quality_score": "MCP OB Quality Score",
-    }
-    sub_map = {
-        "oi_total": "OI Total", "estimated_cvd_value": "Estimated CVD Value", "cvd_value": "Estimated CVD Value",
-        "cvd_method_code": "CVD Method Code", "cvd_quality_code": "CVD Quality Code",
-        "lsr": "LSR", "long_short_ratio": "LSR",
-        "volume_ratio": "Volume Ratio", "coverage_exchanges": "Coverage Exchanges",
-        "coverage_spot": "Coverage Spot", "coverage_perp": "Coverage Perp",
-        "coverage_feed_mode": "Coverage Feed Mode", "exchange_dominance_%": "Exchange Dominance %",
-        "exchange_dominance_pct": "Exchange Dominance %", "confirm_score": "Confirm Score",
-        "haldro_valid_code": "HALDRO Valid Code", "haldro_risk_code": "HALDRO Risk Code",
-        "oi_change_pct_normalized": "OI Change % (Normalized)", "composite": "Composite",
-    }
+    # snake_case → TV DW 标题一律取自接口契约：canonical 优先，LEGACY 只补
+    # 历史缓存里才存在的旧名。本文件不再自写第三份清单（漂移根因）。
+    main_map = {**TVC.LEGACY_DW_ALIASES_MAIN, **TVC.DW_ALIASES_MAIN}
+    sub_map = {**TVC.LEGACY_DW_ALIASES_SUB, **TVC.DW_ALIASES_SUB}
     main_vals = {tv_key: indicators[src] for src, tv_key in main_map.items() if src in indicators}
     sub_vals = {tv_key: indicators[src] for src, tv_key in sub_map.items() if src in indicators}
     studies = []
@@ -1224,7 +1242,7 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
         # v13：「风控」行标签是动态的（风控/风控·观察/风控·未授权/禁做·不出价），
         # 用 risk_row_value 取，避免只认字面「风控」而在观察态漏读。
         main["risk"] = TVC.risk_row_value(dmi_rows)
-        main["risk_label"] = TVC.parse_risk_row(main["risk"]).get("label", "")
+        main["risk_label"] = TVC.risk_row_label(dmi_rows)
         # v13 新增行：这几行是决策主信息，旧版根本没有对应字段。
         for _src, _dst in [("路径", "path"), ("协同", "sync"), ("结构", "structure"),
                            ("OI", "oi_state"), ("前位", "prev_level"), ("现位", "now_level")]:
@@ -1233,12 +1251,10 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
         # v13 把 入场/止损/目标/R:R 折进了「风控」行 → 拆出来喂给下游，
         # 否则 entry/stop/target 全空，卡片只能写「等待触发」。
         _risk = TVC.parse_risk_row(main["risk"])
-        if _risk.get("entry") is not None:
-            main["entry"] = _risk["entry"]
-        if _risk.get("stop") is not None:
-            main["stop"] = _risk["stop"]
-        if _risk.get("target") is not None:
-            main["target"] = _risk["target"]
+        if main["risk_label"] == "风控·观察":
+            for key in ("entry", "stop", "target", "rr"):
+                main["candidate_" + key] = _risk.get(key)
+            main["candidate_source"] = "SVP风控·观察"
         if _risk.get("stop_atr") is not None:
             main["stop_atr"] = _risk["stop_atr"]
         if _risk.get("rr") is not None:
@@ -1254,58 +1270,34 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
                 main[dst_key] = dmi_rows[src_key]
 
     if tv_vals:
+        # 短名映射：卡片与下游一直用这些稳定键名，保留。
+        # 旧实现里还混着一批**已废止的 DW 名**（MCP CVD Value / MCP EMA Length * /
+        # MCP Risk Pack / MCP Bull·Bear FVG CE / OI Total / Estimated CVD Value /
+        # 旧 MCP StructPack 长名 / 旧 CVD Method Code 短名…）——它们恒空，
+        # 只会掩盖真正的接口漂移。删掉；DW 字段一律以 tv_indicator_contract 为准，
+        # 漂移由 scripts/tv_indicator_alignment_check.py 拦截。
         for tv_key, dict_key in [
             ("S VWAP", "vwap"), ("VAH Price", "vah"), ("VAL Price", "val"),
-            ("POC Price", "poc"), ("CVD Value", "cvd_value"), ("CVD Slope", "cvd_slope"),
+            ("POC Price", "poc"), ("CVD Value", "cvd_value"),
             ("EMA 9", "ema9"), ("EMA 21", "ema21"), ("EMA 34", "ema34"), ("EMA 55", "ema55"),
-            ("MCP Side Code", "mcp_side_code"), ("MCP Grade Code", "mcp_grade_code"),
-            ("MCP Setup Score", "mcp_setup_score"), ("MCP Entry Price", "mcp_entry_price"),
-            ("MCP Stop Price", "mcp_stop_price"), ("MCP Target Price", "mcp_target_price"),
-            ("MCP CVD Value", "mcp_cvd_value"), ("MCP Quality Code", "mcp_quality_code"),
-            ("MCP CVD Method Code (2=lower-TF estimate,1=bar estimate)", "mcp_cvd_method_code"),
-            ("MCP EMA Length 1", "mcp_ema_length_1"), ("MCP EMA Length 2", "mcp_ema_length_2"),
-            ("MCP EMA Length 3", "mcp_ema_length_3"), ("MCP EMA Length 4", "mcp_ema_length_4"),
-            ("MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))", "mcp_struct_pack"),
-            ("MCP Risk Pack (Risk%*10000+DailyLoss%*100+WeeklyLoss%)", "mcp_risk_pack"),
-            ("MCP Bull FVG CE", "mcp_bull_fvg_ce"), ("MCP Bear FVG CE", "mcp_bear_fvg_ce"),
-            ("MCP FVG Quality Code", "mcp_fvg_quality_code"),
-            ("MCP FVG Quality Score", "mcp_fvg_quality_score"), ("MCP OB Quality Score", "mcp_ob_quality_score"),
-            ("OI Total", "sub_oi_total"), ("Estimated CVD Value", "sub_estimated_cvd_value"),
-            ("CVD Method Code", "sub_cvd_method_code"), ("CVD Quality Code", "sub_cvd_quality_code"),
-            ("LSR", "sub_lsr"),
-            ("OI Change % (Normalized)", "sub_oi_change_pct_normalized"),
-            ("HALDRO Valid Code", "sub_haldro_valid_code"), ("HALDRO Risk Code", "sub_haldro_risk_code"),
-            ("Volume Ratio", "sub_volume_ratio"),
-            ("Coverage Exchanges", "sub_coverage_exchanges"), ("Coverage Spot", "sub_coverage_spot"),
-            ("Coverage Perp", "sub_coverage_perp"), ("Coverage Feed Mode", "sub_coverage_feed_mode"),
-            ("Exchange Dominance %", "sub_exchange_dominance_pct"),
-            ("Confirm Score", "sub_confirm_score"), ("Composite", "sub_composite"),
-            # ── v13 新增：以下字段指标侧已导出很久，系统侧此前完全没接 ──
-            ("MCP Entry Valid Code", "mcp_entry_valid_code"),
-            ("MCP RR Ratio", "mcp_rr_ratio"),
-            ("MCP NoTrade Reason Code", "mcp_no_trade_reason_code"),
-            ("MCP Execution Pack", "mcp_execution_pack"),
-            ("MCP Trigger Pack", "mcp_trigger_pack"),
-            ("MCP Regime Pack", "mcp_regime_pack"),
-            ("MCP Contract Pack", "mcp_contract_pack"),
-            ("MCP Evidence Pack", "mcp_evidence_pack"),
-            ("MCP Evidence Bar Time", "mcp_evidence_bar_time"),
-            ("MCP Evidence Close Time", "mcp_evidence_close_time"),
-            ("Basic Packed Bus (唯一主副连接)", "sub_basic_packed_bus"),
-            ("HALDRO State Pack (0无效/1支持多/2支持空/3冲突/4降权)", "sub_haldro_state_pack"),
-            ("OI Price Direction (same ACT_LB: 1涨/-1跌)", "sub_oi_price_direction"),
-            ("OI Breadth", "sub_oi_breadth"),
-            ("OI Agreement %", "sub_oi_agreement_pct"),
-            ("HALDRO OI Pack (方向*100+一致%)", "sub_haldro_oi_pack"),
-            ("OI Dispersion Ratio", "sub_oi_dispersion_ratio"),
-            ("HALDRO Freshness Pack", "sub_haldro_freshness_pack"),
-            ("Stale Venue Count (连续缺失>=3K)", "sub_stale_venue_count"),
-            ("HALDRO Contract Pack", "sub_haldro_contract_pack"),
-            ("HALDRO Flow Pack (OI*100+CVD*10+SP)", "sub_haldro_flow_pack"),
-            ("CVD Anchor Value", "sub_cvd_anchor_value"),
         ]:
             if tv_key in tv_vals:
                 main[dict_key] = tv_vals[tv_key]
+        # Consume the canonical names, not a second drifting whitelist.
+        for key, title in TVC.DW_ALIASES_MAIN.items():
+            if title in tv_vals:
+                main[key] = tv_vals[title]
+        for key, title in TVC.DW_ALIASES_SUB.items():
+            if title in tv_vals:
+                main["sub_" + key] = tv_vals[title]
+        # 已废止但历史缓存/老读数仍可能带的旧名：只从契约的 LEGACY 表取，
+        # canonical 优先（setdefault 不覆盖上面已写入的正式字段）。
+        for key, title in TVC.LEGACY_DW_ALIASES_MAIN.items():
+            if title in tv_vals:
+                main.setdefault(key, tv_vals[title])
+        for key, title in TVC.LEGACY_DW_ALIASES_SUB.items():
+            if title in tv_vals:
+                main.setdefault("sub_" + key, tv_vals[title])
         if _unknown_tv_text(main.get("grade")):
             # P0-2 (2026-08-31): 结论行含 C级等待语义（观望/未收线/等解除等）
             # → 强制 C等待，禁止 MCP 数字兜底把"未收线/观望"改写为 A/B（8/31事故根因）。
@@ -1315,6 +1307,23 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
                 mcp_grade = _grade_from_mcp_values(tv_vals)
                 if mcp_grade:
                     main["grade"] = mcp_grade
+    # New four-state panel prices are NOT execution exports. Never mix a
+    # rounded table price with a partial DW tuple or a historical legacy row.
+    if main.get("risk_label"):
+        for key in ("entry", "stop", "target"):
+            main.pop(key, None)
+        main["price_source"] = "none"
+        if main["risk_label"] == "风控":
+            prices = [_decision_float(main.get("mcp_" + key + "_price"))
+                      for key in ("entry", "stop", "target")]
+            if all(__import__("math").isfinite(v) and v > 0 for v in prices):
+                main.update(dict(zip(("entry", "stop", "target"), prices)))
+                main["price_source"] = "SVP执行导出"
+            else:
+                main["price_contract_error"] = "SVP执行三件套缺失"
+        else:
+            for key in ("mcp_entry_price", "mcp_stop_price", "mcp_target_price"):
+                main.pop(key, None)
     # ── v13 解码层：把机器可读的闸门码翻成人能读的原因链 ──
     # 这三行是「为什么现在不能做」的唯一权威答案，面板文字是摘要，这里给全量。
     main["no_trade_reasons"] = TVC.format_no_trade(main.get("mcp_no_trade_reason_code"))

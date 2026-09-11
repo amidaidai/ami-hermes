@@ -104,4 +104,4 @@ def test_bus_max_value_stays_below_float53():
 
 
 def test_contract_version_bumped():
-    assert C.CONTRACT_VERSION == "v14"
+    assert C.CONTRACT_VERSION == "v15"

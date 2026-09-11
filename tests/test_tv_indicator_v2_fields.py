@@ -59,7 +59,7 @@ def test_cache_aliases_roundtrip_to_study_values():
         }
     })
     merged = {k: v for study in studies for k, v in study["values"].items()}
-    assert merged["MCP StructPack (FvgQ*10000+(OB+1)*100+(BOS+2)*10+(LV+1))"] == 10121
+    assert merged["MCP StructPack"] == 10121
     assert merged["MCP Risk Pack (Risk%*10000+DailyLoss%*100+WeeklyLoss%)"] == 10306
     assert [merged[f"MCP EMA Length {i}"] for i in range(1, 5)] == [9, 21, 34, 55]
     assert merged["MCP FVG Quality Score"] == 78

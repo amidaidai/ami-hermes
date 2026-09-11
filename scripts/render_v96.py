@@ -459,11 +459,30 @@ def render_v96_card(
         backup_exec = f"{dir_b}失效路径；不与主推平权"
         backup_rr = f"1:{rr_b:.1f}" if rr_b >= 2 else "观察"
     else:
+        # WAIT：B/C 观察候选只从 FinalVerdict 的 watch 元组来（与推送卡同一实现），
+        # 未授权就必须写明「未授权」，且绝不回落到原始 entry/stop/target。
+        _local = (final_verdict or {}).get("state") or ""
+        _lgrade = str((final_verdict or {}).get("grade") or "")
+        cand = {}
+        if str(_local).upper() == "WAIT" and _lgrade.startswith(("B多", "B空", "C反多", "C反空")):
+            try:
+                from render_tv_card import candidate_view as _candidate_view
+                cand = _candidate_view(final_verdict or {})
+            except Exception:  # pragma: no cover - 独立调用时退回「无候选」
+                cand = {}
         action_summary = f"🔵 {bias}等确认 — 先等结构位触发"
         recommend_name = "🔵主推 等确认"
         recommend_trigger = "未到最优触发"
-        recommend_exec = f"等待{dir_a}触发；不追现价；损/标触发后计算"
-        recommend_rr = "待确认"
+        if cand.get("entry"):
+            recommend_exec = (f"人工候选（未授权）入{_price(cand['entry'])} "
+                              f"止{_price(cand['stop'])} 标{_price(cand['target'])}")
+            recommend_rr = f"1:{cand['rr']:.2f}"
+        elif cand.get("incomplete"):
+            recommend_exec = "候选数据不完整；等重新计算"
+            recommend_rr = "待确认"
+        else:
+            recommend_exec = f"等待{dir_a}触发；不追现价；损/标触发后计算"
+            recommend_rr = "待确认"
         backup_name = f"🔁备选 {dir_b}"
         backup_trigger = "反向破位后"
         backup_exec = "仅观察条件；确认后重新计算，不显示候选价"
@@ -545,7 +564,9 @@ def render_v96_card(
     lines.append("")
 
     lines.append(f"【裁决】{action_summary} · 风控{_num(risk_amt, 2)}U · {leverage_text or ''}")
-    lines.append(f"失效 {_price(inv_line) if inv_line else '`—`'} · 数据{data_grade} · 主副指标已纳入")
+    # 未授权裁决不得展示计划失效价：失效价=止损价，与 Entry/Stop/Target 同一道闸。
+    inv_display = _price(inv_line) if (inv_line and final_executable) else '`—`'
+    lines.append(f"失效 {inv_display} · 数据{data_grade} · 主副指标已纳入")
     return "\n".join(lines) + "\n"
 
 

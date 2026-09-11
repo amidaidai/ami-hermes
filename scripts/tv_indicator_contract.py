@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""棠溪 · 双指标 TV 接口契约 v13（2026-09-10）
+"""棠溪 · 双指标 TV 接口契约 v15（2026-09-11）
 
 为什么要有这个文件
 ------------------
@@ -10,10 +10,14 @@ v13 之前，「指标 DW 字段名 / 行动格行名」被硬编码在至少三
   - 副指标 DW 的 `OI Total` / `Estimated CVD Value` 等早已不存在，映射恒空
 所以把「唯一权威接口」收到这里，其它模块一律引用本文件，不再自写字符串。
 
-权威来源
---------
-- 主指标：`SVP_主指标_优化v13_清理死码_20260910.pine`（sha256[:24]=98d6338b4cb77e5d4e56e5e4）
-- 副指标：`AggVol_副指标_优化v13_清理死码_20260910.pine`（sha256[:24]=9f71366943a2d773ccb0c1c4）
+权威来源（2026-09-11 用户上传的定版）
+--------------------------------------
+- 主指标：`SVP_主指标_空格修正_20260911.pine`
+  （= outputs/pine_20260905/SVP_audit_fixed17_20260910.pine，3557 行）
+  sha256[:24] = 68a34fc32da035880a0b332c
+- 副指标：`AggVol_副指标_最终版_20260911.pine`
+  （= outputs/pine_20260905/AggVol_audit_fixed14_20260910.pine，966 行）
+  sha256[:24] = c4c563ef4a08b77cb0ceb73f
 - 行名取自实盘 Pine table 读取；DW 名取自两份源码的 plot(title=)
 
 变更纪律
@@ -26,7 +30,10 @@ from __future__ import annotations
 
 import re
 
-CONTRACT_VERSION = "v14"
+CONTRACT_VERSION = "v15"
+# 空壳降级标记：真契约恒为 False；少字段的兜底 stub 会置 True，让卡面能说出
+# 「契约缺失」。缺了契约 = DW 字段与行动格行全部读不到，绝不能静默出空卡。
+DEGRADED = False
 
 # ── 1. 行动格行名（顺序 = 面板渲染顺序，卡片按此顺序输出）────────────
 
@@ -48,8 +55,19 @@ LEGACY_SUB_ROWS = ["风险", "高周", "覆盖", "占比", "爆仓"]
 # 卡片缓存合成行（由 grade/treatment 生成，不是指标输出）
 SYNTH_ROWS = ["等级", "处理"]
 
-# 「风控」行可能带动态授权等级标签：风控 / 风控·观察 / 风控·未授权 / 禁做·不出价
+# 「风控」行可能带动态授权等级标签（定版指标 L3396 riskLabelText）。
+# 只有字面「风控」是授权出口；另外三种都不得升级为可执行。
+# 顺序即保守优先序：risk_row_label() 反序扫描，先命中越保守的标签。
 RISK_ROW_VARIANTS = ["风控", "风控·观察", "风控·未授权", "禁做·不出价"]
+
+# ── SVP 执行授权四态 ─────────────────────────────────────────────────
+# 「禁做·不出价」在定版指标里是 setupX 时的**行值**（riskValText），
+# 旧载荷可能把它放到行标签位；两个位置都必须按禁做处理（fail-closed）。
+SVP_AUTHORIZATION_LABEL = "风控"
+SVP_OBSERVATION_LABEL = "风控·观察"
+SVP_UNAUTHORIZED_LABEL = "风控·未授权"
+SVP_FORBIDDEN_VALUE = "禁做·不出价"
+SVP_FORBIDDEN_LABELS = (SVP_FORBIDDEN_VALUE,)
 
 # ── 2. Data Window 字段（v13 实测全量）────────────────────────────────
 
@@ -123,7 +141,9 @@ LEGACY_DW_ONLY = [
 
 # 主指标：值 = (v13权威名, 旧名或 None)
 DW_ALIASES_MAIN = {
-    "s_vwap": "S VWAP", "vah_price": "VAH Price", "val_price": "VAL Price",
+    "s_vwap": "S VWAP", "s_vwap_band_upper": "S VWAP +Band1",
+    "s_vwap_band_lower": "S VWAP -Band1",
+    "vah_price": "VAH Price", "val_price": "VAL Price",
     "poc_price": "POC Price", "npoc_price": "nPOC Price",
     "w_vwap_price": "W VWAP Price", "m_vwap_price": "M VWAP Price", "do_price": "DO Price",
     "ema_9": "EMA 9", "ema_21": "EMA 21", "ema_34": "EMA 34", "ema_55": "EMA 55",
@@ -182,10 +202,27 @@ DW_ALIASES_SUB = {
     "cvd_anchor_value": "CVD Anchor Value",
 }
 
-# 旧缓存里仍可能存在的 snake_case（保留兼容，命中才用）
+# 旧缓存里仍可能存在的 snake_case（保留兼容，命中才用）。
+# 只增不删：磁盘上的历史 tv_*_cache.json 仍带这些旧名，删掉映射等于丢历史读数。
+# 消费方（auto_card 的缓存反查 / _build_tv_main_data）一律从这里取，
+# 不许再在各自模块里各写一份 —— 那正是本文件要终结的「三处漂移」。
+# 注：与 DW_ALIASES_* 键重复的旧名不列在这里（同键只能映射一个标题，
+# canonical 优先；重复项只会变成永不被用的死条目）。
 LEGACY_DW_ALIASES_SUB = {
     "oi_total": "OI Total",
     "estimated_cvd_value": "Estimated CVD Value",
+}
+
+LEGACY_DW_ALIASES_MAIN = {
+    "mcp_cvd_value": "MCP CVD Value",
+    "mcp_ema_length_1": "MCP EMA Length 1",
+    "mcp_ema_length_2": "MCP EMA Length 2",
+    "mcp_ema_length_3": "MCP EMA Length 3",
+    "mcp_ema_length_4": "MCP EMA Length 4",
+    "mcp_risk_pack": "MCP Risk Pack (Risk%*10000+DailyLoss%*100+WeeklyLoss%)",
+    "mcp_bull_fvg_ce": "MCP Bull FVG CE",
+    "mcp_bear_fvg_ce": "MCP Bear FVG CE",
+    "mcp_fvg_quality_code": "MCP FVG Quality Code",
 }
 
 # ── 4. 解码器 ────────────────────────────────────────────────────────
@@ -312,12 +349,15 @@ def ordered_sub_rows(rows: dict) -> list[tuple[str, str]]:
     return out
 
 
+def risk_row_label(rows: dict) -> str:
+    """Preserve authorization in the row key; mixed snapshots fail closed."""
+    return next((label for label in reversed(RISK_ROW_VARIANTS) if label in (rows or {})), "")
+
+
 def risk_row_value(rows: dict) -> str:
-    """取「风控」行的值（不论标签是哪种变体）。"""
-    for variant in RISK_ROW_VARIANTS:
-        if variant in (rows or {}):
-            return rows[variant]
-    return ""
+    """取最保守的风控行；标签与值必须成对消费。"""
+    label = risk_row_label(rows)
+    return (rows or {}).get(label, "")
 
 
 # ── 5. 「风控」行解析（v13 把 入场/止损/目标 折进这一行）──────────────

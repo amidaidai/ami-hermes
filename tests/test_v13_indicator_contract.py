@@ -193,4 +193,3 @@ def test_legacy_rows_kept_for_backcompat():
     assert "进场" in C.LEGACY_MAIN_ROWS and "止损" in C.LEGACY_MAIN_ROWS
     assert "风险" in C.LEGACY_SUB_ROWS and "爆仓" in C.LEGACY_SUB_ROWS
     assert set(C.SYNTH_ROWS) == {"等级", "处理"}
-    assert C.CONTRACT_VERSION in ("v13", "v14"), "版本升级时此处需同步放宽"

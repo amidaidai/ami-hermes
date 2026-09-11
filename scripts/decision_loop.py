@@ -13,6 +13,7 @@ import math
 from typing import Any
 
 from decision_regime import DecisionRegime
+from tv_indicator_contract import SVP_AUTHORIZATION_LABEL, SVP_FORBIDDEN_LABELS
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,38 @@ def _svp_requires_wait(main: dict[str, Any]) -> bool:
     return any(token in text for token in (
         "⚠冲突", "未收线", "等收线", "等解除", "C等待", "观望",
     ))
+
+
+def _geometry_ok(side: str, entry: float | None, stop: float | None, target: float | None) -> bool:
+    if entry is None or stop is None or target is None:
+        return False
+    if side == "long":
+        return stop < entry < target
+    if side == "short":
+        return stop > entry > target
+    return False
+
+
+def _watch_tuple(main: dict[str, Any], side: str,
+                 entry: float | None, stop: float | None, target: float | None):
+    """Observation prices for human judgement — never an execution order.
+
+    The panel's 「风控·观察」 row is the only source of review prices, so its
+    candidate triple wins over the raw one.  Both must be a complete, positive
+    triple; a partial tuple yields None instead of a half order.  Geometry is
+    re-verified by the renderer before anything reaches the card.
+    """
+    if side == "neutral":
+        return None
+    candidate = tuple(_number(main.get("candidate_" + key), 0.0)
+                      for key in ("entry", "stop", "target"))
+    if all(value > 0 for value in candidate):
+        return (side, *candidate)
+    if entry is None or stop is None or target is None:
+        return None
+    if min(entry, stop, target) <= 0:
+        return None
+    return (side, entry, stop, target)
 
 
 def _zone_quality(main: dict[str, Any], model_id: str) -> float | None:
@@ -250,6 +283,24 @@ def resolve_final_verdict(
     if is_bc:
         wait.append("b_wait")
 
+    # ── SVP 授权闸（2026-09-11 定版指标）──────────────────────────────
+    # 定版行动格里「风控」行标签是 SVP 唯一的执行授权出口，四种形态语义不同：
+    #   风控         → 授权（仍须 A 级 + 三件套完整 + 几何有效才 GO-A）
+    #   风控·观察    → 只有观察价（pendingPlan）→ 未授权，价格只进人工候选
+    #   风控·未授权  → 副指标 S3 冲突 → 未授权，价格只进人工候选
+    #   禁做·不出价  → 结构禁做（setupX）→ 硬阻断，连候选价都不出
+    # 标签一旦出现在载荷里，任何数字等级都不得把它升级成可执行；
+    # 键缺失 = 旧载荷/无 TV 行动格，保持向后兼容（不引入新阻断）。
+    svp_authorized: bool | None = None
+    if "risk_label" in main:
+        risk_label = str(main.get("risk_label") or "").strip()
+        svp_authorized = risk_label == SVP_AUTHORIZATION_LABEL
+        if not svp_authorized:
+            if risk_label in SVP_FORBIDDEN_LABELS:
+                hard.append("svp_authorization")
+            else:
+                wait.append("svp_authorization")
+
     risk_usd = _number(risk.get("risk_usd"), 0.0)
     if risk and not bool(risk.get("allowed", False)):
         hard.append("risk_constitution")
@@ -331,6 +382,13 @@ def resolve_final_verdict(
         if hard else "等待：" + "/".join(wait)
         if wait else "全部硬闸门通过"
     )
+    # Observation prices for human judgement only.  A hard veto must not leak a
+    # candidate disguised as observation, and a partial tuple is not a plan.
+    watch_side, watch_entry, watch_stop, watch_target = "neutral", None, None, None
+    if state != "NO-GO":
+        watch = _watch_tuple(main, side, entry, stop, target)
+        if watch is not None:
+            watch_side, watch_entry, watch_stop, watch_target = watch
     gate = lambda status, why: {"status": status, "reason": why}
     regime_blocked = any(item in hard for item in ("regime_missing", "regime_blocked", "regime_model", "exhaustion_chase"))
     orderflow_yellow = any(item in wait for item in ("dual_alignment", "advanced_direction")) or any(item.startswith("haldro_") for item in warnings)
@@ -345,7 +403,14 @@ def resolve_final_verdict(
             "主副强冲突" if "dual_indicator" in hard else "高级订单流门控否决" if "advanced_confluence" in hard else "高级订单流方向不匹配" if "advanced_direction" in wait else "主副未确认同向" if "dual_alignment" in wait else "副驾驶弱/回退" if orderflow_yellow else "订单流允许",
         ),
         "rr": gate("yellow" if "rr_ratio" in wait else "green", "R:R不足" if "rr_ratio" in wait else "R:R通过"),
-        "risk": gate("red" if "risk_constitution" in hard else "green", "风控宪法拦截" if "risk_constitution" in hard else "风控通过"),
+        "risk": gate(
+            "red" if "risk_constitution" in hard or "svp_authorization" in hard
+            else "yellow" if "svp_authorization" in all_blockers
+            else "green",
+            "风控宪法拦截" if "risk_constitution" in hard
+            else "SVP未授权执行" if "svp_authorization" in all_blockers
+            else "风控通过",
+        ),
     }
     if main.get("tv_five_tf_required"):
         gates["tv_five_tf"] = gate(
@@ -372,10 +437,9 @@ def resolve_final_verdict(
         warnings=tuple(warnings),
         gates=gates,
         reason=reason,
-        # A hard veto must not leak a candidate disguised as observation.
-        watch_side=side if state != "NO-GO" else "neutral",
-        watch_entry=entry if state != "NO-GO" else None,
-        watch_stop=stop if state != "NO-GO" else None,
-        watch_target=target if state != "NO-GO" else None,
+        watch_side=watch_side,
+        watch_entry=watch_entry,
+        watch_stop=watch_stop,
+        watch_target=watch_target,
         decision_id=decision_id,
     )
