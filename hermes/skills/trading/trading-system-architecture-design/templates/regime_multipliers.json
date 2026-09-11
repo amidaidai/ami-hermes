@@ -1,0 +1,95 @@
+# data/regime_multipliers.json
+# 单一配置源：体制标签 → 仓位乘数、允许模型白名单、风控画像
+# 修改后热更，无需重启（classify_regime 每次调用读取或 60s 缓存）
+
+{
+  "version": "2026-07-10",
+  "description": "9 体制映射表 - 社区 2x3 矩阵标准 (方向 x 波动率)",
+  "regimes": {
+    "bull_calm": {
+      "direction": "bull",
+      "vol_state": "calm",
+      "position_multiplier": 2.5,
+      "allowed_models": ["VWAP反抽", "VAH回收", "VAL回收", "突破接受"],
+      "risk_profile": "conservative",
+      "notes": "牛市低波 - 高胜率区间回收模型，仓位可放大"
+    },
+    "bull_normal": {
+      "direction": "bull",
+      "vol_state": "normal",
+      "position_multiplier": 1.5,
+      "allowed_models": ["VWAP反抽", "突破接受", "POC拒绝", "动量延续"],
+      "risk_profile": "normal",
+      "notes": "牛市正常波动 - 趋势跟随为主"
+    },
+    "bull_vol": {
+      "direction": "bull",
+      "vol_state": "volatile",
+      "position_multiplier": 1.0,
+      "allowed_models": ["动量延续", "FVG回补", "扫流动性回收"],
+      "risk_profile": "aggressive",
+      "notes": "牛市高波 - 快进快出，止损放宽至 1.5xATR"
+    },
+    "bear_calm": {
+      "direction": "bear",
+      "vol_state": "calm",
+      "position_multiplier": 2.5,
+      "allowed_models": ["POC拒绝", "VAH空", "VAL回收空", "突破接受空"],
+      "risk_profile": "conservative",
+      "notes": "熊市低波 - 高胜率区间回收空头模型"
+    },
+    "bear_normal": {
+      "direction": "bear",
+      "vol_state": "normal",
+      "position_multiplier": 1.5,
+      "allowed_models": ["POC拒绝", "VAH空", "扫流动性回收空", "动量延续空"],
+      "risk_profile": "normal",
+      "notes": "熊市正常波动 - 顺势空头为主"
+    },
+    "bear_vol": {
+      "direction": "bear",
+      "vol_state": "volatile",
+      "position_multiplier": 1.0,
+      "allowed_models": ["扫流动性空", "FVG空", "突破接受空"],
+      "risk_profile": "aggressive",
+      "notes": "熊市高波 - 快进快出空头"
+    },
+    "range_calm": {
+      "direction": "range",
+      "vol_state": "calm",
+      "position_multiplier": 2.5,
+      "allowed_models": ["POC拒绝", "VAH/VAL回收", "VWAP反抽"],
+      "risk_profile": "conservative",
+      "notes": "震荡低波 - 区间回收高胜率，严格 R:R"
+    },
+    "range_normal": {
+      "direction": "range",
+      "vol_state": "normal",
+      "position_multiplier": 1.5,
+      "allowed_models": ["POC拒绝", "VWAP反抽", "VAH/VAL回收"],
+      "risk_profile": "normal",
+      "notes": "震荡正常波动 - 区间套利为主"
+    },
+    "range_vol": {
+      "direction": "range",
+      "vol_state": "volatile",
+      "position_multiplier": 0.0,
+      "allowed_models": [],
+      "risk_profile": "blocked",
+      "notes": "震荡高波 - 方向不明+高波动=最危险组合，硬禁做"
+    }
+  },
+  "at_ratio_thresholds": {
+    "calm_max": 0.7,
+    "normal_max": 1.3,
+    "volatile_max": 2.0
+  },
+  "ma200_direction_threshold_pct": 0.02,
+  "cvd_divergence_penalty": {
+    "bullish": "降一级体制仓位",
+    "bearish": "降一级体制仓位"
+  },
+  "adx_low_threshold": 20,
+  "adx_low_vol_expansion_threshold": 1.25,
+  "adx_low_action": "减仓50%或观望"
+}

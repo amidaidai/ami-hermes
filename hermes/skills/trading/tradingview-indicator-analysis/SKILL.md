@@ -1,0 +1,1517 @@
+---
+name: tradingview-indicator-analysis
+description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。统一模板5段(结构→关键位→量价→方案→评分)·无分隔线·R1/R2/S1/S2/S3·TV DMI实时注入·预案A/B双轨。引擎v2.1+VWAP/EMA/CVD三合一本地。cron用no-agent静默。警报渲染v7.5:display_name优先·禁止双重前缀·中文方向。
+---
+
+# TradingView 多品种分析 (v5.1 核心 + 扩展层)
+
+> ⚠ 2026-09-11 校正（**已实测核实**）：本文件部分段落把下列脚本当现行工具，实际状态是——
+> ① `btc_alert_watch_v3` / `btc_push_cron` / `btc_collector` / `btc_fast_daemon` **已移入**
+>    `scripts/_archive/`（`scripts/` 根下已无此文件）；
+> ② `btc_keylevel_ws_guard` / `btc_keylevel_sentinel` / `btc_keylevel_rest_guard` /
+>    `btc_price_arrival_sentinel` **文件仍在 `scripts/`，但既不在 cron 也不在任何进程中运行**
+>    —— 属历史代际，不要拿它们当现行链路。
+> **现行监控链只有一条**：`keylevel_guard.py`（常驻·亚秒 REST·多品种多顶点·每位 30min 冷却）
+> + `btc_keylevel_guard_watchdog.py`（cron `*/2` 拉起）+ `keylevel_read_trigger.py`（事件本地分析）
+> + `btc_tv_refresh.py`（五周期快照续航）。对照表：
+> `trading/realtime-trading-pipeline/references/dead-script-index.md`；
+> 系统全貌：`D:/Hermes agent/docs/系统总览.md`；指标字段/行名：`D:/Hermes agent/docs/tv-indicator-field-map.md`。
+
+> 现场恢复细节见 `references/tv-symbol-mismatch-recovery.md`：TV品种/周期错配时先重置并验收，再读取指标、行情与截图。
+
+> 🎯 **指标定版（2026-09-11 · 空格修正版）**：生产指标 = 主 `SVP_主指标_空格修正_20260911.pine`(3557行·`68a34fc3…`)
+> ／ 副 `AggVol_副指标_最终版_20260911.pine`(966行·`c4c563ef…`)。
+> **字段映射与分析流程的权威说明见 `docs/tv-indicator-field-map.md` v3.0**（v2.0 记的是 `行列优化` 版，已被 `空格修正` 取代；v1.3 记的是 v13，早已失效）。
+>
+> 🛡 **契约漂移守卫（改完指标必跑）**：`python scripts/tv_indicator_alignment_check.py` —— 退出码 0 才算对齐。
+>    判定**不靠手写白名单**：按 `display.data_window` / `display.price_scale` 归类，
+>    只有「导出型 plot」必须在契约里；纯视觉柱状图（模式切换/柱形）不算漂移。
+>    同时校验行动格行名**与行序**、授权态字面量。回归测试 `tests/test_indicator_alignment_20260911.py`
+>    —— 改了指标不同步契约会立刻变红。
+>    现场审计、四处漂移白名单的清理过程与分析卡候选价铁律见 `references/indicator-contract-drift-guard.md`。
+> 定版后必须知道的三条：
+> ① **OI 三态**：`OI未接`（总线没通）/ `OI缺失`（副说没数据）/ 有值（含真持平 0.00%）——
+>    旧码把「没数据」写成「持平 0.00%」，现在靠 `decode_oi_presence` 区分。
+> ② **Coverage Feed Mode 四态**：1聚合/2回退/**3单源不参与协同**/4异常 ——
+>    单源是设计内降级，不是异常；卡面只在非聚合态追加「· 数据源X」。
+> ③ **合同 22003**（22002 向后兼容）：只换副不换主 → 主显示「副合同不匹配」= fail-closed，
+>    不会静默误读。Trigger Pack 状态位偏移是 **+3**（解码 `-3`）。
+> **禁止按 `·` 拆面板行值取下标** —— 结构行的段数会变（regime 段会被省略）。
+
+> 🔌 **分析前置检查（必做，2026-09-11 定）**：同时读主、副面板，比对 S-code ——
+> **主「协同」行的 S-code 必须等于副「信号」行的 S-code**。
+>
+> 不一致（典型：主显示「副S0未接·A禁」、主 OI 行显示「OI未接」，而副照常有值）＝ 总线断了。
+> **成因（已用 entity id 变化证实）**：切品种会让主指标被【重新实例化】（`ZI6AGV` → `Rp0kZZ`），
+> 主指标里 `input.source` 指向副指标的那条引用（形如 `sQC3ma$49`）随旧实例一起丢失，回退成 `close`。
+> XAU 现场同步每 15 分钟切一次图，所以这条链【每轮都会被打断】。fail-closed 行为本身正确，
+> 但不能让用户每轮手动重接。
+>
+> **修复（只有这一条路管用）**：MCP `indicator_set_inputs`
+> `entity_id=<主指标id>`、`inputs='{"in_164":"<副指标id>$49"}'` → 等 35 秒 → 重读面板确认两行 S-code 一致。
+> ⚠️ **CLI 的 `tv indicator set <id> -i '{...}'` 会静默空转**（返回 `success:true` 但 `updated_inputs:{}`，
+> `tv indicator get` 也返回 `inputs: []`）—— 脚本侧接不了总线，必须由 Agent 用 MCP 做。
+>
+> **未确认总线一致前**：不得引用副指标的确认/否决结论，不得判 A 级（主指标自身会 fail-closed，
+> 但分析卡不能把「副S0未接」当成用户的设置问题一笔带过）。
+
+> 🔧 **需要把 Pine 源码装进 TV 账号 / 挂到图表时**，先读 `references/pine-install-via-mcp-20260910.md`：
+> 记录了三个必踩的坑（Ctrl+S 弹「新脚本名称」而不覆盖、`pine_list_scripts` 有缓存不能当作保存失败的判据、
+> 「添加到图表」的 JS click 不生效需真实鼠标事件）、以及换脚本后图表 study 重建会重置主指标的
+> 「唯一总线」`input.source` → 必须重接并以「主副两行 S-code 一致」验收。
+
+> 🔎 **改指标、写断言、或核对别人交来的审计报告时**，读 `pine-indicator-audit` 技能的
+> `references/pine-na-semantics-and-external-audit-verification-20260910.md`：
+> ① `array.sum` 只在**全 na** 时才返 na（有非 na 元素则忽略 na）—— 所以聚合类求和要
+> **逐元素 `nz`**，不能只在最外层套 `nz()`（会静默吞掉其他有效源）；
+> ② **三态 plot 落到设计外的值 ⇒ 先去找 na**（`X and A>0` / `X and A<=0` 在 X 为假时两个都假）；
+> ③ 外部审计指控的取证四步（先证同一份→抠原文→算术反例→分四档记结论，没查的不写成立）；
+> ④ 10 类可复用的 Pine 缺陷检查清单（HTF 返回值重复偏移、打包最低位可为负、
+> 紧凑格式化用于执行价、`nz(x,0)` 兜零掩盖缺失、显示开关改变业务状态……）。
+
+> ⚠️ **模板权威链警告（2026-06-29 审计）**：本文件内含 v5.1/v6.9/v7.1/v8.0 四个版本的模板声明，互相矛盾。**2026-07-02 起，用户手动交易分析的最高优先格式是驾驶舱表格卡**：`MEDIA截图首行 → 驾驶舱流程 → 多周期定位 → 关键位矩阵 → 多源交叉验证 → 矛盾点 → 方案 → 评分/裁决 → 完整性备注`。旧版叙事卡、Step流水账、只写几段文字或缺截图的输出都视为P0格式错误。
+
+## ⚠ 本次会话用户纠正固化（2026-08-29 · 必须遵守）
+
+用户在本会话中两次明确纠正，必须嵌入每次输出：
+
+1. **简洁输出（最高优先级）**：用户纠正"太繁琐要简洁""分析一次太繁琐"。含"分析"关键词=完整采集10步，但**输出默认收敛为手机三表速读版**（①方向速览表→②关键位矩阵表→③一句触发/裁决），完整8表只在用户明确说"完整/深度/出完整卡"时才出。手机一屏读完：现价方向裁决+五周期方向速览+关键位+一句触发。增量信息压到一句话或省略，不进表。输出冗长=P0格式错误。
+
+2. **档位按用户原话硬定**：`看下/看一眼/快速过一遍`=quick；`现在呢/继续/接着看/更新`=standard（无上下文也保持standard，不升级full）；裸品种=quick；`分析/全面/深度/完整卡`=full。采集档位与输出表格密度分离。
+
+3. **截图铁律**：每轮输出（含"现在呢"标准更新）必须带新截图。价格移动≥0.3%或行动格等级变化时必须截新图。截图放MEDIA首行。禁止无截图回复。
+
+4. **完整性备注**：每张卡必须按 `pipeline_router.route_pipeline()` 的实际步骤生成完成度；当前加密Full以代码实测15步为准，不得沿用历史10步。每个未完成项必须备注原因，禁止假装完整。
+
+5. **B等待禁止入场价**：B等待卡严禁给具体入场/止损/止盈价格。改为条件触发描述"触发空头：5m触碰W_VWAP后回落+CVD转负→激活预案B"。只有A做多/A做空才给价格。
+
+6. **追踪更新带截图+衍生品核验**：追踪更新必须拉全 Binance 方向票（OI/费率/多空/Taker/depth）交叉核验，不能只拉现价。
+
+7. **表格使用**：Markdown表格用于多周期定位、关键位矩阵、多源交叉验证表。保持简洁紧凑即可。
+
+## ⚠ TV切周期指标等待铁律（2026-08-31 · 用户确认）
+
+**TV切周期指标等待铁律（2026-08-31 · 用户确认）**
+
+切换品种/周期后，主指标（SVP行动格/study values）需 15-30s 才重算渲染——拉取 Pine tables/指标前必须等 15-30s（可先读 OHLCV/截图，指标随后再读）。OHLCV/图表状态切周期 1-2s 即可用（xau_tv_sync 只读 OHLCV 故 3s 等待足够，勿改）。
+
+**Binance MCP 直接工具调用铁律（2026-08-31 · 实战教训）**
+
+`mcp__binance__*` 系列工具（Binance MCP）在 tool_search 目录里是"deferred"（延迟加载），但它们实际上是**直接可调用的工具**，不是 deferred 类型。
+
+- **错误做法**：`tool_search → tool_describe → tool_call` 三步走会报 `'mcp__binance__get_price' is not a deferrable tool`
+- **正确做法**：直接用 `tool_call(name='mcp__binance__*', arguments={...})`，与 TV MCP 的 `mcp__tradingview__*` 完全一致
+- **适用工具**：`mcp__binance__get_price`、`mcp__binance__get_funding_rate_history`、`mcp__binance__get_open_interest_history`、`mcp__binance__get_long_short_ratio`、`mcp__binance__get_taker_long_short_ratio` 等全部 Binance MCP 工具
+- **同时备用 curl**：`curl -s "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"` 等 REST 端点作为兜底，TV MCP 优先、Binance MCP 次之、curl 最终兜底
+- **本规则不影响 TV MCP**（TV MCP 工具正常走 tool_search 路径）
+
+**skill 内容压缩恢复（2026-08-31 · 必须遵守）**
+
+`skill_view` 返回 `[SKILL_PRUNED]` 时，内容已被 Hermès 压缩丢弃。此时必须：
+1. 立即重新调用 `skill_view(name='<skill>')`（第二轮加载通常成功）
+2. 若第二轮仍失败，尝试第三次
+3. 三次均失败才放弃，不得用记忆中残留的 skill 片段拼凑输出
+4. 后续步骤仍正常执行，不要因为 skill 内容缺失而卡住整个流程
+
+> **压缩恢复后**：忽略残留的 `[SKILL_PRUNED]` 标记——它们是历史压缩记录，不影响后续执行。
+
+## ⚠ 图表优先读图铁律（2026-08-29 · P0）
+
+## ⚠ 图表优先读图铁律（2026-08-29 · P0）
+**判方向/结构不能只看指标行动格表格（文本），必须真实读TradingView图表可视化信息（K线形态+CVD窗格+关键位横线+FVG/OB框）。** 表格文字常把「收敛/承接」误判成「单纯空/多」。完整方法论见 `references/chart-first-vision-reading.md`。读图层级：真实K线结构→CVD/量能形态→关键位夹缝→FVG/OB框→行动格表格(仅交叉)。**收敛横盘+CVD不创新低=卖压衰竭承接区，须放量才确认空/多，缩量反抽先看VAL/低点承接。** 实操：vision_analyze读主执行截图 + data_get_pine_boxes查FVG/OB（study_count=0标注未渲染）+ data_get_ohlcv取真实高低点 + 再看行动格文字。
+
+## 驾驶舱输出格式纠偏（2026-07-02 · P0）
+
+> ⚠ **追踪更新三层（2026-08-29 · 防过度分析）**：「现在呢/继续」追踪更新按价格变化分层，不每轮全量刷五周期（用户已两次纠正"太繁琐"，且问"为什么没拉api核验"）：变化 <0.2% 且行动格等级未变 → 只报一句现价+等级未变，不发图不重拉；变化 0.2-0.5% 或等级演变 → 浓缩3表跟踪（变化对比+关键位+一句触发）+ 新截图；变化 ≥0.5% 或触发关键位 → 才全量刷新。**但每轮追踪更新仍必须拉全 Binance 方向票（OI/费率/多空/Taker/depth）交叉核验**，不能只拉现价。
+
+> ⚠ **关键位监控链路诊断（2026-08-29 · P0）**：到价分析推送 cron 重复上报旧事件/静默失效时，先查 `keylevel_agent_state.json` 去重 state 与 `trigger_{symbol}.json` 的 `analysis_status`（None 不匹配任何分支会被当成待处理重复上报），再查现价是否真穿越监控位。完整修复含路径坑（bash `$HOME` 与 Python `expanduser` 展开不一致）见 `references/keylevel-monitor-stale-trigger-fix.md`。
+
+用户多次纠正：「我不是有驾驶舱吗」「我需要表格格式，还有截图」「不是完整的要备注」。因此本技能与 `crypto-multisource-analysis` 同时用于 BTC/XAU 等交易分析时，输出必须服从驾驶舱固定表格格式。
+
+**必须执行：**
+- **采集完整性 vs 输出呈现性分离（2026-08-29 用户两次纠正「太繁琐太冗长」）**：含「分析」关键词 = **采集**走完整10步（五周期全采+Binance+宏观+情绪，不可跳步），但**输出呈现**默认收敛为**手机三表速读版**（①方向速览表→②关键位矩阵表→③一句触发/裁决），完整 8 表只在用户明确说「完整/深度/出完整卡」时才出。用户已两次纠正（「分析一次太繁琐」「太繁琐要简洁」），输出冗长= P0 格式错误。手机端一屏读完：现价方向裁决 + 五周期方向速览 + 关键位 + 一句触发。增量信息（数据明细/矛盾点/评分扣分）压到一句话或省略，不进表。
+- `MEDIA` 新截图首行；禁止无截图回复。
+- **Telegram RichMarkdown 真表格铁律（2026-07-03用户确认）**：用户要的是 Telegram 客户端内**直接渲染出来的表格**，不是图片表格、代码块伪表、普通管道符文字，也不是 bullet 列表。Telegram 正式推送必须通过 Bot API 10.1 `sendRichMessage` + `rich_message.markdown`；**表格前禁止任何 standalone 标题行**（不只 `表1 · xxx`，连 `**粗体**` 标题、`## 章节`、`<h3>` 都会打断表格块，使 Telegram 客户端把整段渲染成段落文本而非表格——2026-08-29 用户连续两次「不是表格」即此根因），必须让每张表直接从 `| 表头 |` 顶格开始，表格之间用空行分隔；标题语义交给表头列名承载，不要独立标题行。非完整卡/告警/cron 推送固定为首行结论 + 恰好3张≤3列表；完整驾驶舱如需发 Telegram，也优先压缩成手机三表版。若仍显示为段落/bullet，检查回执 `rich_message.blocks[type=table]`，并参考 `references/telegram-rich-message-tables.md`。
+- **真表格只经 push_tg_rich 渲染，agent 自己 final response 会变成 bullet 列表（2026-08-29 用户纠正「不是表格」）**：agent 的最终回复走 Hermes 自动 Markdown 投递，`| 管道表 |` 会被 Telegram 渲染成 bullet/列表条目，**不是**真表格。要让 Telegram 客户端渲染成原生表格块，必须用 `scripts/telegram_reliable.py` 的 `push_tg_rich(target, text)`（内部走 Bot API 10.1 `sendRichMessage` + `rich_message.markdown`）推到目标话题，回执 `rich_sent` 才算成功。分析/追踪卡的**表格内容一律走 push_tg_rich**，agent 回复只放 MEDIA 截图 + 一句结论。
+- **推了真表格后对话回复不要再重贴表（2026-08-29 用户「这个不要再发一次，前面表格不是有了吗？」）**：一旦 `push_tg_rich` 已把表格推到 386/385 话题，agent 的 final response 只给**一句话结论**（如「偏空未变性，反抽77,752回落放量→空，止损78,022目标76,853/3.1R」），不得再把整张表复制一遍进聊天回复——那不是「发到群里」，是刷屏。
+- 固定表序：驾驶舱流程 → 多周期定位 → 关键位矩阵 → 多源交叉验证 → 矛盾点 → 方案 → 评分/裁决 → 完整性备注。
+- 多周期定位表固定列：`周期 | SVP | 副指标 | Composite | 价 vs VWAP`。
+- 完整性备注必须列10步管线状态；不完整项必须备注原因。
+
+**禁止：**
+- 禁止只说「怪我/抱歉」不更新格式。
+- 禁止输出只有几张表但缺「驾驶舱流程」或「完整性备注」。
+- 禁止把「Step 1/Step 2」流水账当成最终卡。
+
+触发词：用户说"分析/看看/卡呀 {品种}"。
+
+## 2026-08-29 用户纠正固化 · P0 格式铁律
+
+### 1. 输出收敛原则（「分析」= 完整采集 + 手机三表速读输出）
+
+用户纠正：「分析一次太繁琐了」「太繁琐要简洁」。**「分析BTC」= 完整10步采集（五周期+Binance+宏观+情绪），但输出默认收敛为手机三表速读版**，完整8表只在用户明确说「完整/深度/出完整卡」时才出。
+
+- **L3 完整分析输出格式（默认手机三表速读）**：
+  1. 首行必须是新全屏 MEDIA 截图（含价格轴 + CVD 窗格）
+  2. 一句话裁决：品种·价·方向·时间
+  3. ① 方向速览表（D/4h/1h/15m/5m）
+  4. ② 关键位矩阵表（方向 | 价位 | 距现价 | 性质）
+  5. ③ 一句触发/裁决（含止损目标 R:R）
+- **追踪更新（现在呢/继续/更新）**：变化 <0.2% 且等级未变 → 只报一句现价+等级未变，不发图不重拉；0.2-0.5% 或等级演变 → 浓缩3表 + 新截图；≥0.5% 或触发关键位 → 才全量刷新。
+- **追踪更新也必须拉 Binance 全方向票**（OI/费率/多空/Taker/depth），不能只拉现价。
+
+### 2. TV MCP 工具不可用时降级方案
+
+本会话发现 TradingView MCP 工具在当前模型会话中不可用（工具列表中 TV MCP 工具全部消失）。降级路径：
+- **价格/OI/费率/多空/Taker**：全部改用 `terminal('curl ...')` 直取 Binance REST API 公开端点（Binance API Key 已配置）
+- **Fear & Greed**：改用 `curl` 直取 `api.alternative.me/fng/`
+- **深度数据**：改用 `curl` 直取 `api.binance.com/api/v3/depth`
+- **TV 截图**：如 TV MCP 恢复，优先用 `capture_screenshot`；如仍不可用，标注「TV MCP 不可用·降级分析」
+
+### 2. TV MCP 工具不可用时降级方案
+
+本会话发现 TradingView MCP 工具在当前模型会话中不可用（工具列表中 TV MCP 工具全部消失）。降级路径：
+- **价格/OI/费率/多空/Taker**：全部改用 `terminal('curl ...')` 直取 Binance REST API 公开端点（Binance API Key 已配置）
+- **Fear & Greed**：改用 `curl` 直取 `api.alternative.me/fng/`
+- **深度数据**：改用 `curl` 直取 `api.binance.com/api/v3/depth`
+- **TV 截图**：如 TV MCP 恢复，优先用 `capture_screenshot`；如仍不可用，标注「TV MCP 不可用·降级分析」
+
+### 3. 模型路由确认
+
+用户问「现在是什么模型」时：当前主模型为 `openrouter/free`（LFM by Liquid AI）。如需切换到 DeepSeek 进行深度分析，需显式说「切换模型」或「用 DeepSeek 分析」。
+
+## 本机能力接入图（2026-06-27 已完善）
+
+> 📎 会话新增参考（2026-08-28）：
+> - `references/lightweight-card-mode.md` — **轻量卡 vs 完整卡双档**：用户明确抱怨「分析一次太繁琐了」。默认「看下XAU/BTC」走轻量(约5次调用)，「分析/深度」才走完整。含主周期截图规则(BTC=15m/XAU=5m，用户纠正过加密不是5m)、加密vs黄金轻量差异、可砍项清单。
+> - `references/tv-mcp-data-fidelity-pitfalls.md` — **TV MCP 数据保真陷阱**：study_values大数被缩写(4.6K/1.1M)→精确价读pine_lines/pine_labels；跨周期close冲突(15m vs 5m差30点)→quote_get仲裁真现价；ClosedResourceError→tv_launch(kill_existing)恢复；品种静默漂移→每次读前chart_get_state校验；1h渲染不全→标继承不硬用；deferred TV工具用tool_call包装。
+
+权威参考：`crypto-multisource-analysis/references/tangxi-capability-map.md`。
+
+当前已接入/可调用：
+- 主模型 fallback 已配置：`deepseek/deepseek-v4-flash → openrouter/openrouter/owl-alpha → xai-oauth/grok-4.20-0309-non-reasoning → custom:api-direct.ccapi.us/gpt-5.5`。
+- 搜索降级脚本：`D:/Hermes agent/scripts/web_fallback_chain.py`。搜索链 `Brave → Exa → Tavily → Firecrawl → DDGS`；抽取链 `Firecrawl → Tavily → Exa`。分析脚本或 no-agent 任务需要搜索时优先调用该脚本，不要卡死在单一 provider。
+- Telegram 可靠推送脚本：`D:/Hermes agent/scripts/telegram_reliable.py`，失败落盘 `D:/Hermes agent/data/pending_telegram.jsonl`；旧 `telegram_direct.py` 已委托可靠推送。
+- 每日系统审计已增加直连可靠推送，避免 Hermes cron delivery timeout 时丢报告。
+- TV/Binance/FinanceKit/Jin10/Stock API MCP 均已确认启用；交易分析按 TV双指标 → Binance OI/Funding/Taker/多空 → Depth → FinanceKit/CoinGecko → Jin10 → Web/X 的全源顺序执行。
+
+## 告警/决策卡格式铁律 v4.2（2026-06-22 锁定）
+棠溪在格式上两次纠正后锁定以下规则。适用于所有输出（build_decision_card/cron推送/分析卡/监控卡）。详见 `references/alert-card-format-v42.md`。
+
+核心：①首行方向标注(`↑做多/↓做空/○等待/×禁做`)·等级·价格·VWAP ②正文①②③编号·冒号对齐·每行≤38字·价格反引号 ③禁emoji(仅↑↓○×例外)·禁粗体·禁分隔线·禁说明前缀 ④英文术语中文化(Taker→主动买卖/OI→持仓/LS→多空比/KillZone中文)保留VWAP/CVD/EMA/ADX/Funding/Spot/ATR ⑤截图region=full含价格轴+CVD·MEDIA直发首行 ⑥只卡片正文·自然收尾不加提示行
+**表格规则**：Markdown表格可用于结构化数据（多周期定位表、关键位矩阵、多源交叉验证表、方案表）。告警/速览不宜用表，完整卡/手动分析卡推荐用表提升可读性。保持简洁、表头对齐、不嵌套。
+
+## 分析模板（V5.1 核心）
+
+## ⚠ 模板权威链（2026-06-23 锁定）
+
+棠溪系统经过多轮迭代（V5.1 → v7.1 → v8.0 → v4.2），产生多个竞争模板。**执行以下权威链决定用哪个格式输出：**
+
+| 优先级 | 场景 | 格式 | 来源 |
+|--------|------|------|------|
+| 最高 | 告警/决策卡推送（Telegram） | **v4.2**: 首行↑↓○×+①②③编号+≤38字/行 | `references/alert-card-format-v42.md`（skill目录下） |
+| 次高 | 完整分析卡（手动出卡） | **驾驶舱表格卡**: MEDIA截图首行→驾驶舱流程→多周期定位→关键位矩阵→多源交叉验证→矛盾点→方案→评分/裁决→完整性备注（输出默认手机三表速读，完整8表仅「完整/深度」时出，见顶部「采集 vs 呈现分离」） | 本文件顶部「模板权威链警告」+「驾驶舱输出格式纠偏」 |
+| 参考 | 表格驱动格式细则 | 多周期表+核心指标+关键位矩阵+多源交叉验证+预案表 | `references/table-driven-analysis-format-20260628.md` |
+| 参考 | 多市场管线 | 加密/贵金属/外汇/股票各自适用与禁用源 | `references/multi-market-data-pipeline.md` |
+| 存档 | v8.0 叙事5段长卡 / BTC精简6段 / V5.1 长卡 | 已被驾驶舱表格卡取代，仅作长文档存档与决策逻辑参考 | `references/master-template-v68.md` / `references/btc-analysis-compact-template.md` / `references/v5.1-legacy-longcard-template.md` |
+
+**关键规则：**
+- 推送用 v4.2，手动分析用**驾驶舱表格卡**，互不冲突
+- **禁止输出**旧 V5.1 的80行长卡格式
+- **禁止输出** v8.0 叙事5段作为手动分析卡（2026-07-02 起已被驾驶舱表格卡取代）
+- **禁止** `references/master-analysis-template.md`（已废弃并删除）
+- 若用户说「格式不对」，先确认场景再判断用哪个模板
+- 出卡前必须 `cat` 对应模板文件确认当前格式
+- 权威链审计与已修清单（周期写法统一 ✅ / pipeline_router docstring ✅ / 死步骤标注 ✅）见 `references/template-authority-audit-20260829.md`
+
+> V5.1 是棠溪的核心分析框架概念（决策逻辑），所有后续扩展（v6.3 监控层、v9.5 数据层、v9.9 治理层）都在此基础上叠加，不替代。**但输出格式已演进到 v4.2 推送卡 / 驾驶舱表格卡。**
+
+**主模板：** `references/master-template-v68.md` (v6.9.5 统一)
+包含：10段头部·五段正文·预案A/B双轨制·三源一致·Grok验证·X情绪·短卡规则 + v6.9.2 强化 Liquidity Sweep 是灵魂 + CVD背离/吸收 + Displacement + XAU Asia→London→NY序列 + BTC现货vs永续分化 + 真实回测50-65%共识。
+v6.9.8(2026-06-21): ③现价期货/现货区分·_price_label()·Binance期货优先·FMP+Polymarket接入·XAU K线Yahoo GC=F修复·_collect_binance_data隔离。
+
+**数据管线健康审计：** `references/data-pipeline-health-audit.md`（全量占位符扫描→断点诊断→分类修复方法）
+
+**多资产完整操作模板：** `references/multi-asset-complete-operations.md` （2026-06-20会话产出）
+- 明确“操作段必须完整①-⑦”铁律（加密/贵金属/外汇/股票/期权全覆盖）
+- 允许环境/结构/博弈/风控精炼
+- 含 asset_class 分支、杠杆/单位/止损距离适配、期权特殊注意事项
+- 每次出卡前必须 read_file 锁定
+
+**精简分析卡样式：** `references/concise-analysis-card-format.md`
+- 用户明确纠正：报告型卡片太长，目标约1500中文字符
+- 保留头部决策 + A/B完整操作，环境/结构/博弈/风控压缩为速读行
+- 品种场所写 `BTCUSDT.P · BINANCE`，禁止渲染 `交易所：` 字样
+
+**社区融合参考：** `references/community-2026-ict-smc-cvd-fusion.md` (2026最新联网合成：Sweep灵魂、Kill Zone过滤、锚定CVD、Displacement确认、高概率序列)。
+
+**BOS确认铁律（2026-06-22社区验证）：** 真正的BOS（Break of Structure）需要强势推进K线+放量（≥1.8x均量）。缩量破VWAP/VAL不算确认，只算试探。多因子守护的\"放量识别\"参数已对齐（见 `scripts/multi_factor_daemon_template.py`）。
+
+**关键规则速查：**
+- ②周期 `—` 分隔·每周期一行
+- ④状态 10-13→A做多/做空·6-9→B等待·0-5→X禁做
+- ⑦决策 置信 n/5 — 引擎0.5→3, 0.7→4, 0.85→5
+- 操作段 预案A/B双轨·⚠优先标注·R:R底线1:2
+- B等待→操作段不盲出入场价·写触发条件
+- Grok分歧→强制B等待·action降级·confidence_5上限3
+- MEDIA截图 full窗口含右侧价格栏+底部CVD
+- 环境⑦社区全景（alt.me+CMC+CG情绪+热门+板块）
+- 环境⑧搜索情绪（Brave→Exa→DDGS）
+
+**参考：** `references/pitfalls-and-workarounds.md` `references/data-pipeline-v68.md`
+
+### 分析卡输出格式（V5.1 历史参考）
+
+> v5.1 80行长卡模板已移至 `references/v5.1-legacy-longcard-template.md` 存档。**禁止**作为当前输出格式——2026-07-02 起手动分析卡一律用驾驶舱表格卡（见文件顶部「模板权威链」）。
+
+### 骨架卡片优化工作流
+
+当用户发来骨架格式卡片要求优化时，按以下流程：
+
+```
+① 审计（不出卡，先列问题）
+  — 模型声明：是否从五类模型做了选择？
+  — 13分评分：是否打了明细分？
+  — 数据定级：是否标了 A/B/C + 来源数 + 偏差？
+  — 方向-结构一致性：市态/资金/方向是否三角冲突？
+  — 止损合理性：止损距离 vs ATR（应 ≥0.5x 4h ATR）
+  — 格式合规：非等级 emoji、星级 vs n/5、X 标注模糊
+  — 催化完整性：是否有遗漏的重大事件？
+  — 闭环完整性：是否提到监控位/日志写入？
+
+② 数据补全
+  — 统一入口：`python scripts/data_gatherer.py`（8源聚合+自动评级+时效标注）
+  — 价格多源：CoinGecko + Binance API + TradingView quote（选 2-3 源）
+  — 衍生品：funding rate（含Bybit交叉验证）、OI、basis、taker（Binance API）
+  — 宏观关联：DXY/VIX/SPX/US10Y（Yahoo实时）
+  — 技术结构：TradingView 切品种/布局 → study_values + pine_lines + pine_labels
+  — 催化：web_extract(CoinDesk/Cointelegraph) + 金十 flash
+  — X情绪：x_search("BTC sentiment crypto today") / x_search("XAUUSD gold sentiment")
+    → 提取方向(bullish/bearish/neutral)·强度(high/med/low)·热词·话题
+    → 如遇代理问题fallback：web_search → 标注「web源·非X实时」
+  — 催化源按独立性分级（AA/A/B/C/D），折扣计分（v9.7 §G）
+  — X情绪只作验证/挑战，不覆盖结构方向
+
+③ 重组输出（v9.7 增强）
+  — 骨架格式原样保留五段结构
+  — 头部10段：品种→周期→现价→状态→模型→评分→决策→原因→仓位→数据
+  — 置信度：按公式计算（评分/13×3.0 + data×1.0 + match×0.5 + win×0.5），不拍
+  — 评分：加权计算（结构×1.5 + 风控×1.5 + 订单流×1.2 + 周期×1.0 + 催化×1.0 + 衍生×0.8 + 情绪×0.5）
+  — CVD等级处理：C级→订单流×0.6 + 半仓 + 多重确认
+  — 量能：量比矩阵（>2.0爆量/1.5-2.0放量/0.7-1.5正常/0.3-0.7缩量/<0.3地量）+ 入场量确认规则
+  — 方向-结构不一致 → 拉直（以结构为准）
+  — 止损重算至 ≥0.5x 4h ATR（统一4h(14) ATR）
+  — 跨品种冲突自动扣分（DXY/VIX/SPX/黄金/US10Y）
+  — 催化放最优先位置
+  — 操作段预留 Fed/重大事件预案
+  — 强制模型checklist：`python scripts/model_checklist.py --model "..." --context '...'`
+```
+
+**v9.7 增强模块详见：** `references/template-v97-enhancements.md`
+
+**常见审计陷阱速查**：见 `references/skeleton-card-audit-pitfalls.md`
+
+## 扩展层（V5.1 基础上叠加）
+
+## 批量快速扫描多品种工作流（2026-06-28）
+
+当用户说"看看有什么热点的/流动性好的/全部拉一遍"时，使用此工作流：
+
+### 步骤
+1. **CoinGecko API 取热榜**：`curl -s "https://api.coingecko.com/api/v3/search/trending"` → 获取 Trending Top 15
+2. **Binance 24h数据过滤**：`curl -s "https://fapi.binance.com/fapi/v1/ticker/24hr"` 或通过 CoinGecko vol 排序
+3. **筛选候选**：24h 成交量 > $100M + `|24h%|` > 3% → 有动量又有流动性
+4. **TV MCP 快速扫描**：对每个候选，切换 TV 品种 → 等待15-30s → 读 study_values + pine_tables（15m）→ 记录
+   - 每个品种只读 15m（不跑全周期），判断可否交易
+   - 记录：结论(等多/等空)、方向(偏多/偏空)、EMA排列、价vsVWAP、副指标信号
+5. **给推荐排序**：用表格汇总4-5个候选，标注入场参考位和风险
+6. **用户选定后**：再跑全周期分析（4h→1h→15m）+ 截图 + X情绪验证
+
+### 关键判断
+- 已经拉了 >10% 的标注"ADR耗尽/慎追"
+- 1h偏空+15m偏多 = 时间框架冲突 → 标注B级轻仓
+- 新上币（<30天）波动大，仓位要更轻
+- 副指标缩量=动能弱，等放量再入场
+
+| 品种 | 交易所/经纪商 | 杠杆 | 主执行TF | 确认TF | 单位 | 止损距离参考 | 特殊注意 |
+|------|---------------|------|----------|--------|------|-------------|----------|
+| BTC/ETH | Binance | 100x | 15m | 1h·4h | 币种 | 400点 | — |
+| 其他加密 | Binance | 20x | 15m | 1h·4h | 币种 | 按波动 | — |
+| 黄金 XAU | Exness | 1000x | 5m | 1h·4h | oz | 15点 | Kill Zone序列 |
+| 外汇 (EURUSD等) | 按账户 | 50-100x | 5m·15m | 1h·4h | 标准手/迷你手 | 0.0015 | 新闻闸门 |
+| 股票 (AAPL等) | 按账户 | 1-5x或无 | 日内 | 更高周期 | 股 | 3点 | 财报+成交量 |
+| 期权 | 高杠杆经纪商 | 注意时间价值 | 日内 | — | 合约 | 150点 | Theta衰减 + IV Crush |
+
+> 账户：100 USD · 单笔 10 USD
+> 棠溪主看加密15m、黄金5m，高周期1h/4h做确认过滤。**所有资产操作段必须完整①-⑦**（见 `references/multi-asset-complete-operations.md`）。
+
+**卡片长度铁律（2026-06-20 用户纠正）**：分析卡必须是“交易决策卡”，不是研究报告。头部+环境+结构+博弈+风控优先合并精简，让用户一眼知道看什么；只保留方向、关键位、分歧、闸门和结论。操作段仍严禁简化，预案A/B各必须有方向、入场+多确认、风控(止损+至少两个止盈满足1:2)、仓位、退出、轨迹。
+
+**操作段完整性铁律**：操作段严禁简化。预案A/B各必须有方向、入场+多确认、风控(止损+至少两个止盈满足1:2)、仓位、退出、轨迹。其他段必须精炼成速读式。
+
+## 数据源
+
+| 来源 | 用途 |
+|------|------|
+| TradingView MCP | K线+指标+截图+DMI决策表 |
+| Binance MCP | 价格+衍生品+多空比+Taker+OI |
+| 金十 MCP | 快讯+日历+XAU报价 |
+| **Binance 实盘 API** | **全档位强制核验（P0）** | `references/binance-api-mandatory-verification.md` |
+| CoinMarketCap | 加密行情+市占+恐慌贪婪 (333/天·Key) |
+| CoinGecko | 社区情绪+热门+板块+汇率 (免费·无Key) |
+| Alpha Vantage | 股票报价 (500/天·Key) |
+| Twelve Data | 技术指标RSI/MACD (800/天·Key) |
+| Massive | 日线OHLCV+ETF+期货 (免费层) |
+| **gold-api.com现货** | `trading_system.py::gold_api_price()` | 免费XAU现货·三源A级 | 
+| Brave Search | Web搜索情绪 (2000/月·Key) |
+| FinanceKit MCP | 股票/ETF/期权链 |
+| OANDA | XAU现货（需凭据·可选·gold-api替代）|
+| alt.me | 恐慌贪婪 (免费·无Key) |
+| **恐慌贪婪指数** | `api.alternative.me/fng/` 免费API·每日更新·0-100情绪值（←2026-06-17接入） |
+| Brave/Tavily/Exa/DDGS | 搜索 (DDGS免费优先) |
+| FMP/Tushare | 宏观+A股 |
+| FinanceKit | 板块+技术分析 |
+| **CoinMarketCap** | 加密排名+行情+全球指标+恐慌贪婪 (Key: `secrets/coinmarketcap_api_key.txt`) |
+| **CoinGecko** | 社区情绪+板块热度+热门趋势+汇率 (免费无Key) |
+| **Alpha Vantage** | 股票报价+外汇 (Key: `secrets/alphavantage_api_key.txt`) |
+| **Twelve Data** | 技术指标RSI/MACD (Key: `secrets/twelvedata_api_key.txt`) |
+| **Massive** | 股票/加密日线+ETF+期货快照 (免费层·Key: `secrets/massive_api_key.txt`) |
+| **DDGS** | 免费Web搜索 (替代Firecrawl)
+
+> XAU 数据链：OANDA现货 → gold-api.com（免费）→ 金十Quote → Yahoo GC=F/MGC=F。OANDA 凭据缺时自动走 gold-api+金十双现货源→仍可达 A级92%。
+> **免费数据API（no_agent脚本用）：** CMC+CG+alt.me+Brave — 详见 `references/data-pipeline-v68.md`。金十快讯辅助机构观点。
+
+## 搜索策略
+
+- Brave Search API 优先 (2000次/月·免费·Key在 secrets/brave_api_key.txt)
+- Exa API 备用 (1000次/月·Key在 secrets/exa_api_key.txt)
+- DDGS 最后 (不稳定·经常返回0结果)
+- 社区数据兜底：CoinGecko情绪 + CMC恐慌贪婪 + alt.me
+- Firecrawl 不可用（欠费）
+- 金十快讯辅助机构观点
+
+详细数据源矩阵见 `references/data-pipeline-v68.md`
+- 付费源只在 DDGS 失败或重大事件时使用
+- 社区情绪全景见下文「社区仪表盘」
+
+## 2026 Community Networking & Fusion Workflow (for template/analysis optimization)
+
+When user requests community-informed optimization ("联网社区看分析策略", "动用我配置的技能全面的联网社区完美的优化", audit + template update):
+
+1. Load configured skills first: `web-access`, `tradingview-indicator-analysis`, `trading-system-audit`.
+2. Use web-access enabled searches: `web_search` + `x_search` + `web_extract` on targeted queries (ICT SMC CVD "liquidity sweep" "Kill Zone" 2026 XAUUSD BTC).
+3. Synthesize into precise, embeddable language (e.g., "Liquidity Sweep 是灵魂", explicit sequences, "CVD背离/吸收 + Displacement").
+4. Always start by `read_file("references/master-template-v68.md")` to lock current version.
+5. Patch template with vX.Y.Z increments, adding:
+   - 博弈段: Sweep anchoring, CVD divergence/absorption, Displacement, XAU high-prob sequence.
+   - 环境: BTC spot/perp CVD row + XAU Kill Zone/time filter.
+   - Confirmations and model lists: Require sweep + CVD + Displacement.
+   - **操作段完整性**：强制所有资产完整①-⑦（见 references/multi-asset-complete-operations.md）。用户要求"操作要完整"时，绝不精简操作段。
+6. Implement code support: `_compute_perfect_signals()` helper in auto_card.py and multi_model_engine (see trading-system-audit/references/v6.9.2-perfect-optimization-pattern.md for the exact reusable function + verification).
+7. Verify bundle every time:
+   - Re-read template.
+   - Regen cards (`python scripts/auto_card.py BTCUSDT && ... XAUUSD`).
+   - `grep` for zero machine fields.
+   - pytest on format tests.
+   - Snapshot quality + CVD A-grade.
+   - git add/commit/push (lock per user definition).
+   - Full card display: read and show complete injected cards when user asks for perfect versions after optimization (see new references/full-card-review-after-injection.md).
+   - Renderer optimization patterns (asset_class, dynamic stop_dist per asset, RR = stop_dist×2.0/×3.0 guarantee, B-plan delegation, post-render Confluence+MEDIA injection, full ①-⑦ verification): `references/2026-06-20-auto-card-renderer-optimization.md` (2026-06-20 session deliverable).
+
+   8. Document in `references/community-2026-ict-smc-cvd-fusion.md`.
+10. "全部一起" batch: when user says "全部一起给我最完美的优化" or "一起修复了", execute all changes + full bundle in one pass and report real outputs.
+
+**Pitfall**: Do not add unanchored hype or change iron laws (template first, zero machine fields, R:R 1:2, X情绪 only verification). Community input must map to existing fusion modules and user's exact format.
+
+This workflow was refined in the June 2026 comprehensive audit + perfect optimization session.
+
+加密卡出卡时自动调用 `coingecko_collector.community_dashboard()` 聚合7源免费社区数据：
+
+```
+恐慌贪婪: 15 (Extreme Fear) · CG情绪: 72%看多 · 2,404,318人关注BTC
+· 热门: Hyperliquid·Bitcoin·Collector Crypt · 板块: WLFI -1.4%
+```
+
+写入 v6.8 模板环境段⑦「社区全景」。信号解读：
+- F&G < 25 + CG > 60% 看多 → 恐慌底部+社区强烈看多=巨大分歧·典型底部博弈
+- F&G > 75 + CG < 40% 看多 → 贪婪顶部+社区转空=顶部预警
+
+详参 `references/community-dashboard.md`。
+
+## Pipeline (v10.0 · X情绪集成 · v1.1 Grok验证层)
+
+```
+Step 1  环境 → 价格+快讯+市场搜索+衍生品六件套
+Step 1b X情绪 → x_search("BTC sentiment crypto today") + x_search("XAUUSD gold sentiment")
+                → 提取方向(bullish/bearish/neutral)·强度·热词·话题
+                → 如遇代理问题：web_search 替代 → 标注「web源·非X实时」
+Step 2  高周 → 4h/1h 缓存摘要
+Step 3  执行 → 15m/5m 实时摘要+截图
+Step 4  五类判定 → 逐一过筛五类固定模型；无匹配→进入Step 4b
+Step 4b 多模型 → data_gatherer | multi_model_engine（12模型独立跑+合并方向+事件禁做熔断）
+Step 5  输出 → v5.1中文化执行卡+仓位计算器+风控闸门+置信公式+加权评分+量比
+              + 博弈段融入X情绪：方向+强度+热词+与结构一致/矛盾⚠
+Step 6  Grok验证（已上线⚠） → 用 grok-4.20-0309-non-reasoning 调 xAI API 做交叉验证
+              → 核对：分歧标记·盲点补充·Narrative层
+              → 与引擎结论一致→置信度+5%；分歧→打标记人工关注
+              → **代码已实现**：`multi_model_engine.py::call_grok_validation()` (v1.3)
+              → 详见 references/grok-crossvalidation-layer.md
+Step 7  闭环 → 覆写结构化 monitor_levels.json v2.2 + source_snapshot.json
+              + trade_plans/events/reviews.jsonl + risk_state.json
+```
+
+### 后台守护进程模式（10s轮询·推荐）
+
+当用户要求\"实时到价监控\"时（优于5m cron），用 `terminal(background=true)` 启动常驻Python脚本：
+- **不加 `notify_on_complete=true`** — 守护永续，退出不需通知。否则被杀时发回溯噪音到会话。
+- **杀进程用 `terminal("taskkill /PID <pid> /F")`** — 不用 `process(action='kill')`。
+- **写入日志文件** — 后台stdout不可见，守护写 `btc_alerts.jsonl` 供随时读取。
+- **5分钟冷却窗口** — 同一事件同5分钟块内只报一次，防刷屏。
+- **状态文件持久化** — `btc_state.json` 存当前价状态+计时，重启续接不丢事件。
+- **动态VWAP** — 每60秒从15m K线自算VWAP，不硬编码。
+
+详见 `references/background-daemon-v9-pattern.md`。实现见 `scripts/btc_vwap_daemon.py`。
+
+## 实时价格监控 v6.4
+
+主入口脚本使用中文名：`scripts/行情守望.py`；定时巡检使用 `scripts/信号巡检.py`；旧脚本名只保留兼容包装。当前实盘监控范围按棠溪要求只启用 `BTCUSDT` 和 `XAUUSD`，其他模板品种仅保留分析能力。详见 `references/smart-monitor-system.md`。
+
+- 后台 10s 查价 (0 token, Binance/免费行情公开接口；信号巡检每 1m 做守护检查)
+- **推送通道 v7.0**：Telegram 主场 — 阿弥黛黛群聊「警报」话题（`telegram:阿弥黛黛:416`），3次重试。**监控推送格式 v7.0 已与分析卡 v5.1 风格统一**：冒号对齐·子项缩进无号·无分段标题（`—— 触发细节 ——`/`—— 执行结论 ——`）。格式详见 `references/monitor-push-format-v65.md`。
+- **CVD v6.5**：接入 `system_data_bridge.py`，使用 Binance 签名API Taker买卖比（B级），替代旧 K线估算（C级）
+- **衍生品 v6.5**：监控推送含实时大户多空比（A级）+ Taker方向+比率 + 费率 + 方向冲突检测（多头拥挤vsTaker卖等）
+- **双置信对比 v6.6**：监控推送新增「引擎判{偏多/偏空}·位信{一致✓/矛盾⚠}」行——从缓存读取多模型引擎最后方向，与结构性位信（支撑=偏多/阻力=偏空）对比，一致加 ✓ 矛盾标 ⚠。不重新跑12模型（读 `_LAST` 缓存）
+- **事件禁做 v6.5**：`system_data_bridge.py` 内维护事件日历（`_EVENTS` 字典），行情守望 `process_block()` 轮询时自动检测并静默；Fed/重大数据前60分钟至后30分钟不推送任何告警
+- **方向翻转 v6.5**：监控10s轮询时运行 `bridge_dir_flip()` 调用多模型引擎，检测方向翻转→Telegram自动推送 `🔄 多模型方向翻转` 告警
+- **预测追踪 v6.5**：多模型引擎每次运行自动记录预测到 `prediction_log.jsonl`；`prediction_tracker.py verify` 定时回验4小时前预测；`prediction_tracker.py stats` 输出模型准确率看板
+- **看门狗 v6.6**：`scripts/watchdog.py` 30s检查 heartbeat→90s超时自动 `taskkill` 旧进程+清理锁+重启行情守望。与 `行情守望` 并行常驻
+- 告警分级: 🔴紧急(突破+CVD) / 🔴突破 / 🟡接近
+- 防刷: 严格推送模式 + 分级冷却 + 同位30min不重复 + 1小时推送预算。**推送阈值 v2.2（2026-06-18调优）：** warning→高优先+`near_or_breach`+位信≥65；info→位信≥68 或 高优先+≥60；expired→位信≥65 或 高优先；invalidated→高优先+位信≥60 或 ≥65。不再完全静默info/expired。预期推送率~50%正常日/~80%波动日（之前22%）。BTC 等加密仍要求非C级数据，XAUUSD 允许金十Quote单源C级降级推送。critical 位信≥70
+- 分析后自动更新监控位
+- 监控位优先写结构化 v2.1：`plan_id`、`level`、`side`、`type`、`action`、`priority`、`expires`、`valid_until`、`invalid_if`、`condition`、`confirm_if`、`status`；`condition` 支持 `near_or_breach`、`close_confirm`、`combo/combined` 组合触发
+- v9.5+ 执行系统必须生成 `source_snapshot.json` 最新缓存，并同步写入 `data/source_snapshots/YYYY-MM-DD/` 历史快照；监控触发写入 `trade_events.jsonl`；风控闸门读取 `risk_state.json`，自动显示允许/禁止、风险档和最大风险；存在未复盘真实成交时下一笔最高轻仓
+- v9.6 多品种运行时必须读取 `data/symbol_templates.json`：加密品种走 Binance 价格+合约衍生品，非加密品种禁止套用 Funding/OI；无稳定实时价格源时设置 `monitor_enabled: false`，只保留模板/快照，不用 `price_at_analysis` 假装实时告警
+- 监控位必须区分两种置信度：`价格置信` 是数据源一致性，`位信` 是关键位本身强弱；关键位用 `level_confidence` 写入 grade/score/label/basis/missing，推送卡触发细节必须显示 `位信`；触发时必须生成 `live_level_confidence`，结合触发等级、CVD、数据质量实时上调/下调
+- 监控告警必须显示多源价格置信度：加密用 Binance现货 + CoinGecko + Binance合约Mark/Index；XAUUSD 优先 OANDA 现货（需凭据），无 OANDA 时用 **gold-api.com**（`https://api.gold-api.com/price/XAU`·免费·无认证） + 金十Quote 双现货源，叠加 Yahoo `GC=F` 与 `MGC=F` 作跨市场验证。**金十+gold-api+Yahoo → A级(92%)**（2026-06-18 升级·无需OANDA）。金十+Yahoo 为 B 级(75-78%)，只有金十时标 `C级 · 金十单源`。
+- v9.5+ 数据异常熔断：快照过旧、连续 C级/不可用、10s 异常跳价时写入 `system_events.jsonl` 并只记录不推送，避免旧数据/坏价格触发交易提醒
+- v9.5+ 策略治理：真实开仓先用 `scripts/成交记录.py` 标记；成交结束用 `scripts/成交复盘.py --model ...` 复盘；`strategy_governance.json` 统计样本数、胜率、平均R、连续亏损，样本不足不升权，满足统计也需棠溪手动批准
+- v9.9 架构层：`scripts/黄金宏观.py` 刷新 DXY/EURUSD/USDJPY/US10Y/US02Y/TIP/TLT/GC=F/MGC=F/SI=F/GLD/GDX/MOVE 黄金宏观背景，写入 `xau_macro_context.json` 并嵌入 XAU source snapshot；`scripts/模型统计.py` 生成 `strategy_model_stats.json`，统计 R、MAE、MFE、出场质量、回撤和亏损串；`scripts/安全审计.py` 生成 `security_audit.json`，检查 default profile 高权限面、cron no-agent 和凭据隔离；`scripts/系统体检.py` 生成 `system_health_score.json`；`scripts/清理守护.py` 执行监控事件清理+快照归档+日志轮转（7天保留/30天归档）。信号巡检按节奏维护这些派生层。BTC/XAU 监控稳定版细节见 `references/btc-xau-monitoring-stack.md`
+- **行情守望自启动**：已通过 Windows 任务计划实现（`schtasks /create /tn HW_Monitor`），延迟 60s 开机启动。辅助安装脚本：`scripts/install_hw_monitor.bat`。锁定机制基于 PID 单实例锁，重启后自动获取锁启动
+- 监控静默排查：用户问“怎么没发/是不是没监控”时，先查 heartbeat、monitor.log、monitor_state、trade_events、cron，再判断是没触发、降噪、熔断还是 Telegram 链路；不要先解释。详见 `references/monitor-silence-debugging.md`
+- 静默防误伤：XAUUSD 金十Quote单源有效价是允许的正常降级状态，单源最高 C 级但不等于行情不可用；不要把它计入连续 C 级熔断。强触发 warning 的位信门槛 v2.2 降至 65，info 降至 68/60，expired 降至 65/高优先。信号巡检应周期性输出"监控正常"心跳卡，避免用户误以为没跑
+- **监控推送格式 v7.0 — 分析卡风格**。监控推送不再使用 `lab()` 标签对齐 + `—— 触发细节 ——` 分段标题。新格式：冒号对齐·子项（价位/动作）缩进无号·底部「动作」「提示」无序号。`行情守望.py` 的 `render_message()` 已改为 v7.0。
+  - **no_agent到价监控（推荐·零token）**：对简单的价位条件监控（如"价格回踩4320通知我"），用 `scripts/gold_monitor.py` 做no_agent cron（`cronjob(action='create', no_agent=True, script='gold_monitor.py', schedule='5m', deliver='origin')`）。脚本从免费API拉数据，匹配条件才输出，零token消耗。
+
+### 警报话题路由表（v7.5 · 2026-06-21 锁定）
+
+棠溪要求警报按品种分话题推送，群 chat_id = `-1003733144325`：
+
+| 内容 | 话题ID | target |
+|------|--------|--------|
+| BTC 警报 | 386 | `telegram:-1003733144325:386` |
+| XAU 警报 | 385 | `telegram:-1003733144325:385` |
+| 山寨币/其他 | 416 | `telegram:-1003733144325:416` |
+| 任务报告（心跳卡/巡检/复盘） | 416 | `telegram:-1003733144325:416` |
+
+> ⚠ **REPORT_TOPIC修正（2026-06-21）**：旧配置 `REPORT_TOPIC="846"` — 话题846不存在于群聊中。已修正为416。
+>
+> `行情守望.py` 实现：`ALERT_TOPIC_BY_SYMBOL = {"BTCUSDT":"386","XAUUSD":"385","ETHUSDT":"416","SOLUSDT":"416"}` + `alert_target_for(symbol)` 回落 416；`report_target()` → 416。所有警报 `push()` 调用必须传 `target=alert_target_for(symbol)`。
+
+### 警报渲染铁律（v7.5 · 2026-06-21 锁定）
+
+`行情守望.py::render_message()` 渲染警报时必须遵守：
+
+**① display_name 优先** — `monitor_levels.json` 每层有两个名字：
+- `name`: 内部ID（`R1_reclaim_accept`、`S1_retest`）— **禁止渲染给用户**
+- `display_name`: 中文人读名（`阻1·近端收复接受位`、`支1·回测位`）— **必须渲染**
+
+```python
+# ✅ 正确
+display = item.get("display_name") or item.get("name", "?")
+# ❌ 错误
+name = item.get("name", "?")
+```
+
+**② 禁止双重前缀** — 若变量已含"引擎判"前缀，渲染器不再追加"引擎"：
+```python
+# ❌ 旧：f"引擎{model_dir_text}" → "引擎引擎判多·位信一致✓"
+# ✅ 新：直接 model_dir_text → "引擎判多·位信一致✓"
+```
+
+**③ 指标行 · 分隔** — CVD/Taker/引擎各项用 `·` 分隔，不用空格连写：
+```
+# ✅ CVD 买 · A级 · Taker 买 1.40·A级 · 引擎判多·位信一致✓
+# ❌ CVD买 · Takerbuy 1.40·B级 引擎引擎判方向不明
+```
+
+**④ 风控行 · 分隔** — 风控各部分用 `·` 分隔，不用空格：
+```
+# ✅ 风控 允许 · 常规 · 最大风险 3.0U · CVD C级→半仓
+# ❌ 风控 允许 常规 最大风险 3.0U CVD C级→仓位上限半仓
+```
+
+**⑤ 全景位双空格** — ○/● 标记后用双空格分隔多个关键位：
+```
+# ✅ ○阻2·上沿 `64448`  ●阻1·近端收复 `64192`  ●支1·回测 `63936`
+# ❌ ○R2_upper_extension`64448`●R1_reclaim_accept`64192`●S1_retest`63936`
+```
+
+**⑥ Taker方向中文** — `buy→买` `sell→卖` `neutral→平`：
+```python
+dir_map = {"buy": "买", "sell": "卖", "neutral": "平"}
+taker_dir_cn = dir_map.get(tk['dir'], tk['dir'])
+taker_text = f"{taker_dir_cn} {tk['ratio']:.2f}·{tk.get('q','B')}级"
+```
+
+**⑦ 技术术语保留英文** — CVD、Taker、Funding、Spot、VWAP、EMA、ATR 保留英文。方向/状态/描述用中文。
+
+- **`push()` 异步队列承载 `(target, msg)` 元组（v7.5 陷阱）**：`行情守望.py` 的 push() 签名已变为 `push(msg, target=None)`，队列元素是 `(target, msg)` 二元组（向后兼容纯字符串）。改推送逻辑时：①worker 解包 tuple，target 为 None 回落默认话题 ②新增警报调用点必须显式传 `target=alert_target_for(symbol)`，否则全落 416 ③discord 通道仍并行发。改完务必 `taskkill` + hermes venv python 重启，心跳文件不反映代码版本。
+
+- **模糊诉求先确认再改（"阻1完整显示"教训）**：当用户说某字段"显示不完整/要完整"，但 `format_hit` 实测输出已包含全部字段（名称·价位·距离·位信·动作·失效），先确认到底是「单个位字段缺」还是「想要近端位全景」还是「心跳卡展示全结构」——三种实现方向完全不同，盲改会做错方向。
+
+## 格式规范
+
+- 标准英文术语保留 (DO/VWAP/POC/VAH)
+- 先输出状态：A做多/A做空/B等待/X禁做
+- 每张卡必须输出评分器：结构、周期、订单流、衍生品、催化、风控、情绪，总分决定 A/B/X
+- 当前分析模型：五类固定模型（VWAP反抽/VAH回收/VAL回收/POC拒绝/扫流动性回收/突破接受）底线 + 12模型拼接引擎上限（EMA趋势+费率极端+多空拥挤+Taker背离+OI背离+M_VWAP磁吸+关联套利等）
+- 多模型引擎工作流：固定模型逐一过筛→无匹配→data_gatherer | multi_model_engine（12模型独立打分→合并方向）→事件禁做优先
+- 每张卡必须用仓位计算器：本金、风险、入场、止损、数量、名义、保证金、最大亏损、R:R
+- 操作前必须输出执行检查清单：关键位、收盘确认、CVD配合、价格置信、位信、R:R、日内风控，任一硬条件不足则降为 B等待或 X禁做
+- 必须固定输出禁止交易原因：数据C级、R:R不足、位信不足、远离关键位、催化冲突、风控锁定；没有禁止原因也写“暂无硬性禁做，仍等触发确认”
+- 数据可信度 A/B/C；社区情绪只调仓位，不覆盖结构
+- 除固定英文术语外，其余字段尽量中文
+- 粗体价格 · 注意：Markdown表格必须保持手机窄列；Telegram 推送表格≤3列，且通过 RichMarkdown/sendRichMessage 发送
+
+## 融合模块（v6.9 · 2026-06-18 接入）
+
+以下模块已集成到现有管线，分析卡/监控自动调用：
+
+| 模块 | 文件 | 接入位置 | 作用 |
+|------|------|----------|------|
+| 评分引擎 | `scripts/scoring_engine.py` | `auto_card.py` ⑥b | 14分机器评分替代人工13分 |
+| 风险宪法 | `scripts/risk_constitution.py` | `行情守望.py` risk_gate | Kelly仓位+日回撤熔断+连续亏损暂停+动态回撤降级 |
+| 五模型匹配 | `scripts/five_model_matcher.py` | `智能更新结构.py` build_levels_v2 | 真实入场/止损/止盈替代 price*0.992 假位 |
+| 市场体制 | `scripts/regime_classifier.py` | `auto_card.py` 博弈段 | VIX+波动率+F&G→体制分类+交易建议 |
+| 结构检测 | `scripts/structure_detector.py` | 独立可用 | 摆动高/低点+支撑阻力聚类 |
+| **VWAP/EMA引擎** | `scripts/vwap_ema_cvd_engine.py` | `auto_card.py` 环境⑧/结构段 · `行情守望.py` 警报 | VWAP+1σ/2σ·EMA9/21/34/55云·CVD吸收·ATR |
+| CVD趋势线突破 | `scripts/orderflow_absorption.py` | 独立调用 | CVD趋势线线性回归·LEADING信号（早于价格2-5K） |
+
+### 棠溪自定义Pine参数对齐（强制）
+
+VWAP·EMA·CVD计算必须对齐以下 Pine 源码参数（`SVP+ICT+VWAP+CVD.txt`）：
+- VWAP: `VWAP_SD_MULT_1=1.0` `VWAP_SD_MULT_2=2.0`
+- EMA: 9/21快速云 · 34/55慢速云
+- CVD: `CVD_ABSORB_LEN=12` `CVD_ABSORB_PRICE_ATR=0.8` `CVD_ABSORB_DELTA_MULT=3.0` `CVD_SLOPE_LEN=5` `CVD_DIVERGENCE_LEN=20`
+- 关键位: `A_KEY_LEVEL_ATR=0.60` `CVD_KEY_LEVEL_ATR=0.45`
+
+### 新指标三通道注入铁律
+
+新增指标数据必须同时注入：
+1. **完整卡** — `render_card_locked()` 环境段/结构段
+2. **极简卡** — `_compact_card()` 追加单行
+3. **实时警报** — `行情守望.py` allow_push块内注入·追加到macro_text
+
+### 双指标直出分析卡（v1.0 · 2026-06-27）
+
+**原则：两个TV指标已内置完整决策数据，以指标为准，不再重算。**
+
+**双管线并行架构（2026-06-27 更新）：**
+- **TV路径**：主指标DMI表 + 副指标行动格 → TV卡（push模式，6-8行）
+- **Binance引擎路径**：价格/K线/CVD/Taker/Funding → v8完整卡（force_full=True，50+行）
+- **两路径不互斥**：force_full=False 且双指标齐全 → TV卡优先；force_full=True → 始终生成v8完整卡备用
+
+**集成位置：** `hermes/scripts/auto_card.py::render_card_locked()`
+- TV缓存加载 → `_tv_pine` → 解析双表(`_parse_tv_dmi_table` + `_parse_tv_sub_table`) + 构建主数据(`_build_tv_main_data`) → 存入 `_tv_main`/`_tv_sub`
+- 渲染决策：`force_full=False` + `_tv_main` + `_tv_sub` 齐全 → `render_tv_card(main, sub, symbol, price, "push")`
+
+**渲染器：** `scripts/render_tv_card.py`（注意：在 `scripts/` 顶层，不在 `hermes/scripts/`）
+- `render_tv_card(main, sub, symbol, price, mode)` — Push(6行)/Full(15行)
+- `extract_from_tv_data(tv_data)` — TV MCP原始数据→双指标dict
+- 从 auto_card.py 导入: `sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))` → `from render_tv_card import render_tv_card`
+
+**字段映射：** 权威在仓内 `docs/tv-indicator-field-map.md` + 代码契约 `scripts/tv_indicator_contract.py`（本 skill 的 `references/tv-dual-indicator-field-map.md` 已改为指针，不再维护字段清单）。
+
+### 社区2026共识：VWAP+EMA+CVD三合一=黄金标准
+
+价格在VWAP上下(机构方向) + EMA排列(趋势强度) + CVD确认(假突破过滤) = 3/4对齐才高置信。X/Reddit/Bookmap多源确认。
+
+### 五模型入场速查
+
+```python
+from five_model_matcher import generate_all_setups
+setups = generate_all_setups(
+    current_price=63980,
+    vwap=64308, vwap_band1=63988, vwap_band2=63668,
+    vah=64806, val=63985, poc=64684,
+    ema9=64066, ema21=64266,
+    recent_high=66192, recent_low=63696,
+    atr=450, cvd_value=-469, cvd_slope=-102.5,
+)
+# → 最佳: VWAP反抽·做空 @64308 · R:R 3.3 · 位信78
+```
+
+## 用户指标专辑（2026-07-02 更新 · 双指标体系）
+
+### 生产指标（双指标 · 以这两个为准）
+
+用户使用两个自定义Pine指标，分析卡必须基于这两个指标的实时数据输出。
+
+**🔴 2026-09-11 起权威源（高于本文件内所有旧段落）**：`docs/tv-indicator-field-map.md` **v3.0**；代码侧唯一契约 `scripts/tv_indicator_contract.py`（改字段先改它）；对齐守卫 `scripts/tv_indicator_alignment_check.py`（改完指标必跑，退出码 0 才算对齐）。
+
+| 指标 | 行数 | 行动格 | 核心输出 |
+|------|------|------|----------|
+| 主指标 `SVP+ICT+VWAP+CVD` | 3557 | **13 行**：位置/结论/方向/路径/**风控**/CVD/OI/协同/结构/磁吸↑/磁吸↓/前位/现位 | 唯一执行授权 |
+| 副指标 `Volume Aggregated Spot & Futures` | 966 | **6 行**：信号/结论/流向/持仓/量能/操作 | 只确认/降级/否决 |
+
+定版源文件：主 `SVP_主指标_空格修正_20260911.pine`（sha256[:24]=`68a34fc3`，= `outputs/pine_20260905/SVP_audit_fixed17_20260910.pine`）、副 `AggVol_副指标_最终版_20260911.pine`（sha256[:24]=`c4c563ef`，= `AggVol_audit_fixed14_20260910.pine`）。
+
+v1.2 及更早的 10 行旧行名（进场/止损/目标/确认/核对）与 `MCP CVD Value`/`OI Total`/`Estimated CVD Value` **全部作废**：定版已把 入场·止损·目标·R:R 折进「风控」行（`入X·止Y·n.nA·标Z·n.nR`）——只认字面「风控」会在观察态漏读价格。
+
+**渲染器位置：** `D:\Hermes agent\scripts\render_tv_card.py`（注意：在 `scripts/` 顶层，不是 `hermes/scripts/`。`auto_card.py` 中导入需 `sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))`）
+
+**候选价三条铁律（`render_tv_card._candidate_view`）：**
+1. 只读 `FinalVerdict.watch_*` 元组，**永不回落**到原始 entry/stop/target；
+2. 元组不全 → 卡面写「候选数据不完整」，不补半个订单；
+3. R:R 由 watch 元组**现算**（`|标-入|/|入-止|`），不信上游 `rr` 字段。
+
+`_render_push` 的唯一主推行只有三种形态：`⭐主推 多/空`（GO-A+几何有效）、`⭐主推 等待`（WAIT）、`⭐主推 禁做`（NO-GO/X）。
+未授权时「风控」「路径」两行经 `_redact_order_prices` 自动剥掉 `入/止/标/候选` 数字与 `x.xA / x.xR`；磁吸/结构/现位里的价位是行情事实，不剥。
+
+**双指标直出渲染器：** `scripts/render_tv_card.py`
+- `render_tv_card(main, sub, symbol, price, mode="push"|"full")` — 直接从指标数据渲染分析卡
+- `extract_from_tv_data(tv_data)` — 从TV MCP原始数据提取主/副指标字段
+- 输出示例见 `docs/tv-indicator-field-map.md`
+
+**双指标合成原则：**
+```text
+主指标 = 能不能交易、在哪交易、错在哪
+副指标 = 这次运动真不真、有没有新钱、能不能追
+```
+
+**主副裁决规则：**
+- 主A + 副强共振(≥3/4) + OI/CVD顺向 → A机会，可盯执行。
+- 主A + 副CVD不配/缩量/回补 → 降B，等二次确认。
+- 主B + 副强共振 + 价格贴关键位 → B偏A，重点盯触发。
+- 主B + 副弱/高周逆 → B等待，轻仓或不做。
+- 主X + 副强 → 不直接反向，拆冲突，等X改善。
+- 主C等待 + 副真实下跌/实涨 + 价格贴关键位 → 给主倾向 + 破/守两路。
+
+**副指标行动格 6 行（v13）：**
+信号(`panelStateA`：🔴S3冲突/S1支持多/S2支持空/S4降权/S0无效＋共振n/4)·结论(`actText`)·流向(`flowPanelTxtA`：锚期·采样口径·近NK买卖·净n%·滚动同向/逆)·持仓(`oiTxtA`：新多/新空/回补/平仓＋n.nn%＋同n%＋滚NK)·量能(`volTxtA`：放量/缩量/平量＋xN.N＋合n%＋同步放量n/5)·操作(`comboTxt`)。
+
+**主指标行动格 13 行（v13）：**
+位置·结论(`actionStateText`)·方向(`panelDirVal`)·路径·**风控**（授权等级＋`入/止/标/n.nA/n.nR`）·CVD·OI·协同(`syncVerdict`)·结构·磁吸↑(`pnlMagUp`)·磁吸↓(`pnlMagDn`)·前位·现位。
+`前位`=名称·价格·生命周期(已破/过期/被替代)·角色(仍撑/破转阻/仍阻/破转撑)·距离·退役时刻；`现位`=方向·回踩/反抽位·等什么·定时刻。
+风控行的授权是 **3 个标签 + 1 个禁做值**（源码 L3396 `riskLabelText` / `riskValText`）：
+
+| 行标签 | 行值 | 结论 | 价格 |
+|---|---|---|---|
+| `风控` | `入X·止Y·n.nA·标Z·n.nR` | 已授权；仍须 A 级+三件套+几何有效才 GO-A | 只从 DW `MCP Entry/Stop/Target Price` 三件套取，缺一即报错，**不回落到表内四舍五入价** |
+| `风控·观察` | 观察价（`pendingPlan`） | **WAIT**，未授权 | 只进 `candidate_*`/卡面「【人工候选，未授权】」 |
+| `风控·未授权` | 观察价（副 S3 冲突） | **WAIT**，未授权 | 同上 |
+| `风控` | `禁做·不出价`（`setupX`） | **NO-GO** 硬阻断 | 一律不出价 |
+
+`禁做·不出价` 是 **行值**不是行标签；旧载荷可能放在标签位，`SVP_FORBIDDEN_LABELS` 两个位置都按禁做处理（fail-closed）。
+**标签一旦出现，任何数字等级都不得把它升级成可执行** —— `decision_loop.resolve_final_verdict` 的 `svp_authorization` 闸（`gates["risk"]`：禁做红 / 观察·未授权黄 / 授权绿）；键**缺失**=旧载荷，不加阻断。
+
+**核心原则：**
+- 两个指标已内置完整的结构/位置/OI/CVD/量能/爆仓/DMI决策 — **先读指标表格和行动格，不自创同级评分覆盖它们**。
+- 主指标负责方向和交易计划；副指标负责确认质量与降级/禁止追单。
+- 简化卡直接读指标表格/行动格 → 渲染；完整卡再叠加外部Binance/Funding/Taker/Depth/事件验证。
+- 推送卡≤8行，完整卡≤20行；第一轮可全量，后续“现在呢”只写3-5行变化+截图。
+
+**⚠ 磁吸位 ≠ 完整关键位集（用户 2026-08-28 纠正 · P0）**：用户明确"还有图表上面的那些关键位呢，它不显示在磁吸位的"。**磁吸↑/磁吸↓ 只是指标用加权分筛出的最优 2 个，绝不等同于图表上画着的全部关键位。** 推荐监测位/关键位矩阵必须**五源齐读**才算完整集：`data_get_pine_lines`(全部水平线) + `data_get_pine_labels`(带名标注) + `data_get_pine_boxes`(FVG/OB/Breaker框) + `data_get_study_values`(POC/VAH/VAL/nPOC/DO/周月VWAP) + `data_get_pine_tables`(行动格磁吸/现位/路径协同)。只读磁吸 2 个会漏掉：会话位（上周/周四/周五/当日高低）、FVG 缺口、OB/Breaker 订单块、HTF 高周期共振位、BOS/CHoCH 结构位。完整七层关键位系统 + `keylevels_collect.py` 六层分级采集器见 `tangxi-tg-delivery-format/references/svp-keylevel-six-layer-and-guard.md`。
+- **`fetch_tv_mcp.py` 默认缺 `get_pine_boxes`/`get_pine_tables`**：读 FVG/OB 框和行动格前需按 `get_pine_labels` 的写法补这两个 async 函数（`data_get_pine_boxes`/`data_get_pine_tables` 带 `study_filter`）。
+- **按层去重陷阱**：候选位按 `round(price/100)` 去重会**吞掉与会话位同价的磁吸位**（磁吸 81,500 vs 会话·周五亚高 81,500）——必须按 `(layer, round(price/100))` 去重，跨层保留（磁吸位自带评分价值）。
+
+**v13 Data Window：**
+主指标：`MCP Side Code/Grade Code/Setup Score/Entry/Stop/Target Price`、`MCP CVD Method Code`、`MCP Quality Code`、`MCP FVG/OB Quality Score`、**`MCP RR Ratio`、`MCP Entry Valid Code`、`MCP NoTrade Reason Code`、`MCP Execution/Trigger/Regime/Contract Pack`、`MCP Evidence Pack/Bar Time/Close Time`**、`MCP StructPack`。
+副指标：`HALDRO Valid Code`、`OI Change % (Normalized)`、`CVD Value`、`CVD Method/Quality Code`、`LSR`、`Volume Ratio`、`Coverage Exchanges/Spot/Perp`、`Coverage Feed Mode`、`Exchange Dominance %`、`Confirm Score`、`Composite`、**`Basic Packed Bus`、`HALDRO State Pack`、`OI Price Direction`、`OI Breadth`、`OI Agreement %`、`HALDRO OI Pack`、`OI Dispersion Ratio`、`HALDRO Freshness Pack`、`Stale Venue Count`、`HALDRO Contract Pack`、`HALDRO Flow Pack`、`CVD Anchor Value`**。
+读取优先级：行动格文字 > MCP 编码兜底 > 外部源校验。**`MCP NoTrade Reason Code` 是位掩码**（1 HTF冲突X / 2 过热追高 / 4 低流动 / 8 价格几何 / 16 R:R不足 / 32 CVD质量 / 64 ADR禁追 / 128 溢折价 / 256 未收线 / 512 触发不新鲜 / 1024 副指标冲突降权），解码器在 `scripts/tv_indicator_contract.py`：`decode_no_trade()` —— 分析卡必须写「为什么不能做」的全量原因链，不能只抄面板摘要。
+
+**指标下一版优化证据矩阵：** `references/indicator-optimization-evidence-matrix-2026-07-10.md`
+- 基于官方文档、Release Notes、社区高赞脚本的完整证据矩阵
+- 直接给出建议/不建议排序、实施路线图、关键约束、一句话决策清单
+- 指导指标迭代决策的权威参考文档
+
+**TV附加研究：** 当前生产布局以主指标 + 副指标 Volume Aggregated 为准；不要假设一定存在独立 `Open Interest` 研究。加密品种的 OI 优先从副指标 `持仓/协同` 行、`HALDRO State Pack`、`OI Breadth`、`OI Agreement %`、`OI Dispersion Ratio`、`Coverage Exchanges` 与 Binance OI 交叉验证；若 `chart_get_state` 实际存在独立 OI 窗格再额外读取。截图必须包含主指标行动格、副指标行动格/订单流窗格、右侧价格轴。
+
+**多市场解释：**
+- 加密：副指标权重高，重点看 OI价仓四象限、Spot/Perp占比、CVD、爆仓。
+- 贵金属：主看ICT会话+VWAP+SVP+DXY/US10Y；副指标仅在TV成交/期货代理可靠时参考，不能套加密Funding逻辑。
+- 外汇：主看VWAP+会话+HTF+日历；副指标tick/聚合量低权重。
+- 股票/指数：主看SVP+VWAP+成交量+财报/VIX；副指标加密交易所聚合量通常不可用，不可误读。
+- 期货/期权标的：主看SVP+VWAP+真实OI/成交量+事件；副指标只有读取到对应市场数据才参与。
+
+**Data Window 编码字段旧公式（仅当TV实际返回时使用）：**
+
+| 编码字段 | 解码公式 | 示例 | 含义 |
+|---------|---------|------|------|
+| Magnet+ICT+Score | Mag*1e6 + DistA*1e3 + Score/1e3 + ICT/1e6 | 58,288,003,168.1 | 磁吸价=58,288 · 距=3.17ATR |
+| Scores(Loc*100+Cfm*10+Ext) | Loc*100 + Cfm*10 + Ext | 330=Loc3/Cfm3/Ext0 | 位置3/确认3/延展0 |
+| Risk(R*1e4+D*1e2+W) | Risk%*1e4 + DailyStop%*1e2 + WeeklyReduce% | 10,306=R1/D3/W6 | 单笔1%/日止3%/周减6% |
+| Replay Side+Grade | Side*10 + Grade | 2.0=Side0/Grade2 | Side:1多/-1空/9X/0无; Grade:3A/2B/1C/-1X |
+| ICT Count | Swept*100 + Active | 106=Swept1/Active6 | 1已扫6活跃 |
+
+**等级系统：** A/B/C/X以主指标行动格为准，副指标只负责确认、降级、反指警戒。B等待必须写“偏哪边、等什么、错在哪”。
+
+**市场自适应（主指标源码L31、L250、L2779）：** 自动/贵金属/外汇/加密/股票/期权标的/期货/指数/通用；分析时按市场重解释，不把加密逻辑套所有品种。
+
+### TV MCP 连接故障处理
+
+当 `tv_health_check` 返回 `CDP connection failed` 时：
+
+1. **优先用 `mcp_tradingview_tv_launch` 工具**（自动携带 `--remote-debugging-port` 启动，自动检测TV安装路径，支持 kill_existing）：`tv_launch(kill_existing=true)` → 等 8-10s → 再 `tv_health_check`
+2. 如果 `tv_health_check` 返回 `cdp_connected: true` 但 `api_available: false` → TV还在启动中，等 5-8s 重试
+3. 若 `tv_launch` 失败或TV已运行但无CDP（用户手动启动的TV不带 `--remote-debugging-port`）：`taskkill /F /IM TradingView.exe` → 再调 `tv_launch(kill_existing=true)`
+4. 若MCP server提示 `unreachable`（整个MCP server进程挂了），等~55秒自动恢复重试，或让用户重启 Hermes
+5. 截图前确保TV窗口最大化（ui_fullscreen工具）
+6. **注意**：`tv_health_check` 返回 `cdp_connected: true` 且 chart_symbol 正确时，即使 `api_available: false` 也可能是前次会话残留的TV窗口未完全加载。先调一次 `chart_get_state` 确认品种/周期正确，再开始分析。
+
+### TV MCP 品种静默漂移检测与恢复协议（2026-06-28 实战）
+
+本会话多次发生：`chart_set_symbol` 返回成功、`chart_get_state` 显示目标品种，但 `study_values` 返回的 VWAP/EMA/POC 却是前一个品种的数据（如 HYPE $62 切换后读到 BTC $60,000）。这是 TV 指标引擎未跟随品种切换刷新所致，**不是个人操作失误**。
+
+**检测方法**（每次读取 data 前执行）：
+1. 取 study_values 的 VWAP 或 EMA，与预期品种价格范围对比
+2. 启发式标度校验：价格数量级/区间与预期品种一致？（如 BTC=$60K vs HYPE=$62 → 相差~1000x）
+3. 相差 > 10x 或明显属于另一品种区间 → 判定为 stale 数据
+
+**恢复流程**（检测到 stale 后）：
+```
+chart_set_symbol(预期品种)         # 重新指定品种
+chart_get_state()                  # 确认 symbol 已切换
+chart_set_timeframe("5")           # 强制刷新指标
+sleep 5s                           # 等待重算
+chart_get_state()                  # 再次确认 symbol 未再偏移
+data_get_study_values()            # 读 VWAP 做二次校验
+if 仍不匹配：chart_set_timeframe("15") → sleep 5s → chart_get_state → 重读
+```
+如果反复失败，`taskkill /F /IM TradingView.exe` → `tv_launch(kill_existing=true)` 重启 TV 进程。
+
+**根本预防**：
+- 每次 chart_set_symbol 后、读任何数据前，先调 chart_get_state 比对 symbol
+- 每个周期的数据读完后立即校验 VWAP 数量级，不等最后截图才发现
+- 加密品种参考价：BTC~$60K，ETH~$1.5K，SOL~$70，HYPE~$60，RE~$0.6
+- 发现数量级不对立即走恢复流程，不要继续读并假装数据有效
+
+### 多周期采集范围铁律（2026-06-29 用户纠正P0）
+
+分析 BTC/ETH 等加密品种时，必须采集 **5m·15m·1h·4h·1D 五个周期**，不可跳过任一周期。
+- 即使某些周期 SVP 不渲染或加载慢，也必须尝试读取、记录可用数据
+- 输出卡的多周期定位表必须展示所有五个周期及其状态
+
+### SVP 指标多周期渲染规则（2026-07-03 更新·BTC实盘验证）
+
+SVP v10 在主流市值品种（BTC/ETH/SOL）上渲染覆盖已显著提升。**2026-07-03 实盘验证：5m/1h/4h 均返回完整行动格+study_values。** 小市值山寨渲染覆盖仍按市值分级（见小市值山寨节）。
+
+| 周期 | 主SVP行动格 | 主SVP study_values | 副Volume Aggregated | 备注 |
+|:----:|:----------:|:------------------:|:-------------------:|:----|
+| 5m | ✅完整 | ✅完整 | ✅完整 | 含行动格+Data Window+MCP编码 |
+| 15m | ✅完整 | ✅完整 | ✅完整 | 加密主执行周期 |
+| 1h | ✅完整 | ✅完整 | ✅完整 | 含VWAP/EMA/VAH/VAL/POC |
+| 4h | ✅完整 | ✅完整 | ✅完整 | 趋势主周期 |
+| 1D | ⚠部分 | ⚠不稳定 | ⚠部分 | 读前必须chart_get_state校验 |
+
+**实操协议：**
+1. 5m → SVP 已完整渲染，全量读取（study_values + pine_tables + labels）。不再认「只能读副指标」
+2. 15m → 全量读取（study_values + pine_tables + lines + boxes + labels）
+3. 1h → 全量读取，与4h VWAP交叉验证方向一致性
+4. 4h → 全量读取，趋势核心
+5. 1D → 读前 chart_get_state 校验 symbol 仍是目标品种；仅读 OHLCV summary + pine_tables（study_values 在 D 上仍不稳定）
+6. 小市值山寨退化为仅15m承载时，标注「SVP仅15m渲染」，不套用蓝筹全周期模板
+
+### TV MCP 多周期读取协议（定版双指标 2026-09-11 + ref-level cron update）
+
+**新增：Ref-level snapshot protocol (lightweight no_agent cron for monitor_levels.json / btc_ref_levels.json)**
+
+**Canonical 10-step sequence (verified live 2026-07-02)**:
+1. `mcp_tradingview_tv_health_check()`
+2. If CDP failed → `mcp_tradingview_tv_launch(kill_existing=true)`
+3. Re-check health
+4. `mcp_tradingview_chart_set_symbol("BINANCE:BTCUSDT.P")`
+5. `mcp_tradingview_chart_get_state()` (confirm symbol + resolution + studies loaded, especially "SVP+ICT+VWAP+CVD")
+6. Terminal sleep/wait 8 seconds (or equivalent)
+7. `mcp_tradingview_chart_get_state()` again (guard against stale session)
+8. `mcp_tradingview_data_get_study_values()` → extract `S VWAP`, `VAH Price`, `VAL Price`, `POC Price`, `W VWAP Price`, `DO Price` (and any other SVP plots)
+9. `mcp_tradingview_data_get_ohlcv(count=100, summary=true)` → recent_high / recent_low from summary
+10. Python/execute_code: clean numeric values (strip commas), add `updated_at: ISO`, write to `data/btc_ref_levels.json` (or symbol-specific), print success, final response exactly `[SILENT]` (no other output)
+
+**Critical guards**:
+- Always confirm symbol via chart_get_state after set_symbol and after wait — prevents silent drift to previous chart data.
+- study_values reliably supplied VAH/VAL/POC on this run (no pine_labels fallback needed, but keep fallback code for robustness).
+- On pure success (no new analysis or alert), respond with exactly `[SILENT]` to suppress delivery.
+- This pattern is now mandatory for all ref-level cron jobs (see references/ref-level-snapshot-pattern.md for full updated doc).
+
+**Pitfall (2026-07-02)**: tv_health_check may return api_available=false even after launch if TV is still initializing the chart. The 8s wait + second chart_get_state resolves this reliably. Do not skip the confirmation step.
+
+**Pitfall (2026-08-29)**: pydantic-core 2.48.0 与 pydantic 2.13.4 不兼容（要求 2.46.4），导致整个 TradingView MCP 管道瘫痪（fetch_tv_mcp.py 等所有 stdio MCP 客户端均崩溃）。
+- **症状**: `tv_health_check` 失败、btc_ref_levels_sync.py 报 `TV MCP 模块不可用: The installed pydantic-core version (2.48.0) is incompatible...`
+- **排查**: `pip show pydantic pydantic-core` → 发现 pydantic=2.13.4 但 pydantic-core=2.48.0（应为 2.46.4）
+- **修复**: `pip uninstall -y pydantic-core==2.48.0 && pip install 'pydantic-core==2.46.4'`
+- **预防**: 每次分析前先 `tv_health_check` 验证 CDP 连接 + API 可用；若失败先修复版本冲突再重试 TV 连接。此版本冲突是 TV MCP 不可用的**首因**，不应误判为 TV Desktop 进程或网络问题。
+
+## 2026-08-29 大优化会话（棠溪交易系统全面重构）
+
+### 会话新增知识（P0 优先，必须遵守）
+
+**1. 脚本清理铁律（2026-08-29）**
+
+棠溪交易系统 scripts/ 目录长期膨胀（188 个脚本），大量脚本 30 天+ 未更新、无外部引用、无 cron 引用。**清理原则**：
+- **先评估再删除**：按三个维度评分 — 被本地脚本 import 数量、被 cron 引用数量、data/ 目录 30 天内是否有活跃输出文件
+- **分类处理**：
+  - 🟢 有引用/活跃输出 → **保留**
+  - 🟡 30 天内有更新但无引用 → 逐个判断是否必要
+  - 🔴 无引用 + 30 天+ 未更新 → **归档到 `scripts/_disabled_YYYYMMDD/`**
+- **归档而非删除**：用 `shutil.move` 移到 `_disabled/` 子目录，保留可回滚
+- **验证**：归档后确认 `py_compile.compile()` 语法通过 + 核心脚本（auto_card.py / fetch_tv_mcp.py 等）import 链完整
+
+**2. API 单一化策略（2026-08-29 用户确认）**
+
+棠溪明确：**只用 Binance API**，其他源（CoinGecko/Polymarket/Deribit/Dune/COT/X/Coinglass/Reddit/jin10 部分）一律降级不用。**禁用方式**：
+- **注释禁用而非删除文件** — 在每个非 Binance URL 赋值行前加 `# TANGXI-DISABLED-NON-BINANCE 2026-08-29: <domain>` 注释
+- **保留下游引用** — 变量赋值改为 `None`，保持语法正确
+- **仅保留三类域名**：`fapi.binance.com` / `api.binance.com` / `data-api.binance.vision`
+- **验证**：`py_compile.compile()` 确认语法通过
+
+**3. 数据驱动决策优先（2026-08-29）**
+
+用户明确不接受自动交易/自动下单。**系统角色**：决策驾驶舱，不是自动交易。
+- 主副指标只用于**人工辅助决策**：解释当前市场状态、给出明确倾向、告诉下一步等待/确认/失效条件
+- **绝对禁止**自动下单、自动执行
+
+**4. TV MCP 版本冲突根因（2026-08-29 实战）**
+
+`fetch_tv_mcp.py` 开头有错误的 hermes venv 路径注入：
+```python
+# 原（有bug）:
+hermes_venv = Path(os.path.expanduser("~/AppData/Local/hermes/hermes-agent/venv/Lib/site-packages"))
+sys.path.insert(0, str(hermes_venv))
+# 这会加载错误的 pydantic_core 2.48.0（应为 hermes-agent venv 的 2.46.4）
+```
+**修复**: 注释掉这两行，使用默认 Python 环境。详见 `references/tv-mcp-connection-fix.md`。
+
+**5. 多因子评分替代单条件（2026-08-29 强化）**
+
+用户要求"多角度、75% 胜率"。**多因子评分公式**：
+```
+因子集合 = 价格 vs VWAP + EMA + Taker + 大户多空 + 24h回撤 + K线趋势
+累加 >= 75 分才推送
+因子固定分不浮动
+```
+
+**6. 追踪更新必须拉 Binance 全方向票（2026-08-29 用户纠正）**
+
+追踪档"现在呢"绝不只是拉现价+K线就出卡。**必须同时刷新六件套做交叉核验**：
+- OI 扩仓/减仓方向
+- 资金费率
+- 大户多空比
+- 全局多空比
+- Taker 买卖比
+- Depth 买卖墙比
+
+**7. cron 任务分类治理（2026-08-29）**
+
+- **保留**：核心 9 个 cron（BTC关键位同步、BTC守护看门狗、XAU TV现场同步、BTC关键位守护看门狗、BTC关键位到价分析推送、数据新鲜度看门狗、行情守望看门狗、TV Desktop保活、liq_listener_btcusdt）
+- **禁用**：16 个非 Binance/不必要 cron（Orion/Dune/Deribit/COT/X情绪/清算/稳定币/QLib/执行桥/X情绪LLM/宏观Poly/运维聚合/作战室/黄金宏观/影子结果标注）
+- **原则**：保留文件不删，只在 cron 配置中设 `enabled: false`
+
+**8. 脚本路径解析陷阱（2026-08-29）**
+
+no-agent cron 的脚本解析为 `{workdir}/scripts/{script_path}`。脚本不在 `scripts/` 直接目录时，cron 找不到。修复：将脚本复制到 `{workdir}/scripts/`，cron script 设为相对路径。
+
+**9. 完整性备注铁律（2026-08-29 强化）**
+
+每张卡必须有完整性备注，列出 10 步管线状态；不完整项必须备注原因（如 x_search不可用→web替代、corr数据不足、CG Pro阻断），**禁止假装完整**。用户明确："不是完整的要备注"。
+
+**Pitfall (2026-08-29)**: 非 Binance 域名全源禁用时，采用「注释禁用不删文件」模式：
+- 在每个非 Binance URL 赋值行前加 `# TANGXI-DISABLED-NON-BINANCE 2026-08-29: <domain>` 注释
+- 保留下游引用（snap["coingecko"] 等），但赋值改为 `None`，保持语法正确
+- 文件顶部加入全局开关 `_NON_BINANCE_DISABLED = True` 便于批量回滚
+- 备份原文件至 `.bak.pre-binance-only.YYYYMMDD` 以便恢复
+- 验证：`py_compile.compile()` 确保语法通过
+- **仅保留** fapi.binance.com / api.binance.com / data-api.binance.vision 三类域名
+
+1. **先load相关skills**：`tradingview-indicator-analysis`（本skill） + `binance-trading`（加密分析必须加载） + `crypto-onchain-flow`（链上框架） + `market-regime-classifier`（ADX/波动率分类）。**加密分析全部加载，不要跳步。**
+2. **加密分析七步全源管线**（见 `crypto-multisource-analysis` skill）：
+   - ① TV MCP 主分析（多周期 + SVP + 行动格 + 截图）
+   - ② Binance MCP 交叉验证（价格/OI/多空比/费率/Taker）
+   - ③ `depth_wall.py` 大额挂单墙（免费Binance depth端点，零依赖）
+   - ④ 金十 MCP 财经日历（`jin10_list_calendar`）+ 快讯搜索（`jin10_search_flash`）
+   - ⑤ 恐惧贪婪指数（`web_extract alternative.me/fng/`）
+   - ⑥ CoinGecko（`financekit_crypto_price`）
+   - ⑦ TV Depth/DOM（`tradingview_depth_get`）
+   - **不再漏步**：用户已明确纠正\"为什么不用我有的\"，每个加密分析必须跑全七步。
+2. 先 `tv_health_check` 确认连接
+3. 读 `chart_get_state` 确认品种和已加载指标（应有 SVP v10 + Volume + OI）
+4. **加密分析必做Binance MCP交叉验证**（在TV数据采集的同时，批调用Binance MCP）：
+   - `get_price(symbol)` — 校验TV现价
+   - `get_open_interest_history(symbol)` — OI变化方向
+   - `get_long_short_ratio(symbol)` — 大户多空比（反指信号）
+   - `get_global_long_short(symbol)` — 全局多空比
+   - `get_funding_rate_history(symbol)` — 费率趋势
+   - `get_klines(symbol, interval, limit)` — 交叉验证K线数据
+   - 将Binance数据与TV SVP指标交叉对比：价格±0.3%以内视为一致✅；OI+多空比+费率三件套写入分析卡单独行
+5. 从当前周期开始（默认15m），批读 `study_values` + `pine_tables` + `pine_labels` + `pine_lines` + `data_get_ohlcv(summary=true)`
+6. 切周期（1h→4h），每个周期 wait+retry study_values 直到SVP值出现（3s间隔×3次）
+   - **区分「加载延迟」和「周期跳过」**：若 retry 3次后 study_values 仍无该研究的数据（仅有 Volume/OI），但相邻周期（上/下一个TF）有数据 → 该指标可能不在此周期渲染。记录"指标在{N}周期不渲染"到分析卡备注，切换到下一个有效周期继续，不要卡住。
+   - **⚠ study_values缺失时pine_tables仍可用**：实测某些TF（如1h）SVP可能不plot study_values但pine_tables行动格齐全。这是正常行为——tables/labels/lines独立于study_values渲染。遇到时：读pine_tables获取行动格数据，不因study_values缺失跳过该周期。
+   - **交叉验证**：若 study_values 返回的 VWAP/EMA 与价格数量级不匹配（如 BTC $64K 显示为 $4K），切回已知有效周期再切回强制刷新。
+5. 读完高周期后切回执行周期（15m）截图
+6. 截图前调 `ui_fullscreen` 最大化，`region="full"`
+
+### Pitfalls（v6.9 新增）
+
+- **🔴 X等级时③计划行消失bug（2026-06-23 发现并修复）**：卡片渲染器中，`direction = "×禁做"` 时，`if "做多" in direction or "等待" in direction` 恒为 False → ③计划行(守支撑/破阻力)整行跳过。修复：永远渲染计划行，X等级时追加`⚠X禁做`标注而非跳过。参考 `scripts/monitor/btc_card_gen.py::build_card()` 的③部分。
+- **⚠ 监视/监控脚本膨胀陷阱（2026-06-23 根因）**：`scripts/` 下同功能出现3+个竞争脚本（如 btc_alert_watch.py + btc_alert_watch_v3.py + btc_vwap_daemon.py + btc_fast_daemon.py + btc_price_watchdog.py）→ 互相覆盖/用户不知道用哪个/推送不工作。**修复：** 同一功能只保留1个脚本，其余归档到 `_archive/`。新建脚本必须先去重。详见 `references/2026-06-23-monitoring-system-redesign.md` 和 `references/dual-noagent-monitoring-architecture.md`。
+- **🔴 删除运行中的脚本必须同时杀进程（2026-06-28 实战）**：用户要求删除某个监控/守护脚本时，`rm` 只删磁盘文件。已加载到内存的 Python 进程会继续运行并推送——因为代码已加载到内存，不受文件删除影响。**正确流程**：
+  1. `wmic path win32_process where "name='python.exe'" get ProcessId,CommandLine` 或 `powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' and CommandLine like '%脚本名%'\" | Select-Object ProcessId"` 查找正在运行的脚本进程
+  2. `taskkill /F /PID <pid>` 逐个杀掉（Windows）
+  3. 确认进程已消失：`powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' and CommandLine like '%脚本名%'\""` 返回空
+  4. 再删除脚本文件本身
+  5. 同时删除相关状态文件（`data/*_state.json`、`data/*_alert_state.json` 等）
+  6. 清理 cron 或计划任务引用（`hermes cron list`、`schtasks /query`）
+  *如果不杀进程，用户会看到"删了还出"的困惑——不是幽灵，是内存里的进程还在跑。*
+- **⚠ 警报推送格式 vs 分析卡格式（2026-06-23 用户纠正）**: 用户说"警报看不懂，直白一点"。**区分两种场景**：
+  - **快速价格告警/区间通知**：用自然语言，不要编号。例如：
+    ```
+    ↓ BTC 62460，跌到大底区(62172-62472)
+    62,272是周级别大底，守住做多64K+，跌破看61K
+    15分走跌、量正常
+    ```
+  - **正式分析卡/决策卡**：用 v4.2 格式（首行↑↓○×+①②③编号），这是用户给别人看的完整分析。
+  - **错误示范**（被纠正的旧格式）：用户评价"看不懂"。快速告警不需要序号和反引号格式，直接说人话。
+- **⚠ TV MCP 指标加载延迟陷阱（2026-06-23 用户纠正）**: 用户说"多周期分析太快了，指标还没有加载完成"。`chart_set_timeframe` 后指标需要时间计算，特别是高周期：
+  - 15m: 至少等待15-30s
+  - 1h: 至少等待 8s
+  - 4h: 至少等待 12s
+  - **必须加 retry 循环**：读取 `study_values` 后检查是否包含 `VWAP` 值，没有则等待 3s 重读，最多重试 3 次。不要假设 2-3s 后数据已就绪。
+  - 参考实现：`scripts/monitor/btc_card_gen.py` 的 `get_tv_data()` 函数。
+- **⚠ DMI等级演变作为实时方向过滤器（2026-06-28 实战）**：行动格结论行演变本身是交易信号。本会话案例：X(禁追·过热)→C(等多·回踩)→C(等多⚠冲突)→"等空·反抽"。每次演变对应价格位置变化，输出跟踪卡时必须对比前置行动格等级。
+- **⚠ "现在呢"快速更新必须带截图（2026-06-28 用户纠正）**：用户明确纠正"要有截图，都要有截图"。即使是同品种"现在呢"短问，也必须截新图附在回复首行。不能只文字更新。
+- **⚠ 表格使用偏好（2026-06-28 用户纠正）**：用户两次要求"表格好一点"→Markdown表格用于多周期定位、关键位矩阵、多源交叉验证表。之前"禁表格"规则已废弃。保持简洁紧凑即可。
+- **🔴 TV MCP 服务崩溃恢复流程（2026-06-26 实战）**：TV MCP tools 突然全部返回 `"MCP server 'tradingview' is unreachable"`，即使 `tv_health_check` 也失败时：
+  1. 检查 TV 进程：`tasklist //FI "IMAGENAME eq TradingView.exe"`（Windows）或 `ps aux | grep -i trading`
+  2. 若 TV 不在运行：`taskkill /F /IM TradingView.exe` 清残留 → 用 MCP tool `tv_launch` 启动（自动带CDP），或手动 `"C:/Users/.../TradingView.exe" --remote-debugging-port=9222`
+  3. 若 TV 在运行但无CDP（用户自己开的TV → 没 `--remote-debugging-port`）：`taskkill` 杀旧 → `tv_launch` 重新起
+  4. 若 `tv_launch` 也返回 server unreachable → MCP server 进程本身挂了。等 Hermes 自动恢复（~50s冷却），或让用户重启 Hermes
+  5. MCP 恢复后 `chart_get_state` 确认品种/周期/研究一致，再继续分析
+  **不要把一次CDP断连当作工具永久不可用**——TV Desktop的CDP连接有时会因Electron进程gc或网络抖动断开。<Pine指标版本验证（2026-06-26 用户纠正）**: 用户工作区可能有旧指标文件（`svp_indicator.txt`），但用户会单独上传新版（如 `指标svp_v10_优化版.txt`）。**必须先读用户上传的文件，不假设本地文件是当前版本。** TV 上加载的研究名称可能不变（都是"SVP+ICT+VWAP+CVD"），但实际版本不同。用 `chart_get_state` 确认研究的 entity ID，对比用户上传文件的版本号行。
+- **⚠ 加密分析必须读取 OI (Open Interest) 副指标（2026-06-26 用户纠正）**: 用户明确"加密是使用Oi做为副指标"。分析 BTC/ETH 等加密品种时，必须同时读取 TV 上独立的 **Open Interest** 研究数据（通常在 Volume 之后单独加载）。OI 变化是判断趋势持续性的关键：暴跌后OI维持高位=资金没出清；OI随价格缩量=恐慌清仓。`study_values` 中第三个研究就是 OI（例如 `"Open Interest": "106.25 K"`）。在分析卡中安排单独一行列出 OI 值。: 用户两次说"太慢了"（先纠正了 2m cron，后纠正了 daemon 换成 15s 轮询）。cron 分钟级不够实时，正确的实时监控方案是后台守护进程（terminal background）+ 看门狗 cron。
+  - 守护进程代码：`scripts/monitor/btc_daemon.py`（15s 轮询 Binance + 区间检测 + TV MCP 深度分析 + 心跳）
+  - 看门狗 cron：`scripts/monitor/btc_watchdog.py`（1m 检查心跳，超时 120s 自动 restart）
+  - **架构对比**：
+    - ❌ cron（最短 1m，最小粒度不够）
+    - ❌ agent cron（LLM 每次跑都烧 token）
+    - ✅ 后台 daemon（15s 轮询，零 token）+ 看门狗 cron（no_agent）
+  - 详见 `references/dual-noagent-monitoring-architecture.md`
+- **⚠ 深度分析必须使用MCP工具（2026-06-23 用户纠正）**：用户明确纠正\"要用我的skill、MCP能力、API来深度分析\"，不要只建一个简单的Binance API价格监控。深度分析脚本必须通过 `mcp.client.stdio` 直连TV MCP子进程获取真实VWAP/EMA/CVD/DMI数据。详见 `references/dual-noagent-monitoring-architecture.md` 的MCP子进程直连模式。
+- **⚠ 模板不一致是审计P0（2026-06-23 根因）**：本SKILL.md因多轮迭代内置了互相矛盾的格式声明（V5.1 vs v7.1 vs v4.2 vs v8.0）。任何时候输出卡片前必须先确认用哪个模板：
+   1. 推送/告警用 `alert-card-format-v42.md`（首行↑↓○× + ①②③编号）
+   2. 手动分析用 `master-template-v68.md`（5段叙事风格）
+   3. **禁止**输出旧V5.1的长卡（80行五段格式）
+   4. 用户说"格式不对"时先确认场景，不盲猜
+- **SMC库不可用**：GitHub 的 `smart-money-concept` 库与 pandas 2.x 不兼容（`read-only` bug）。用 `structure_detector.py` 纯Python替代。
+- **GitHub融合五级验证**：代码存在≠逻辑正确≠实弹跑通≠已接入管线≠产生信号。接入需要改调用方代码 + 语法检查 + 全链路测试。
+- **Freqtrade需Docker**：策略模板已生成在 `hermes/strategies/`，但回测需 Docker 运行。当前环境无Docker时跳过。
+
+- **Telegram话题推送用数字ID**：阿弥黛黛群聊的「警报」话题格式为 `telegram:-1003733144325:416`（群ID:话题ID），不是 `telegram:阿弥黛黛:416`。`send_message(action='list')` 列出的目标列表可能不包含所有话题，以用户提供的 `https://t.me/c/{chat_id}/{topic_id}` 链接为准。
+- **分析卡到Telegram必须带TradingView截图**。发送分析卡到 Telegram 时必须在消息末尾附加 `MEDIA:<截图路径>`。截图要求：full窗口（非chart region），含右侧价格栏 + 底部CVD指标。加密品种用15m周期截图，黄金用5m周期截图。
+- **Telegram推送按手机真表格优先**：正式完整卡可保留本地/网页完整版；发 Telegram 时优先压缩成首行结论+3张≤3列表，并用 RichMarkdown 真表格承载。不要为了“完整版”输出手机端不可读的宽表或80行长文。
+- **预案优先级标注**：三源一致方向对应的预案标注 `⚠ 优先`，另一预案标注触发条件+概率评估。
+- **⚠ Telegram预案A/B必须完全对称（2026-06-21用户纠正）**：发到Telegram的分析卡，预案A和预案B必须有完全相同的7行结构（方向/入场/止损/止盈/仓位/失效/复查）。不能预案A详细、预案B缩水——用户明确纠正"备选的为什么不是同一个格式？"。自动出卡时极简卡和完整卡都已锁死对称格式（`auto_card.py`），手动组Telegram消息时必须保持对称。
+- **⚠ 必须读取ALL TV图表指标（2026-06-21用户纠正）**：TV图表上有两个自定义指标时必须全部读取——不仅是主窗口的SVP+ICT+VWAP+CVD，还有独立窗格的Cumulative Volume Delta（1D累计）。Session CVD（SVP指标内）和1D CVD（独立窗格）是不同的时间尺度，必须交叉解读。详见 `references/dual-cvd-indicator-reading.md`。
+- **⚠ 渲染器导入路径陷阱（2026-06-27）**：`render_tv_card.py` 在 `scripts/`（D:\Hermes agent\scripts\），不在 `hermes\scripts\`。从 auto_card.py 导入时必须：`import sys; sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts")); from render_tv_card import render_tv_card`。直接用 `from render_tv_card import ...` 会 ImportError。
+
+- **⚠ Cron no-agent 脚本路径解析（2026-06-27）**：no-agent cron 的脚本解析为 `{workdir}/scripts/{script_path}`。脚本在 `hermes/scripts/repo-maintenance/` 时，路径 `hermes/scripts/repo-maintenance/daily_xxx.py` 会被解析为 `{workdir}/scripts/hermes/scripts/repo-maintenance/...` → 找不到。修复：将脚本复制到 `{workdir}/scripts/repo-maintenance/`，cron script 设为 `repo-maintenance/daily_xxx.py`。
+
+- **⚠ Pine Script 源码+实时数据交叉验证（2026-06-21新增能力）**：用户可以上传Pine Script `.txt` 源文件。先 `read_file` 读懂指标内部逻辑（评分公式、分级规则、DMI冲突检测、CVD吸收/派发判定），再调 `study_values` + `pine_labels` + `pine_lines` + `pine_tables` 获取实时数据，最后交叉验证「源码规则 → 实时信号」。这是比单纯读study_values深3倍的读图能力。详见 `references/pine-source-live-crossref.md`。
+
+- **🔴 「为什么不能做」的权威答案 = `MCP NoTrade Reason Code`（位掩码，v13 取代了旧的「核对」行）**：主指标行动格里已经没有「核对」行了，引擎降级原因改由 DW 位掩码输出：1 HTF冲突X / 2 过热追高 / 4 低流动 / 8 价格几何 / 16 R:R不足 / 32 CVD质量 / 64 ADR禁追 / 128 溢折价 / 256 未收线 / 512 触发不新鲜 / 1024 副指标冲突降权。解码用 `scripts/tv_indicator_contract.py` 的 `decode_no_trade()`，**写出全量原因链**（可多位置位），不得只抄面板上的 `⚠冲突 ⚠未收线` 摘要。
+
+**🔴 分析卡必须带「裁决 + 解除条件」两行（v13 已落成代码）**：
+
+`scripts/decision_matrix.py` 把过去只写在文档里的三条规则变成了可执行判定，分析时**必须调它而不是自己推理**：
+
+| 函数 | 回答的问题 | 输出 |
+|---|---|---|
+| `release_plan(code)` / `format_release(code)` | 「现在是 A 禁，那我在等什么」 | 每个 NoTrade 位置对应一句**可验证**的等待条件；临时项（收线/新触发/总线）排最前 |
+| `rr_tier(rr)` | 「这个 R:R 够不够做 A」 | ≥2.0 A级过硬闸 / ≥1.5 仅B/C直通 / <1.5 不足 / 缺失→不给执行价 |
+| `synthesis_verdict(...)` | 「主指标和副指标到底听谁」 | 主等级×副S0-S4 九宫格 → `A执行/A降级候选/不执行·副冲突/B/C人工候选/X禁做` |
+
+**算出来的东西实际值**：主A+S1/S2 → `A执行`；主A+S3 → `不执行·副冲突`（硬阻断，清空三件套）；主A+S4或S0未接 → `A降级候选`；非加密→`副不参与`（副指标不得否决 XAU/外汇）。
+
+**不变量（已被 270 组全网格测试钉死）**：合成**永不升级** —— 副指标只能确认/降权/否决，任何组合都不可能把 B/C 变 A。代码位置 `_apply_matrix_guard()`（auto_card），在 FinalVerdict 落定后做最后一次保守化。
+
+**卡片上的形式**（`render_tv_card._matrix_line`）：可执行时写 `⚖ 裁决：A执行 · 理由 · R:R 2.3 过硬闸`；不可执行时写 `⚖ 裁决：不执行·副冲突 · 理由 · 解除：等本根收线；等新触发出现`。分析输出必须把这两行带上。
+：主指标行动格里已经没有「核对」行了，引擎降级原因改由 DW 位掩码输出：1 HTF冲突X / 2 过热追高 / 4 低流动 / 8 价格几何 / 16 R:R不足 / 32 CVD质量 / 64 ADR禁追 / 128 溢折价 / 256 未收线 / 512 触发不新鲜 / 1024 副指标冲突降权。分析卡必须用 `scripts/tv_indicator_contract.py` 的 `decode_no_trade()` 写出**全量原因链**（可多位置位），不得只抄面板上的 `⚠冲突 ⚠未收线` 摘要。
+
+- **⚠ 读取 Pine 源码后的 TV MCP 数据读取协议（2026-07-02 更新）**：当前生产 SVP 主指标已**恢复 MCP Data Window 导出**，副指标也导出 OI/CVD/覆盖率/Composite。正确读取路径：
+
+  1. **`pine_tables`** — 读取主指标行动格（13 行：位置/结论/方向/路径/风控/CVD/OI/协同/结构/磁吸↑/磁吸↓/前位/现位）和副指标行动格（6 行：信号/结论/流向/持仓/量能/操作）。⚠ **不加 `study_filter` 时默认静默只返回副指标**（实测 study_count=1 仅 `Volume Aggregated`），主指标 SVP 行动格会整体缺失、不报错，必须另调 `study_filter="SVP"`（或 "SVP+ICT+VWAP+CVD"）才拿到。（2026-08-29 L1 实战确认）
+  2. **`study_values`** — 读取 VWAP/EMA/POC/VAH/VAL/nPOC/WVWAP/MVWAP/DO + MCP Side/Grade/Score/Entry/Stop/Target/CVD/Quality + 副指标 OI/CVD/Volume/Coverage/Composite
+  3. **`pine_labels`** — 读取 ICT 会话高低/关键位标签
+  4. **`pine_lines`** — 读取水平支撑/阻力位
+  5. **`pine_boxes`** — 读取 FVG 缺口区
+
+  TV MCP 所有数据工具可用时必须全读。行动格文字是计划首选，MCP Data Window 是稳定兜底，二者冲突时标注并以行动格为准。
+
+- **⚠ 用户上传生产指标并指定TV分析协议（2026-06-26新增）**：当用户上传/指认“我的指标”（如 `指标svp_v10_优化版.txt` / `SVP+ICT+VWAP+CVD`）并说“我说分析哪一个就多周期分析，然后截图发我，高周期可以继承，低周期要实时分析”，视为后续交易分析的默认工作流。完整步骤见 `references/tv-mcp-multitimeframe-realtime-protocol.md`：
+  1. 先读取上传 Pine 源码，识别右上角行动格、Data Window 输出、VWAP/EMA/CVD、SVP、ICT扫线、DMI/执行评分的字段名与含义；不要假设桌面旧文件就是当前版本。
+  2. 先 `tv_health_check` / `chart_get_state` 确认 TradingView 当前品种、周期和已加载 studies；若CDP未连通，可尝试 `tv_launch(kill_existing=false)` 后复查，但不要把一次连接失败当作工具永久不可用。
+  3. 用户只说“分析 BTC/XAU/ETH/某品种”时，直接按品种映射切TV图表并执行多周期链；不再反问“要哪个周期”。
+  4. 高周期（默认4h→1h）可继承最近有效背景，但必须标注继承依据和失效条件；低周期执行层（BTC默认15m/5m，XAU默认15m/5m或当前布局主执行周期）必须实时读取当前TV指标数据。
+  5. 切周期后必须等待并重试：读取 `study_values` 检查是否包含 `S VWAP`/EMA/CVD；若只返回 Volume/OI 或缺SVP值，等待3秒重读，最多3次，不能假装有指标数据。
+  6. 每周期同时取 `OHLCV summary`、`study_values`、`pine_tables`、`pine_labels`、`pine_lines`（有独立CVD/OI窗格也要读），并做价格数量级校验；若VWAP/EMA与当前品种价格明显不匹配，强制刷新周期/品种后重读，避免旧品种残留。
+  7. 完成低周期实时读取后立即 `capture_screenshot(region="full")`：full窗口要含右侧价格轴、主图指标、右上角行动格、底部CVD/OI/Volume等窗格；截图是分析证据，不是可选附件。
+  8. 输出用中文多周期决策卡：首行给明确偏多/偏空/观望，高周期给方向/结构，低周期给实时触发，结合右上角行动格原文；不要让用户“自己看TV确认”。
+  9. **BTC默认手动卡优先用紧凑决策卡**：用户只说“分析BTC / [Tang Xi] 分析BTC”时，除非明确要求完整版，输出应先给一屏内方向判断 + 关键位 + 反抽/破位触发，不展开80行长报告；模板参考 `references/btc-analysis-compact-template.md`。仍必须先真实读取 4h/1h/15m/5m TV 数据并附 full 截图，不能用紧凑格式替代数据采集。
+
+- **⚠ Pine 指标多社区全面审计工作流（2026-06-25新增）**：当用户说"全面审计/联网社区对照/适应多社区多品种吗"时，必须执行跨平台并行搜索（TradingView·Reddit·GitHub·Medium·ICT社区），按8维度审计（结构·ICT·CVD·多市场·DMI·行动面板·性能·设置），输出✅/⚠️/🟢三级评分+多品种适应性矩阵。完整模板和工作流见 `tradingview-pine-indicators` 技能的 `references/multi-community-cross-audit-template.md`。
+
+- **⚠ TV Pine 指标 DST/时区验证清单（2026-06-25新增）**：读取用户 Pine 源码的 ICT 会话时区时，必须验证：(1) `Asia/Shanghai`=UTC+8全年无夏令时，亚洲盘时间固定；(2) `Europe/London`/`America/New_York`=TradingView的`time()`通过IANA时区库自动处理DST，无需手动干预；(3) `f_cutoff_ms` 是否用 `timenow`（而非 `time`）避免实时K线cutoff偏移；(4) 会话重叠tooltip是否正确标注夏/冬令时转换。常见错误：以为"国外时区要手动处理夏令时"而做错误调整——实际上 `time()` 已内置处理。
+- **⚠ Patch工具f-string转义异常（2026-06-21 已验证）**：`patch` 在 Python f-string 含双引号时可能产生转义异常(如 `\"` 变成 `\\\\"` 或 `\\\"`)，且缩进可能错位。**安全方案**：用 `execute_code` (Python直接 read_file + str.replace + write_file)替代。也用 `read_file` 读→Python正则清理→`write_file` 回写修复被patch污染的文件。详见 `references/tv-dmi-implementation-pattern.md`。
+- **⚠ DMI决策表 = 真理源，auto_card不应重复计算（2026-06-21发现）**：TV的SVP指标内嵌DMI决策引擎——顺势/反转评分0-10·A/B/C/X分级(稳定K确认)·冲突检测·事件驱动·CVD吸收/派发·市场差异化权重。`auto_card.py` 已实现 `_parse_tv_dmi_table` + `_apply_tv_dmi_override` + `_tv_cvd_override` 消费 TV DMI 数据（v6.9.14），不再自算。详见 `references/dmi-table-truth-source.md` 和 `references/tv-dmi-implementation-pattern.md`。
+- **⚠ DMI Python引擎（v4.0 · 2026-06-22新增）**：cron告警管线无法访问TV MCP，因此当时独立实现了 `scripts/dmi_decision.py`（⚠ 该文件现已移入 `scripts/_disabled_20260829/`，其消费方 `btc_alert_watch_v3.py` 也已退役——本段为历史记录） — 完整复现Pine Script的DMI决策逻辑（ADX/DI+/DI-计算·趋势分+反转分双轨·A/B/C/X四级·CVD 6态·HTF过滤·关键位门控）。用于 `btc_alert_watch_v3.py` 的告警推送。这是**双路径架构**：auto_card走TV MCP → 告警走Python引擎。详见 `references/dmi-python-engine-v4.md`。
+- **⚠ 双管道告警不互通（2026-06-21发现并修复）**：`行情守望.py`(10s轮询告警)和`auto_card.py`(5m TV DMI分析)是两条独立管道。告警走行情守望但无TV DMI→用户看不到TV等级。修复：`tv_dmi_cache.json`桥接→行情守望每10s读缓存→告警显示TV信号行。详见 `references/tv-dmi-cache-bridge.md`。
+- **社区风险标准（2026-06-21联网）**：日回撤3%（非10%）、周回撤6%（非15%）。依据CrossTrade/X社区/Tradeciety三方交叉验证。已写入Constitution。
+- **时间止损+分批止盈（2026-06-21联网）**：入场后第4根15m无利润→减半仓、第6根→全平；+1.5R先出一半→移损保本→剩余跟踪。详见 `references/community-best-practices.md`。
+- **Polymarket用浏览器实查**：Gamma API的标签/搜索功能返回垃圾数据（无论搜什么都返回GTA VI梗或体育赛事）。必须 `browser_navigate("https://polymarket.com/search?query=bitcoin")` 浏览器实查。Fed决议等重大事件市场可直接读概率（如"不变99.8%"·$152M交易量）。API密钥仅用于认证，不用于搜索。
+- **Telegram话题推送用数字ID**：阿弥黛黛群聊「警报」话题格式为 `telegram:-1003733144325:416`（群ID:话题ID）。不要用 `telegram:阿弥黛黛:416`，`send_message(action='list')` 可能不列出所有话题。以用户提供的 `https://t.me/c/{chat_id}/{topic_id}` 链接为准。
+- **历史作废：旧版“不要用表格”规则已被 2026-07-02 驾驶舱铁律取代。** 当前手动完整分析必须使用 Markdown 管道表；仅推送告警/极简卡可不用表格。若正文其他旧段落出现“禁表格”，按本条和文件顶部驾驶舱纠偏处理。
+- **品种格式含交易所**。分析卡和监控卡品种统一写 `BTCUSDT.P:BINANCE`（含交易所后缀）。`{symbol}.P:BINANCE` 格式固化。
+- **中文化字段名须冒号对齐**。监控推送和分析卡的序号标题均用冒号分隔（如 `① 品种：BTCUSDT`），不用 `lab()` 标签包裹。
+- **监控推送与分析卡同风格**。`行情守望.py` v7.0 `render_message()` 使用冒号对齐·子项（价位/动作）缩进无号·底部「动作」「提示」无序号。不再使用 `—— 触发细节 ——`/`—— 执行结论 ——` 分段标题。
+- **全五段统一风格**。环境·结构·博弈段与操作段一致：一行一个信号、`—` 破折号接解读、整体手机宽适配。纯序号①②③·允许Markdown表格辅助结构化信息·无装饰emoji（仅等级 🟢🔵🟡🔴）。无方括号·无引用块（`>`）。价格全部反引号 `65,200`。结构线/方向/操作加粗。
+- **⚠ 多周期全量读取铁律（2026-06-29 用户纠正P0）**：用户说"我不是5m，15m，1h，4h，1D多周期吗？"——分析时必须刷新全部**五个周期**的数据（1D→4h→1h→15m→5m），不能只读15m+4h。每个周期独立执行 chart_set_timeframe → wait → study_values + pine_tables + labels。仅凭15m+4h的数据不能说"多周期"——这是2026-06-29用户纠正的P0规则。
+```
+**② 周期：**
+**5m 过热禁追 | 距VWAP $32**
+**15m 远离VWAP | 等回踩**
+**1h 反转初期 | 短均未金叉**
+**4h 结构冲突 | 震荡**
+```
+空格受限时可用紧凑版：`5m过热禁追·距VWAP$32 | 15m远离VWAP·等回踩 | 1h反转初期·短均未金叉 | 4h结构冲突·震荡`
+
+结构段必须有"逐周期分解"子段，4h→1h→15m→5m各段独立标注等级/趋势/价格关系/EMA/CVD/关键位/判断。用户明确纠正过「周期：这里不单单是把周期列出来，要注明什么情况」。
+- **Binance合约账户余额为0时不影响分析**。棠溪已提供Binance API Key/Secret，系统可拉取合约账户持仓/余额。当前账户0余额时照常出分析卡，仓位建议自动判为「禁止」。入金后自动感知持仓变化。
+- **搜索源必须有多层fallback，不依赖单一搜索后端**：Firecrawl/Tavily/Exa 等付费搜索API可能额度耗尽。当 `web_search` 失败时，**不要持续重试同一种方式** — 按以下顺序fallback：① `web_extract` 拉取 Investing.com/Kitco/DailyFX/金十 分析页面 ② 恐慌贪婪指数 `api.alternative.me/fng/` ③ IG Client Sentiment (从 DailyFX 页面提取零售多空比) ④ `api.gold-api.com/price/XAU` + Yahoo Finance GC=F（价格与成交量） ⑤ 浏览器导航到 X 搜索(需登录则标注不可用) ⑥ `curl api.x.ai/v1/chat/completions`。**不要在Firecrawl失败3次后仍继续Firecrawl** — 用户已明确纠正。替换source或换工具。所有非X源的搜索标注「web源·非X实时」。\n- **Grok/x_search 在中国网络需代理**：`api.x.ai` DNS可解析但TCP 443被GFW封锁。从Hermes的`.env`中 `NO_PROXY` 移除 `api.x.ai`，让代理转发。之后需 `/reset` 生效。
+- **X搜索是分析卡出卡步骤·非cron后台字段**：`x_search` 需在 agent 上下文中调用（cron no-agent 脚本无法调 agent tool）。每次出分析卡时在 Step 1b 调 `x_search("BTC sentiment")` 或 `x_search("XAUUSD gold sentiment")`，提取方向+强度+热词，融入博弈段验证方向。`data_gatherer.py` 的 `sentiment.x` 字段标记 `pending` 只是提醒，X 数据不通过它采集。
+- **X情绪验证规则**：X情绪如与结构矛盾⚠ → 博弈段必须标明「方向验证：X偏空但结构偏多·等待确认」。X情绪只作验证/挑战，不覆盖结构方向。
+- **Polymarket API搜索不可靠·用浏览器实查**：Gamma API标签/搜索返回垃圾。必须 `browser_navigate("https://polymarket.com/search?query=bitcoin")` 浏览器实查。Fed决议市场 `$152M`成交量·定价 `99.8%`不变。
+- **恐慌贪婪指数走REST API**：`https://api.alternative.me/fng/` 免费无认证·已集成到 `data_gatherer.py`。
+- **分层分析策略**：4h收线定方向→缓存继承·1h继承4h→15m/5m实时。见 `references/tiered-analysis-strategy.md`。
+- Windows 桌面运行时下裸 `hermes send` 可能报 uv trampoline canonicalize；脚本内用 `sys.executable -m hermes_cli.main send` 更稳
+- **叠加不替代**：棠溪的 V5.1 模板是基础框架。任何新功能（监控层、数据层、治理层）都必须在此之上叠加，不能替代、覆盖、或重命名原模板核心内容。保持 `v51-analysis-card-core.md` 为独立纯净文件，融合版通过引用指向它。
+- 监控脚本必须加单实例锁，避免多进程同时触发重复 Telegram 告警
+- **统一模板（master-analysis-template.md v3.0 · 2026-06-17 锁定）**：三套模板已合并为单一权威源 `references/master-analysis-template.md`。旧模板（`v51-analysis-card-core.md`、`template-v97-enhancements.md`、`template-locked-final.md`）不再独立使用，所有分析卡严格按 master v3.0 输出。层级：核心卡（必跑·5段）→ 增强层（加权15→13评分/置信公式/量价矩阵/模型checklist）→ 锁定格式（优先预案⚠标注/三源一致/R:R≥1:2）。五类固定模型为日内执行入口，31类扩展只作博弈段旁证。禁止再直接引用旧模板文件名。
+- **Grok x_search + 情绪管道（2026-06-17 已框架就绪）**：`data_gatherer.py` v3.0 已包含 X情绪占位字段 + Polymarket REST 查询 + CoinDesk RSS 钩子 + XAU 三源价格。x_search 情绪需 agent 上下文执行（cron 脚本无法直接调 agent tool），所以 `data_gatherer` 在 `sentiment.x` 字段标记 `status: pending`，提示 agent 在分析时补跑 `x_search("BTC sentiment crypto today")` + `x_search("XAUUSD gold sentiment")`。参考 `references/data-pipeline-v3.md`。Polymarket 已通过 Gamma REST API 自动拉取。CoinDesk RSS 格式非 JSON，需通过 web_extract 在 agent 上下文补取。
+
+- **R:R 硬底线 < 1:2 → X禁做·立即中止**：`model_checklist.py` v1.1 已升级。`COMMON_CHECKS[0]` 新增 `rr_hard` 致命检查（`fatal: True`），`run_checklist()` 遇 R:R 不合格时立即 `return {"verdict": "X禁做 · R:R≥1:2硬底线·不合格→X禁做"}`，不进入模型特定检查。CVD C 级新增 `cvd_quality` 检查，不合格视作"自动降权半仓"。新增 `five_model_only` 检查确保日内执行入口限定五类固定模型。
+- **v7.1 手机格式（2026-06-21 锁定·替代V5.1）**：完整卡≤20行·每行≤38字符·Telegram不折行。②③④拆行为手机屏优化。预案AB各2-3行（入场/止损止盈/仓位分两行）。⑩闸门拆2行。`_p()`去双重反引号。模板权威：`references/master-template-v68.md`。V5.1老格式已废弃——禁止再输出80行五段分析卡。
+- **Cron agent vs no-agent（2026-06-21 教训）**：no-agent cron = 脚本stdout直发Telegram · 零token · 适合静默监控。agent cron = LLM读取脚本输出并推理 · 耗token · 仅用于需要推理的任务。错误：用agent模式跑TV信号采集→每次rc=1时LLM生成30行诊断报告投递TG→噪音。修复：TV cron改为显式`--no-agent`，wrapper v1.2异常仅单行⚠。
+- **Watchdog Popen.poll() Windows兼容(已修复v1.3)**：`subprocess.Popen`在Windows可能返回不完整对象，`.poll()`抛`AttributeError`→启动失败→速率限制。修复：try/except AttributeError→降级为`pid_alive()`检查。
+- **VWAP/EMA本地引擎(scripts/vwap_ema_cvd_engine.py)**：不依赖TV连接。从K线计算VWAP+1σ/2σ·EMA9/21/34/55云·CVD吸收/背离·ATR。对齐棠溪Pine参数(SVP+ICT+VWAP+CVD.txt)。三通道注入：①完整卡_auto_card.py ②极简卡__compact_card ③实时警报_行情守望.py。
+- **MCP 配置存在但工具不出现·排查流程**：`mcp_servers` 里配了但 agent 工具列表不显示 → ①手动启动 server 测崩溃：`timeout 8 python <server.py>` 或 `python -m <module>` ②看 import 异常或依赖缺失 ③修复后重启 Hermes。注意 MCP 进程静默崩溃时 Hermes 不会报错，只不注册工具。详细流程见 `references/mcp-connectivity-troubleshooting.md`。
+- **Binance MCP websockets 依赖冲突（v2.0 已修复）**：Hermes 锁定 `websockets==15.0.1`，但 `python-binance` 包的 `binance/ws/websocket_api` 导入链需要旧版 → MCP 启动即崩溃。解决方案：Binance MCP 重写为 **v2.0 纯 REST**（`urllib.request` + HMAC 签名），完全去 `python-binance` 依赖。所有 11 个 tool 功能不变，零版本冲突。文件在 `D:/Hermes agent/tools/binance-mcp/server.py`。
+- **Finance MCP 启动命令·Windows 兼容**：`python -c "分号;多行;字符串"` 在 Windows cmd 可能解析异常。改用 `python -m finance_mcp.server` 标准模块启动。config.yaml 的 `mcp_servers.finance.args` 应为 `["-m", "finance_mcp.server"]`。
+- **分析卡模型名标准化·无空格**：五类固定模型的标准名称为 `VWAP反抽` `VAH回收` `VAL回收` `POC拒绝` `扫流动性回收` `突破接受`。不要用 `VWAP 反抽`（中间空格）、`VAH/VAL 回收`（合并斜杠）等变体。`model_checklist.py` 的 `five_model_only` 检查基于标准名匹配。
+- 联网结合社区时，社区情绪只作博弈背景，必须绑定可执行条件：收复、拒绝、扫损、失效；不要把看多/看空讨论直接当信号。
+- **MCP 连接排查**：MCP 配置了但工具不出现 → 先 `timeout 8 python <server.py>` 手动测启动崩溃 → 再查 command 格式（Windows 下 `-m` 优于 `-c` 多分号） → 最后重启 Hermes。完整方法论见 `references/mcp-connectivity-troubleshooting.md`。
+- 分析后必须覆写 `data/monitor_levels.json` 的近端可执行支撑/阻力和 `analysis_cycle`，避免监控只剩远端旧位导致日内告警过稀。
+- **到价通知分两种模式：LLM cron vs no_agent脚本。优先用no_agent**：\n  - **LLM模式**（默认）：`cronjob(action='create', schedule='5m', prompt='...', deliver='origin')`。prompt内写明用哪些MCP工具和触发条件。**切勿设置 `enabled_toolsets`** — MCP工具不属于toolsets分类。每次跑都耗token。\n  - **no_agent模式（推荐·零token）**：写一个Python脚本用 `urllib.request` 或 `curl` 从免费API拉价格做条件判断，用 `cronjob(action='create', no_agent=True, script='myscript.py', schedule='5m', deliver='origin')`。脚本输出=推送内容，空输出=静默。黄金现货价走 `api.gold-api.com/price/XAU`（免费无Key），期货价+成交量走 `query1.finance.yahoo.com/v8/finance/chart/GC=F`。零token消耗，更可靠。\n  - 适用场景：价位监控、条件触发、简单价格检查 → no_agent。需推理判断、多源分析、情绪解读 → LLM模式。\n  - **gold_monitor.py v2 设计要点**（双源+阶段自升级）：\n    - 数据源：`api.gold-api.com/price/XAU`（现货主源）+ `query1.finance.yahoo.com/v8/finance/chart/GC=F`（期货校验，减$20溢价估算现货）。双源差价<$5取均值（A级），差价大信托主源（B级），单源运作标C级。\n    - 阶段定义：8个阶段（0初始→1回踩确认→2突破确认→3空头确认→4持仓做多→5目标区→6持仓做空→7空头目标区），触发后自动跳转下一阶段不重复。\n    - 冷却防刷：同阶段同条件10分钟冷却（时间戳记录，重启不丢失）。\n    - 日志记录：每次触发写入 `data/gold_monitor_events.jsonl`。\n    - 状态自清理：超过7天的冷却记录和警报自动清除。\n    - 推送条件宽（价到位即推）+ 防重复严（冷却内不推）= 用户不丢失信号也不被刷屏。\n\n- **双cron联动模式（no_agent触发 → agent出卡）**：当需要\"触发时自动出分析卡\"时，用两个cron配合：\n  ① **no_agent价格监控**（5m间隔，零token）：`cronjob(action='create', no_agent=True, script='gold_monitor.py', schedule='5m')`。脚本检测到触发条件后，除了print推送消息，还写一个trigger request JSON文件到 `data/gold_trigger_request.json`，格式：`{'status':'pending', 'price':N, 'phase':N, 'triggers':[...], 'triggered_at':'...'}`。\n  ② **agent分析cron**（1m间隔，只触发时耗token）：`cronjob(action='create', schedule='1m', skills=['tradingview-indicator-analysis'], prompt='检查 D:/Hermes agent/data/gold_trigger_request.json，如果status=pending则拉MCP数据出完整分析卡，然后改status为completed')`。\n  — 没触发时：no_agent静默，agent cron检查完立即退出（几乎零token）。\n  — 触发时：no_agent推消息+写标记，agent cron读到标记后自动拉MCP数据出分析卡。\n  — 避免两cron打架：no_agent写完标记才走，agent读完改标记为completed，没有竞态。\n  — 详见 `references/dual-cron-trigger-pattern.md`。
+- **后台守护进程实时到价监控（零token·10s级）**：当用户要求"实时"（比 5m cron 更频繁），用 `terminal(background)` 启动常驻 Python 脚本而非 cron。脚本每 10s 轮询 Binance 免费 API，条件满足才 print→sys.exit(0)，notify_on_complete 捕获输出。详见 `references/background-daemon-threshold-monitor.md`。
+- **TV 已运行时不要重复启动**：先调 `tv_health_check` — 如返回 `cdp_connected: true` 则 TV 已在运行（大概率是监控行情守望常驻或之前会话残留），直接切品种即可。此时 `tv_launch()` 会报"TradingView not found on win32"但这是误导性错误（CDP 端口已在用），不要去排查 TV 安装路径。
+- **`symbol_search` 可能失败，直接 `chart_set_symbol` 更稳**：特别是 OANDA 等非主流交易所，`symbol_search` 可能返回"fetch failed"。直接 `chart_set_symbol("OANDA:XAUUSD")` 跳过搜索。设置后 `chart_ready` 可能为 false，需立即调 `chart_get_state` 确认符号已切换成功。
+- **多资产模板样式烟测不要跑真实 auto_card push**：用户要求“看模板样式/各种跑一下/发 Telegram 预览”时，用 `render_card_locked()` 构造模拟卡，不调用 `auto_card(symbol, push=True)`，避免写 trade plan 或更新实盘监控位。真实渲染器需用 `importlib.util.spec_from_file_location()` 加载 `hermes/scripts/auto_card.py`，不要 `import scripts/auto_card.py` wrapper（导入即执行）。默认发任务报告话题 `telegram:-1003733144325:846`，并标注“模板样式模拟 · 非实盘建议”。详细流程见 `references/multi-asset-template-style-smoke-test.md`。
+- **`batch_run` with `get_ohlcv` / `get_study_values` 可能返回 JS evaluation error**：`batch_run` 在快速切换品种时可能所有迭代都报 "JS evaluation error: Uncaught (in promise)"。**不要重试同一方式** — 退化到手动单品种切换：`chart_set_symbol(sym)` → `chart_get_state()` 确认 symbol 变更 → 如有需要 `chart_set_timeframe(tf)` → `data_get_ohlcv(count=N)`。批量需求大时用 `delegate_task` 并行跑多个子任务。
+- **`chart_manage_indicator` 在中文 TradingView 可能全部失败**：`cn.tradingview.com` 上 `add indicator` 无论用英文名（"Relative Strength Index" "RSI"）还是中文名（"相对强弱指数"）都可能失败报 false。workaround 有三：① `ui_click`/`ui_type_text` 通过 UI 面板搜索添加 ② Pine Script `pine_set_source` 写一个包含所需指标的脚本 ③ 依赖 Binance MCP 原始 K 线自行计算核心指标（RSI/EMA/VWAP/ATR），TV 指标只作 Pine Tables/决策表参考和截图可视化。第三种最稳定。
+- **⚠ `chart_set_symbol`/`pane_set_symbol` 后 indicators 可能返回 STALE 旧品种数据（交易陷阱）**
+- **🔴 品种静默漂移陷阱（2026-06-28 会话发现）**：TV session 之外的进程可能在 agent 两次调用之间静默切换图表品种。表现：第一次分析 HYPE 返回正确 $62 数据，同一 session 的第二次分析调用返回 BTC ~$60,000 数据。检测方法：读取 study_values 后做启发式价格标度校验——VWAP/EMA 数量级是否匹配当前预期品种价格范围。相差 > 10x 或明显属于另一品种区间 → chart_get_state 确认。修复链：chart_get_state 确认实际 symbol → chart_set_symbol 切回正确品种 → chart_get_state 确认切换成功 → 等待15-30s 后重读所有数据。
+- **🔴 每次分析开始前必须校验 TV 品种正确**（不只在 chart_set_symbol 后）：读取任何数据之前先调 chart_get_state 比对预期 symbol。即使 TV health_check 正常、study_values 有值，symbol 也可能已被外部进程切换。
+- **🔴 分析前必须做 TV 品种价差期现校验**：取 study_values 的 VWAP/EMA，与 Binance MCP get_price 实时价对比。若相差 > 10 倍（如 BTC $64K 变成 $4K 的 XAU 值）→ indicators 仍返回旧品种数据。修复：chart_set_timeframe 强制刷新 → chart_get_state 确认 symbol → 重新读 study_values。最佳实践：核心技术指标依赖 Binance MCP 原始 K 线自行计算，TV 指标只作决策表参考和截图可视化。
+- **🔴 截图是分析的第一输出，不是收尾彩蛋
+
+- 棠溪要方向，不是两个选项：当用户问你觉得怎么样/什么方向时，给出一个明确的方向判断（偏多/偏空/观望），附理由。不要同时给两个方向让ta选。价格在关键位附近时仍可以做破位/守住双路，但用户主动问方向时只给一个。
+
+- 多因子评分替代单条件：棠溪说要机灵一点多角度75胜率。简单价位到位就推不够聪明。用多因子评分（价格 vs VWAP + EMA + Taker + 大户多空 + 24h回撤 + K线趋势），累加>=75分才推送。因子固定分不浮动。
+
+- SVP指标评级系统速查：棠溪的TV定制指标SVP+ICT+VWAP+CVD内置完整A/B/C/X评级系统（2025线PineScript）。详见references/svp-indicator-grading-system.md。DMI决策表是真理源，auto_card和daemon都应参照其评分逻辑，不自创一套**：用户对"分析无截图"零容忍。数据采集完后**立即截图**作为第一视觉产出，再出文字分析。不要等文字写完了才想起截图。每次分析 BTC/XAU 必须产出 TV 截图（full 窗口，含右侧价格栏 + 底部 CVD）。
+
+## v8.0 叙事卡铁律（2026-06-22）
+
+**格式变更：**
+- **禁止 `━━━━━━━━━━` 分隔线** — 用户明确"不要这些"。v8.0卡用空行自然分段。
+- **禁止 `—— 你来选方向 ——`** — 已从 auto_card(2处)+行情守望(1处)全删。
+- **TV DMI实时注入** — ③量价分析下方嵌入📺 TV DMI行(等级·处理·背景·CVD·执行·风控)。数据从TradingView MCP实时读取，不可显示"需TV确认"占位符。用户严厉纠正："我就是要你结合我的TV来一起分析，你居然要我自己看"。
+- **5段结构** — ①今日结构(K线走势)→②关键位(R1/R2/S1/S2/S3)→③量价分析(CVD/Taker/Funding+TV DMI)→④交易方案(A/B双轨)→⑤综合评分(6项检查)
+- **渲染引擎** — `scripts/render_v8.py::render_v8_card()`，`auto_card.py` 通过 `from render_v8 import render_v8_card` 调用。
+- **审计必须实测跑管线** — 静态扫描后必须 `python auto_card.py BTCUSDT && python auto_card.py XAUUSD` 确认无运行时崩溃。`_near_key_level`函数不存在+qty_unit未定义两处致命bug在静态审计中完全漏过。：符号切换后 `chart_get_state` 确认 symbol 已变，但 SVP+ICT+VWAP+CVD 等研究的 plot 值未自动重算，仍返回旧品种数值（如 BTC $64,592 显示为 ~$72 的 SOL 数据）。交叉验证方法——如果 study_values 返回的 VWAP/EMA 与 Binance MCP 价格差超过 10x 或数量级，说明 indicators 未刷新。尝试再调一次 `chart_set_timeframe`+`chart_set_symbol` 组合，或关闭 tab 重开。最佳实践：依赖 Binance MCP K线计算核心技术指标（EMA/VWAP/ATR/POC），TV 指标只作辅助验证和决策表参考。两者冲突时优先信托 Binance MCP 原始 K 线计算。
+- **Yahoo Finance 不支持现货黄金**。
+- **推送位信死循环（已修复v6.3.1→v2.2）**：智能结构更新自动生成的监控位，`level_confidence.missing` 固定包含"TradingView成交量复核"和"订单流确认" → 基础位信分 ≈ 66-74 → 可能与推送门槛冲突。**v2.2修复**：MIN_WARNING_LEVEL_SCORE 降至 65，breached_like 增加 near_or_breach，info 降至 68/60，expired 降至 65/高优先，invalidated 降至 65/60。预期推送率 ~50%正常日/~80%波动日。详见 `references/push-threshold-tuning.md`。
+- **🔴 守护进程回溯陷阱（2026-06-22 实战教训）**：用 `terminal(background=true)` 启动守护时，如果加了 `notify_on_complete=true`，当进程被 kill/exit 时系统自动发送回溯通知到会话 — 每杀一次旧版本就刷一次噪音。修复：守护类长期进程永远用 `background=true` 不加 `notify_on_complete=true`。杀守护用 `terminal("taskkill /PID <pid> /F")` 而非 `process(action='kill')`。记忆已更新为铁律。
+
+- **🔴 指标判X时的多角度处理（2026-06-22 实战教训）**：用户明确纠正\"指标可能不准，多方面分析\"。当 SVP 指标判 X（结构冲突/过热）时，不要直接结束为\"X禁做不进场\"。正确流程：
+  ① 拆解结构矛盾原因（如：priceBelowS但EMA9>21多头排列 = 价格vsEMA冲突）
+  ② 判断多空优先级（如：空4h背景+CVD顺空 vs 缩量下跌+EMA多头+VAL近在咫尺）
+  ③ 给出倾向性判断（如：偏向等假跌破确认而非直接追空）
+  ④ 设置双路触发条件（如：守VAL+站回VWAP→做多 / 放量砸穿VAL→做空）
+  ⑤ 启动多因子守护（不依赖单一指标评级，多因子评分≥75+缩量/放量识别）
+  见 `scripts/btc_vwap_daemon.py` 的多因子评分模板。
+
+- **XAU 数据质量分不一致**：`source_snapshot.json` 用金十+Yahoo 判 B 级（~78%），但 `智能更新结构.py` 写入 `monitor_levels.json` 的 `smart_update.quality` 可能判 C 级（~55%）。两处评分标准不同（快照侧重价格多源一致性，监控位侧重位信完整性），但同一时刻的同一品种不应有两个冲突的质量分。审计时优先信任快照的 `quality`，监控位的 `smart_update.quality` 只作为位信背景参考。
+- **`get_price()` BTC 路径可优化（P2）**：目前 `行情守望.py` 直接调 Binance API 作主路径。已通过 `system_data_bridge.price()` 提供统一入口。如需多源校验，可将 `ts.template_price(symbol)` 作为主路径（走多源验证），system_data_bridge 作为兜底
+- **`push()` v7.0**：`行情守望.py` 的 push() 已有3次重试 + Telegram 警报话题416，Windows网络闪断不再丢告警\n- **推送必须异步·绝不能同步阻塞主循环（P0·2026-06-18致命教训）**：`行情守望.py` 的 push() 早期用 `subprocess.run(timeout=10)` 同步发送，但 `except` 只捕获 `requests.Timeout` 漏了 `subprocess.TimeoutExpired` → 推送卡死最长60s（3+3次重试×10s）→ 阻塞10s主循环 → heartbeat 停更 → 看门狗误判进程死 → taskkill → 速率限制阻止重启 → 监控静默4小时。**修复 v7.2**：push() 改为 `PUSH_QUEUE.put_nowait()` 立即返回 + 后台 daemon worker 线程发送（`_send_one`/`_push_worker_loop`/`_ensure_push_worker`），shutdown/测试用 `drain_push_queue()` 排空。铁律：①任何网络IO（推送/拉数据）绝不在主循环同步执行 ②subprocess 超时必须捕获 `subprocess.TimeoutExpired` 不只 `requests.Timeout` ③监控类长驻进程的主循环只做轻量判断，重活全部丢后台线程/队列。验证用 `tests/test_push_async.py`（3测试：非阻塞/超时捕获/drain）。
+- **信号巡检事件转发只推第一条（P1·已修复）**：`信号巡检.py` L342-347 的 `new_events` 循环只 `print(render_event(new_events[0]))`，其余标记 notified 后丢弃。已修复为 `for evt in new_events: print(render_event(evt, levels))`。
+- **预测回验死循环（P0·2026-06-18已修复）**：`prediction_tracker.py` 的 `verify_predictions()` 从未被任何 cron 调用——6条预测全部 `verified:false`。已集成到 `行情守望.py` 主循环，每30分钟自动回验。新增 `_verify_predictions_if_needed()` 函数。
+- **看门狗无限重启（P0·2026-06-18已修复）**：`watchdog.py` 无 cron 时每30s盲目重启行情守望。已加 `MAX_RESTARTS_PER_HOUR=3` 速率限制 + `watchdog_guard.json` 冷却记录。空 cron 时只记录日志不再死循环。
+- **source_snapshot 单文件覆盖（P2·2026-06-18已修复）**：BTC/XAU 共享一个 `source_snapshot.json`，后一个品种覆盖前一个。已修复为同时写 `source_snapshot_{symbol}.json` 品种独立快照。
+- **Binance 多空比/Taker 数据取 `futures/data/*` 而非 `fapi/v1/*`**。Binance 签名 API（需 `X-MBX-APIKEY` + HMAC签名）的正确路径是 `/futures/data/topLongShortAccountRatio`、`/futures/data/globalLongShortAccountRatio`、`/futures/data/takerlongshortRatio`。`/fapi/v1/topLongShortAccountRatio` 返回 404。这些端点提供 A 级多空比和 B 级 Taker 买卖数据，填平了长期缺失的两个数据缺口。
+- **`smart_update.quality` 与 `source_snapshot.quality` 是两套评分体系**：前者基于位信（结构强弱+缺失项），后者基于价格（数据源一致性+价差）。不要在跨层比较时混用。分析卡应使用快照的价格置信度；监控推送应使用实时的位信评分。
+- **event_ban 阈值按资产分档（v6.8.2修复）**：BTC/ETH 24h波动阈值 5%（非 2%），XAUUSD 保持 1%。加密日波动2-3%属正常，阈值过严会永久禁做。`check_event_ban()` 中 `volatility_threshold = 0.05 if "BTC" in symbol or "ETH" in symbol else 0.01`。
+- **多模型引擎权重失衡陷阱（已修复v2.0 HHI）**：`EMA趋势` 模型 quality=0.9 但其他模型 quality=0.8，当 EMA 方向与多数模型相反时，单一高置信模型可带偏整个合并方向（如 4长1空→偏空）。v2.0 HHI量化了多样性惩罚+单模型上限0.65，修复后 4长1空→方向不明。详见 `references/engine-v2-hhi-weighting.md`。（←2026-06-18 修复）
+- **event_ban 切勿硬编码为 True（已修复）**：`multi_model_engine.py` 曾 `event_ban=True` 导致所有预测被废。已改为 `check_event_ban()` 五重实际检查。详见 `references/event-ban-check.md`。（←2026-06-18 修复）
+- **出卡后必过审计清单**：`references/card-audit-checklist.md` — P0/P1/P2逐项检查。最常见违规：置信映射错误、B等待给入场价、R:R止盈1不满足、X情绪缺失、结构段超7项、`|`分隔符未改为`—`。（←2026-06-18 实战审计）
+- **变更后必须真实验证卡片合规**（2026-06-19 强化）：任何改动 auto_card、价格源、渲染逻辑后，必须：
+  1. 重新生成 `python scripts/auto_card.py BTCUSDT` + `XAUUSD`
+  2. 扫描占位符 `grep -E "(N/A|数据待采|无数据|CVD \?|裸POC \?|方向不明/震荡)" data/auto_card_*.md` → **P0 占位符必须为 0**（2026-06-21 新增）
+  3. 扫描 `grep -E "(setup_id|model_id|entry_tag|exit_tag)" data/auto_card_*.md` → 必须 0 泄漏
+  4. 确认头部 ⑩ 段完整 + 正文五段全量（环境/结构/博弈/操作/风控）
+  5. 快照质量检查通过
+  只有通过以上才能声称"卡片合规"。不能只改代码就结束。完整审计方法见 `references/data-pipeline-health-audit.md`。
+- **GitHub融合后必验证**：新模块集成后必须过五级验证（代码→逻辑→实弹→管线→信号）。不要因为模块`import`成功就跑测试数据宣称"已接入"。实弹 = 真 Binance K线喂入，不是 demo 模拟值。2026-06-18 案例：8个融合模块中 4 个真正有用（评分引擎/风险宪法/五模型匹配/市场体制），但全部未接入现有管线 → 逻辑正确≠已接入。验证清单见 `references/integration-verification-matrix.md`。
+- **B等待=无入场价**：三源分裂/DMI=X/评分不足→状态B等待时，操作段不给具体入场/止损/止盈价格。改为条件触发描述"触发空头：5m触碰W_VWAP后回落+CVD转负→激活预案B"。只有A做多/A做空才给价格。（←2026-06-18 审计）\n- **🔴 B等待禁止入场价（2026-06-21 P0根因）**：`render_card_locked` 的B等待路径（status==\"B等待\" or direction==\"wait\"）曾给精确入场/止损/止盈/仓位——铁律自毁。原因：代码路径共用 `_plan_a_entry` 等函数，无状态判断。修复：B等待操作段只写触发条件描述+待确认后设定；入场写\"等待触发 — B等待不设具体入场价\"；止损写\"待确认后设定\"；仓位写\"待确认后计算\"。不是格式问题——在B等待时给精确入场价→自动化系统可能直接挂单→突破风控。\n- **🔴 数据等级通胀（木桶原理）**：Taker C级但总体标A→自欺欺人。`_effective_grade()` 按最弱一环降级：Taker C→总最高B；Taker C + CVD C→总降C。`render_card_locked` 在衍生数据推算完成后调用 `data_grade = _effective_grade(data_grade, taker_data, engine_data)`。\n- **🔴 P0占位符零容忍（2026-06-21新规则）**：出卡后的验证不只是grep机器字段——必须额外扫描占位符：`grep -E \"(N/A|数据待采|无数据|CVD \\?|裸POC \\?|方向不明/震荡)\" data/auto_card_*.md`。P0占位符有：4h=数据待采、VAH/POC/VAL=空、XAU周期=无数据。这些意味着数据管线断裂，不是格式问题。\n- **数据管线健康审计方法**：见 `references/data-pipeline-health-audit.md`（2026-06-21产出）。流程：出卡→逐行读卡→对比模板底板→诊断管线断点→P0/P1/P2分类→批量execute_code修补→验证→commit。核心问题不是模板渲染，而是数据管线喂入渲染器的内容。
+- **入场合规**：入场距现价>0.5 ATR→禁追。模板规则。不写入场价或调整入场以符合。
+- **R:R止盈1底线**：每个预案的止盈1必须满足 R:R ≥ 1:2。不满足时调整入场而非放宽止损。如无法满足→删除该止盈目标，只保留止盈2。不要让不满足底线的止盈1出现在最终卡中。
+- **②周期分隔符**：v6.8 模板全卡统一用 `—` 分隔状态和原因。禁止使用 `|`。例：`5m 回收结构中 — 4230FOMC扫低后反弹至4310`。
+- **社区情绪 vs 结构方向**：社区情绪（CG看多/看空）只作博弈背景和仓位微调，不覆盖结构方向。恐慌贪婪极值可在评分表中情绪项加分/扣分。
+- **引擎权重失衡陷阱**：EMA趋势单模型0.9可带偏合并方向。HHI v2.0修复后回归平衡。新增模型必须验证反向霸凌。
+- **event_ban永远不硬编码**：`event_ban=True` = 沉默致命bug。用 `check_event_ban()` 实际检查替代。
+- **Grok分歧=强制降级**：不只加文字，直接锁action为B等待+降confidence_5。
+- **DDGS免费但不可靠**：限速时返回空→用CoinGecko+CMC社区数据替代搜索需求。
+- **alert push_allowed信息间隙**：info/expired低分可静默，但高优先+高位信组合不应被吞。
+- **Patch 工具编码陷阱**：`patch` 工具在写入含 `Path("...")` 等字符串时可能损坏行内容（渲染为`***`等异常字符）。Python编译通过但沙箱环境可能语法错误。安全方案：关键脚本用 `write_file` 全量覆写而非增量 patch。
+- **一键出卡 `auto_card.py`**：`python hermes/scripts/auto_card.py BTCUSDT` 可30秒自动完成数据采集→引擎v2.1→Grok→Brave搜索→社区仪表盘→保存卡片。
+- **CVD C级影响全链**：BTC/XAU 分析卡的订单流评分均×0.6·仓位上限半仓·需多重确认。升级到Binance aggTrades (A级) 是提升评分天花板的最快路径。方案见 `references/cvd-upgrade-plan.md`。(←2026-06-18)
+- **GitHub融合后必验证**：新模块集成后必须过五级验证（代码→逻辑→实弹→管线→信号）。不要因为模块`import`成功就跑测试数据宣称"已接入"。实弹 = 真 Binance K线喂入，不是 demo 模拟值。2026-06-18 案例：8个融合模块中 4 个真正有用（评分引擎/风险宪法/五模型匹配/市场体制），但全部未接入现有管线 → 逻辑正确≠已接入。验证清单见 `references/integration-verification-matrix.md`。
+- **SMC/smart-money-concept 库不可用**：pandas 2.x 下 DataFrame 为 `writeable=False`，SMC 库 `iloc` 赋值抛 `read-only` 异常。不要尝试修复（1348行代码，yfinance依赖）→ 用 `structure_detector.py` 纯Python摆动点检测替代。
+- **patch 工具中文编码陷阱**：修改含中文变量名的脚本（如`智能更新结构.py`）时 `patch` 工具可能报 `Escape-drift` 错误。安全方案：用 `terminal` 执行 Python 正则替换 `content.replace(old, new)`。
+- **⚠ 分析卡跨渠道生成不了/读不到格式 → 先查本 SKILL.md frontmatter 是否损坏（2026-06-19 根因）**：症状是新 session/Discord/cron 等其他渠道认不出分析卡技能、格式错乱或干脆出不了卡。真因往往不是记忆没写，而是**本技能文件被「带行号回写」污染**——某次会话把 `read_file` 带行号的输出（`1|---`、`2|name:` …每行 `行号|` 前缀）当成内容 `write_file` 回写，导致第一行变成 `1|---` 而非 `---` → YAML frontmatter 解析失败 → `skills_list` 里 description 显示成乱码 `"1|---"` → 其他渠道扫描技能列表时认不出 → 不加载 → 回落到零碎记忆 → 格式错乱。**诊断**：`skills_list` 看本技能 description 是否乱码；`read_file SKILL.md` 看首行是否被加了 `行号|` 前缀。**修复**：Python 逐行剥离行首 `^\d+\|` 前缀（只剥第一个，不动正文表格的 `|`），先备份 `SKILL.md.corrupted.bak` 再写回，然后 `skills_list` 验证 description 恢复。**预防**：改 SKILL.md/模板用 `write_file` 全量覆写干净内容，绝不把带行号的读取结果回写。记忆（memory/profile）只是速查指针，完整格式靠本技能文件承载，技能文件坏了跨渠道就全失效。
+
+- **分析卡长度：决策卡优先，不写报告**。用户明确纠正“太长了，简直就是在看报告，不知道看什么”。后续多资产分析卡：头部保持10段但文案短；环境/结构/博弈/风控每段控制在约3-5行，只写可交易信息；操作段A/B保持完整①-⑦。
+- **品种显示不要写“交易所：”**。统一写 `BTCUSDT.P · BINANCE`、`XAUUSD · EXNESS`、`EURUSD · OANDA`、`AAPL · NASDAQ`、`AAPL250117C · OPRA`；不要写 `· 交易所：BINANCE`。
+
+## 跟踪模式 / Tracking Mode
+
+触发词：用户在对同一品种已有分析后说「继续分析」「跟踪」「更新」「现在怎么样」。
+
+### 跨模型 / 新会话连续性（2026-06-22）
+
+当用户问「换模型还记得吗」「有记忆吗」「同步了吗」「新会话还能接上吗」时，按以下顺序处理：
+
+1. **区分三层记忆**：
+   - 长期记忆：用户偏好、格式铁律、TV MCP优先、截图要求、明确方向等稳定规则。
+   - 会话记忆：当前 Telegram 话题/session 内的对话上下文，可通过 `session_search` 找回。
+   - 短期行情：具体价位、当下方向判断、临时截图路径，通常不写长期 memory，避免过期污染。
+2. **说明投递范围**：如果没有显式调用 `send_message(send)` 或 cron delivery，不要说已同步到其他会话/平台；默认只是当前话题回复。
+3. **换模型规则**：同一 Hermes profile 下切模型会继续读取 memory/user profile/skills；新 session 也会注入长期偏好，但具体历史对话需用 `session_search` 检索；换 profile 则不保证共享。
+4. **用户要求“同步”时**：只把稳定偏好写入 memory 或 skill，不保存短期行情价位、单次交易判断、截图文件路径。
+5. **交易分析技能优先承载流程**：用户对交易分析连续性的要求属于本技能的工作流规则，不应只写 memory；必要时同步更新本 SKILL.md。
+
+用户连续问同一品种时不代表需要重新做全量分析。**⚠ 每轮更新必须带新截图** — 用户明确要求"要有截图，都要有截图"。价格移动≥0.3%或DMI等级变化时必须截图。
+
+**「继续/现在呢/接着看」inherit vs full 的新鲜度判断（2026-08-29 实战固化）**：用户说「继续棠溪交易系统分析 / 继续 / 现在呢」这类继承请求时，不要默认 inherit，也不要无脑 full——先查**具体默认文件的最新时效**再决定档位：
+- `data/auto_card_{SYMBOL}.md` 与 `auto_card_{SYMBOL}_full.md` 的 mtime——超 ~30 分钟即不新鲜；
+- `data/btc_ref_levels.json` 的 `updated_at` 字段——参考位过期则该位本身不可信，必须用本轮真实 TV 数据重建；
+- `data/monitor_heartbeat.json` 的 `time`——佐证运行态（非行情）；
+- `data/keylevels_config.json` 各候选位带 `valid_until`，**过期候选位不可复用**，须由真实 TV 采集结果重建触发参考位。
+判定规则：最新卡/参考位已过期（本例 01:14 卡、间隔约8小时）→ 上下文不新鲜 → 走 **full**（五周期全采+完整驾驶舱卡），并在「完整性备注」写明哪些步骤重新采集、哪些降级。只有卡与参考位都在 30 分钟内且价格未明显移动才走 inherit 浓缩跟踪卡。
+
+① **判断价格变化是否显著** — 先调 `jin10_get_quote` 看现价对比上张卡。变化 < 0.3%（XAU~$12/ BTC~$200）且 DMI 等级不变 → 跳过全量分析，出 4 行浓缩跟踪卡（现价·周期变化·CVD变化·操作更新）。变化 ≥ 0.3% 或时间已过 30+ 分钟 → 进入 Step 2。
+
+> **⚠ 追踪更新也必须拉 Binance 衍生品方向票（用户 2026-08-29 纠正）**：追踪档"现在呢"绝不只是拉现价+K线就出卡。**必须同时刷新 OI / 资金费率 / 大户多空 / 全局多空 / Taker 买卖比 / Depth 买卖墙比六件套做交叉核验**，否则会把"价格走弱"误读成单一空头叙事、漏掉下方承接/上方卖压的分歧。用户原话「没有拉取api来核验吗」。即使价格 <0.3% 不变，也拉一遍派生数据：OI 扩仓/减仓方向、Taker 买卖主导、bid/ask 墙比、大户多空拥挤度——这些常推翻或修正单一方向判断（本例：大户 67% 偏多 + bid 墙 8.3x = 下方承接强，与"偏空"并存的拉锯格局，而非纯空头趋势）。追踪更新只缩短输出（3 表），不缩短数据采集。
+
+② **刷新 TV 核心数据** — 只读最有信息量的三样：`study_values`（看 VWAP/EMA 偏移）、`pine_tables`（看 DMI 等级是否变化）、`pine_labels`（看关键位是否更新）。除非价格已大幅移动，跳过 `data_get_ohlcv` 全量（省 token）。
+
+③ **对比 DMI 等级演变** — 调 `references/dmi-evolution-as-signal.md`。如果等级从前一张卡的 X 变成了 B/C，必须在卡面标注「DMI 等级改善：X→C等待」——这是用户决策的关键信号。如果等级恶化（A→X），也必须醒目提示。
+
+④ **输出浓缩跟踪卡** — 必须附新截图（MEDIA首行）。不重新输出完整五段。推荐格式：
+   - **变化对比表**（before/after）：价格·等级·VWAP溢价·Taker方向·OI·磁吸距 等关键指标前后对照
+   - ①结构（只写变化点，如「X→C等待 回踩VWAP后信号改善」）
+   - ②关键位（窄幅矩阵，只列近端3-5个）
+   - ③多源更新（重点变化标签）
+   - ④操作（A/B 保留完整）
+   - 头部 10 段（压缩每行 ≤ 30 字）
+   - ①结构（只写变化点，如「X→C等待 回踩VWAP后信号改善」）
+   - ④操作（A/B 保留完整）
+   - 对比说明：与前一张卡的差异（价格变化 + DMI 演变 + CVD 变化）
+   - 新截图（如果价格移动 ≥ 0.5% 或 DMI 等级变过）
+
+⑤ **防止 TV 数据漂移** — 切换品种再切回后，study_values 可能返回旧品种值（如 BTC 64K 数据出现在 XAU 4K 图表中）。检测方法：如果 study_values.VWAP 与 jin10_quote.close 相差超过 10 倍，说明数据 stale。修复：再调一次 `chart_set_timeframe("5")` + `chart_get_state` 确认后再读。
+
+跟踪卡示例（本次会话中从 4,202→4,189 的更新）：
+```
+**④ 状态：C等待（此前 X/过热禁追→已改善）**
+**DMI演变：X→C等待 · 亚盘急拉回落至VWAP后信号从不可用变为可操作**
+**现价 4,189 | CVD -1,308 缓慢渗透卖压**
+**→ 守VWAP 4,180 多 · 破VWAP 4,180 空**
+```
+
+## 系统哲学 · 手动交易决策支持（2026-06-21 锁定）
+
+**棠溪明确："我就是交易系统，但是我来控制开单。"**
+
+**🔴 用户要求实时监控时用daemon不用cron（2026-06-22教训）**：棠溪明确纠正过：5m cron不够实时。用户说"实时"时用 `terminal(background)` 启动10s轮询守护进程，不用cron。cron只适合分钟级宽松监控/报告。详见 `references/background-daemon-threshold-monitor.md`。
+
+**🔴 多因子评分替代单条件（2026-06-22教训）**：棠溪说"要机灵一点，多角度，75%胜率"。简单价位到位就推不够聪明。用多因子评分（价格 vs VWAP + EMA + Taker + 大户多空 + 24h回撤 + K线趋势），累加≥75分才推送。因子固定分不浮动。评分代码模式见 `references/background-daemon-threshold-monitor.md` 进阶版，可复用模板见 `scripts/multi_factor_daemon_template.py`。
+
+**🔴 HTF方向优先级（2026-06-22社区验证）**：SMC铁律——LTF入场必须与HTF同方向。当4h/日线偏空时，VAL支撑反弹只算"反弹"不是"反转"，止损要更紧、目标限于VWAP而非突破。多因子守护的HTF感知逻辑（读4h K线+VWAP判断多空）已对齐，见 `scripts/btc_vwap_daemon.py` 的 `check_htf_bias()` 函数。
+
+**🔴 当用户问方向时不丢两个选项（2026-06-22教训）**：棠溪说"不是应该你给我方向吗"。用户要的是你的判断，不是两个选项。给出一个方向（偏多/偏空），附上触发条件和矛盾点。如果用户想听反面，他会问。B等待不等于"丢两个方案让他选"——要给出倾向性，只说"等什么条件触发后做哪一边"。
+
+**🔴 指标判X不等于不分析（2026-06-22教训）**：用户说"指标可能不准，所以说你要多方面来分析"。当TV指标判X（结构冲突/不进场）时，不要直接说"X禁做"就结束。X的原因往往是规则性矛盾（例：价在VWAP下但EMA9>EMA21=结构冲突），这种矛盾本身是市场的真实状态。分析方式：
+拆解冲突原因：价在VWAP哪边、EMA方向、CVD方向、量能
+看多空优先级：价格优先于EMA？CVD顺空优先于EMA多头？
+给出倾向性判断，附上破位和守住双路触发条件
+例："偏空等确认。价破VWAP+CVD顺空+4h空，但EMA多头+缩量=假跌破风险。守VAL做多，放量破VAL做空。"
+
+**系统角色不是自动交易，是**决策驾驶舱**：
+- 系统整理所有数据、结构、关键位、触发条件
+- 棠溪看卡后手动判断走哪边、何时下单
+
+**这意味着：**
+① B等待卡必须说清楚"在等什么"，不能只说"等待方向确认"
+② 价格在关键位附近时，必须给出两种走法（破位/守住），让棠溪选
+③ 卡片不是研究报告 — 是决策速读。环境/结构/博弈精炼，操作段完整
+④ 系统跑全量模型没问题，但出给棠溪看的卡必须能30秒读完
+
+**紧凑卡格式（价格锚定关键位时替代60行全量卡）：**
+```
+BTC 64,150 · VAL测试中 · 空头偏
+CVD -2,062卖压 · Taker刚翻卖方0.69 ⚠
+→ 破64,143：空 止损64,313(VAH) 止盈63,692(nPOC) 1:2.5
+→ 守64,143：多 止损63,952 止盈64,215(POC) 1:2.7
+风控：周末轻仓 · 0.68U上限
+```
+
+> ⚠ **v7.5b 更新（2026-06-22）**：末行 "—— 你来选方向 ——" 已从全管线删除（auto_card×2 + 行情守望×1）。棠溪明确"这个不要"。卡片/警报以自然收尾结束，不再追加决策提示行。
+
+- **X级/冲突信号不要推送用户（2026-06-23 用户纠正）**：用户明确说过"没有确定的机会不要推我"。当系统评级为 X（结构冲突/过热禁追）时，不要主动推送到聊天。X 级推理结果可以保留到本地文件供调试，但不投递到 Telegram/Discord。只推送 A/B/C 级中方向明确的信号。如果有多个 cron（持仓与信号、BTC MTF分析、BTC高胜率事件）同时在推，用户会被淹没。保留一个最可靠的推送源（如 no_agent 看门狗），暂停或删除其他重复推送源。
+
+- **B等待不是"什么都不做"（2026-06-21 根因纠正）：**
+当价格实打实在关键位（如VAL 64,143，现价64,150，差7点），卡面说"B等待"=浪费了系统采集的所有数据。正确做法：
+- 识别：价格正在测试哪个关键位
+- 给两条路：破位走哪边、守住走哪边
+- 棠溪看了自己选
+
+247张卡全部B等待 = 系统在说"我不会判断"，不是"市场没机会"。
+
+## Audit & Governance
+
+当棠溪要求"全面检查分析模板/分析策略/搜索生态/降级逻辑/路由"时，必须按审计模式输出，而不是泛泛建议。
+
+**2026-06-28 双指标+Hermes流程审计补充**：详见 `references/2026-06-28-flow-audit-lessons.md`。关键新增铁律：①区分配置应然与运行实然，monitor heartbeat/cron/watchdog 离线是 P0；②手动分析必须现场 TV MCP 多周期读取+截图，缓存 TV DMI 只能 fallback 且必须标注；③B等待/C等待/X禁做不得输出具体入场价，R:R<1:2 不得作为可执行方案；④多模板冲突必须由唯一权威模板裁决。
+
+当审计发现卡片状态是 `B等待` / `C等待` / `X禁做` 但仍给 `入场 当前价`、止损、止盈时，直接标 P0。正确输出是触发条件：例如“15m收上控制点 + CVD转买 + Taker>1.2”或“跌破控制点 + 放量 + Taker卖”，只有 `A做多/A做空` 才能输出可挂单价格。
+
+当审计 auto_card 或监控链路时，看到 `TV DMI(缓存)` 不能视为已完成 TV 实时分析。正式分析必须走 TV MCP：`tv_health_check` → 确认/切换品种 → 4h/1h/执行周期分别读取 table/study/labels/lines → full 截图。缓存只可作为降级路径。
+
+当审计市场适配时，副指标 Volume Aggregated 只作为加密副驾驶；XAU/外汇/股票不可套用加密 Funding/OI/Spot-Perp 逻辑。
+
+当审计复盘治理时，日志存在不等于闭环完成。模型权重/仓位升降必须基于样本，样本 <20 笔只标注观察，不升权。
+
+当审计模板时，若 skill 内出现 v4.2/v8.0/旧V5.1、禁表格/可用表格等互相冲突规则，必须建议建立唯一权威模板并废弃旧段落。
+
+当审计完成前必须给出真实验证证据：至少包括指标静态计数、cron/heartbeat/log 新鲜度、关键脚本测试或出卡回归、MCP可用性抽查。
+
+审计模式输出要求：先 P0/P1/P2，再市场适配矩阵，再可执行优化路线。不要只夸“系统很完整”。
+
+当棠溪要求"全面检查分析模板/分析策略/搜索生态/降级逻辑/路由"时，必须按审计模式输出，而不是泛泛建议：
+
+**Step 0 — 先验运行态（每次审计第一件事）**
+   - `hermes cron list` — 交易分析cron是否存活
+   - `tasklist | grep python` 或 `ps aux | grep python` — 行情守望daemon是否运行
+   - `cat data/monitor_heartbeat.json` — heartbeat时间戳是否新鲜（>5分钟=可能已停）
+   - `tail data/monitor.log` — 最后写入时间
+   - `ls -la data/auto_card_*.md data/monitor_levels.json data/source_snapshot_*.json` — 文件新鲜度
+   - **区分"配置应然"和"运行实然"**：模板写好了但守护停了=系统不在线
+
+1. **先验明运行态**：检查配置、代码、cron、心跳、风险状态、策略统计、搜索工具实际返回，区分"配置应然"和"运行实然"。
+   - 查 `hermes cron list` — 交易分析cron是否存活
+   - 查 `tasklist | grep python` 或 `ps aux | grep python` — 行情守望daemon是否运行
+   - 查 `data/monitor_heartbeat.json` — heartbeat时间戳是否新鲜（>5分钟=可能已停）
+   - 查 `data/monitor.log` tail — 最后写入时间
+   - 查 `data/` 目录文件新鲜度（auto_card_*.md, monitor_levels.json, source_snapshot_*.json）
+   - **区分"配置应然"和"运行实然"**：模板写好了但守护停了=系统不在线
+
+1. **先验明运行态**：检查配置、代码、cron、心跳、风险状态、策略统计、搜索工具实际返回，区分"配置应然"和"运行实然"。
+2. **交易数据分层**：价格按主源+校验源；重大催化至少金十 Flash + X/web/官方源双源确认；单源要明示等级。
+3. **搜索路由分层**：日常发现 DDGS/Brave 优先；正文抽取 Tavily/Exa/Firecrawl；重大催化走金十/X_search/官方源，不把普通搜索当确认源。
+4. **降级而非硬禁用**：provider 失败、额度不足、403、超时都应进入 fallback 链；不要默认建议移除 provider。
+5. **样本治理**：少于 20 笔真实复盘样本前，不做权重/阈值大调；每笔交易必须记录 `model`/`model_id`。
+6. **风控约束**：小本金阶段默认单笔风险应低于上限；100U 本金下 10U 是上限，不是常态。
+7. **安全隔离**：交易 cron 尽量 no-agent；若建交易 profile，只保留 terminal/file/cron/messaging/finance MCP 等必需能力。
+
+输出风格：批判性编号列表，先列 P0/P1/P2 问题，再给可执行优化项和验证命令；不要只夸系统“很完整”。
+
+**代码/脚本审计专项**（"看一下模板/脚本/自动更新逻辑怎么样" = 代码审计，不是出卡）：见 `references/renderer-script-audit-pitfalls.md`。四个高频真实 bug 模式：
+1. **改过脚本必先重新生成产物再判断**——别对着几个 commit 前的 stale 卡（带早已修掉的 `交易所：`/超长正文）报问题。
+2. **broad try/except 吞 NameError → 死代码**：变量名 typo（`DATA_DIR` vs 实际 `DATA`）被 `except: pass` 吞掉，功能从上线起从没运行过，脚本仍 `exit=0`。用 AST 对比"引用未定义"的名字诊断。任何写进 try/except 的"修复"必须验证它真的执行了。
+3. **显示 R:R 必须复用算目标时的同一个止损**：`_tp_reason` 传空 klines 重算止损 → 止损默认近距离 → R:R 虚高 3 倍（标 1:6 实为 1:2），但止盈价是对的。R:R 分子分母的止损要同源。
+4. **B等待渲染器拿现价兜底入场价**：B等待卡 ②入场价==③现价 = 占位符违规，B等待严禁给具体入场价。
+5. **wrapper 子脚本必须逐个确认存在**：缺失子脚本=subprocess 静默失败。
+
+## 2022 模型管线扩展模块（2026-06-22 会话产出）
+
+BTC 全流程管线已扩展为 **8 模块并行架构**，涵盖扫荡→位移→FVG→回测→入场的 2022 ICT/SMC 流程：
+
+| 模块 | 功能 | 周期 |
+|------|------|------|
+| `fvg_detector.py` | 三烛不重叠FVG检测(牛/熊) | 每3min |
+| `order_block.py` | 机构OB识别(强阳/阴前K线) | 每3min |
+| `pipeline_2022.py` | Sweep→Displacement→FVG→Retest→Entry | 每3min |
+| `scoring_engine_v2.py` | 14因子汇聚评分(3+信号=高概率) | 每3min |
+| `event_calendar.py` | Jin10日历+30min事件阻塞 | 每3min |
+| `auto_review.py` | 信号→结果→胜率统计复盘 | 每次出卡 |
+| `pipeline_integration.py` | 全流程串联器→分析卡 | 单次调用 |
+| `btc_pipeline_daemon.py` | 管线守护(每3min)+高概率截图 | 常驻 |
+
+详见 `references/pipeline-2022-modules.md`。
+
+当用户要求"没做的和推荐的一次性完成"时，实现所有P0/P1/P2项目并行执行，不等用户确认，一次commit推远端。
+
+## 社区审计补充（2026-06-22 会话产出）
+
+当用户要求"联网社区看看分析策略有什么问题"时，按以下维度审计：
+
+### 审计维度
+1. **复盘闭环** — 分析→计划→市场走完→回头看判断的准确率、胜率、平均R。无复盘=盲打。
+2. **入场核对清单** — 每次入场前 5 项检查：① HTF方向一致？② 放量确认BOS？③ CVD顺向？④ R:R≥1:2？⑤ 数据等级≥B？缺1项降级/跳过。
+3. **时间过滤** — 亚盘(07-15BJ)低波动筑区间、伦敦(14-17BJ)最高波动、纽约(20-23BJ)方向加速。各时段策略不同。
+4. **事件日历** — 重大数据/决议前60分钟至后30分钟不交易。
+5. **SVP指标尊重原则** — 棠溪的SVP+ICT+VWAP+CVD指标内置完整A/B/C/X评级、CVD顺空/顺多、DMI决策表和结构冲突检测。守护/分析卡不应另建独立评分系统与它对抗。正确的做法：参照指标评级，补充不覆盖的部分（事件、情绪、时间过滤、策略历史表现）。
+6. **多源全量保留原则** — 不执行“固定核心因子/减少指标”。棠溪策略不是砍数据源，而是全源读取后分层裁决：TV双指标为主驾驶，Binance/OI/主动买卖/Depth/金十/恐惧贪婪/CoinGecko/X情绪/宏观为验证、挑战、降级和过滤层。任何来源不能因为“不是核心”被省略。
+7. **层级治理替代裁剪** — 多源信号冲突时不删指标，按职责裁决：结构定方向，订单流定质量，衍生品定拥挤/续航，事件时间定能否交易，情绪只调仓位/警惕反指，复盘统计定模型权重。
+
+### 棠溪多源全量分析协议（不裁剪指标 · 2026-06-27锁定）
+
+用户明确否决“固定核心因子，不再无限加指标”。后续优化方向改为：**全量数据源继续保留，问题不在指标多，而在分层、冲突处理和输出收敛。**
+
+#### ① 数据采集不减配
+每次正式分析必须尽量跑全源：
+- TV MCP：主指标DMI/行动格、SVP关键位、VWAP/EMA/CVD、ICT扫点、Data Window编码、截图
+- TV附加研究：Volume + Open Interest，必要时独立CVD/OI窗格
+- Binance/交易所：价格、K线、OI、多空比、Funding、主动买卖、期现差
+- 深度/链上/挂单：depth_wall、买卖墙、OI四象限
+- 事件/情绪：金十日历/快讯、恐惧贪婪、CoinGecko、X/web情绪、宏观相关
+- 风控/治理：risk_state、复盘统计、连亏/回撤、事件禁做
+
+#### ② 分层裁决，不互相打架
+- **主驾驶：TV双指标** — DMI等级、行动格、SVP/VWAP/EMA/CVD、关键位，是第一判断来源。
+- **质量层：订单流** — CVD、主动买卖、成交量、吸收/背离，用来判断突破/反抽是否可靠。
+- **续航层：衍生品** — OI、Funding、多空比、期现差，用来判断趋势是否有燃料或拥挤反指。
+- **位置层：SVP/Depth/磁吸** — POC/VAH/VAL、挂单墙、磁吸位，用来定入场、止损、目标。
+- **过滤层：时间/事件/宏观** — 数据前后、Kill Zone、DXY/US10Y/商品联动，只决定降级/禁做/等待。
+- **挑战层：情绪/X/社区** — 只做验证和反指警戒，不覆盖结构方向。
+- **治理层：复盘统计** — 只在样本≥20笔后调整模型权重；样本不足只标注观察。
+
+#### ③ 冲突处理公式
+```
+方向 = TV结构 + 高周期背景
+质量 = CVD/主动买卖/量能/吸收
+续航 = OI/Funding/多空比
+可交易 = 位置接近关键位 + R:R≥1:2 + 事件未禁做 + 风控允许
+输出 = 一个主倾向 + 破/守两路触发 + 明确失效
+```
+
+冲突时处理：
+- TV A/B 但订单流反向 → 降一级，等确认，不直接反向。
+- TV X/C 但多源共振在关键位 → 不结束分析，拆矛盾并给破/守两路。
+- OI增 + 价格反向 + Funding极端 → 标记拥挤/踩踏风险。
+- 情绪极端只提示反指，不单独生成交易方向。
+- 重大事件窗口 → 即使多源共振也先降级或禁新仓。
+
+#### ④ 输出收敛，而不是数据收敛
+卡片可以短，但采集不能少。输出只写可交易信息：
+- 先给一句主结论：偏多/偏空/观望，不把两边都丢给用户。
+- B等待必须写“偏哪边、等什么、错在哪”。
+- 价格贴关键位时必须给破/守两条路。
+- 第一轮可全量；后续“现在呢”只输出3-5行变化 + 截图。
+
+#### ⑤ 推送阈值
+主动推送不是“价到就推”，也不是“只核心因子推”。推送需满足：
+- 价格进入关键位/磁吸/挂单墙附近
+- TV等级或行动格有明确处理
+- 订单流/衍生品/Depth 至少两项支持或出现高风险反指
+- 事件窗口未禁做，R:R可成立
+- X级纯冲突不推，只本地记录；但X→C/B/A改善必须可推
+
+### 审计输出
+```
+✅ 对的：TV双指标为主 · 多源全量 · MTF分层 · 量能识别 · 双路计划
+⚠️ 要治理的：信号冲突未分层 · 输出过长 · B等待不给倾向 · 推送噪音
+❌ 缺的：复盘闭环 · 入场核对清单 · 时间过滤硬降级 · 策略历史表现
+```
+
+## FVG (Fair Value Gap) 分析法
+
+**用户纠正（2026-06-30 安禾）**：FVG是**中线概念**，分析周期为4h/D而非15m/5m。15m/5m的FVG只作回测执行精确价位参考，不做结构判断。
+
+| FVG类型 | 条件 | 缺口区间 | 意义 |
+|:--:|:--|:--|:--|
+| 🟢 看涨FVG | C1.HIGH < C3.LOW | C1.HIGH → C3.LOW | 买方强势推动·结构性支撑 |
+| 🔴 看跌FVG | C1.LOW > C3.HIGH | C3.HIGH → C1.LOW | 卖方强势推动·结构性阻力 |
+
+### 当前关键发现：SVP v10 已显式内置 FVG
+
+**2026年9月11日起的定版主指标为「空格修正」（3557 行，sha256[:24]=68a34fc3 = SVP_audit_fixed17_20260910.pine）。** 它显式包含 FVG 模块（`SHOW_FVG`、`FVG_DRAW_BOXES`、`FVG_REQUIRE_DISP`、`FVG_HTF_ALIGN`、`SHOW_HTF_FVG`、`FVG_SHOW_CE`），且在行动格里有独立的 `结构` 行与 `路径` 行；旧的 `确认` 行已合成进 `协同`/`结构`/`CVD` 三行。
+
+**对FVG分析的影响：**
+- 正式读图优先读取主指标 `pine_boxes`/行动格确认行/HTF FVG质量码，不再说“指标没有FVG”。
+- 4h/D 的中线FVG仍是结构主依据；15m/5m FVG只作执行精确触发。
+- 若 TV MCP 未返回 boxes，才从OHLCV用ICT三K算法补算，并标注“OHLCV补算”。
+- 正确处理流程：①读4h/D主指标FVG/HTF FVG → ②读1h结构 → ③15m/5m找CE回踩/扫线触发 → ④用副指标OI/CVD/量能确认。
+
+### 多周期FVG真实案例（GASUSDT 2026-06-30）
+
+分析GASUSDT时发现自己犯的错误：
+1. 首次分析：用15m OHLCV跑FVG检测 → 找到1.137-1.144和1.142-1.151两组
+2. 安禾纠正：「FVG是中线概念」
+3. 改分析4h OHLCV → 发现唯一未补中线FVG：**4h看涨FVG #97 @ 1.111-1.118**
+4. 15m上的FVG只是短线执行参考，4h上的才是真正的结构支撑
+5. 结论：「等回踩1.111-1.118接多」才是正确的中线FVG用法
+
+**教训**：不要被低周期FVG吸引注意力——15m上可能有多个FVG看似"未补"，但只有4h/D上的FVG才有结构意义。
+
+### 执行纪律
+1. FVG首识别周期为**4h/D**，这是中线
+2. TV MCP的pine_lines可能不返回FVG box数据（只返回horizontal_levels）→ 用ICT 3-candle算法从OHLCV自行计算
+3. 未补FVG对价格有磁吸力；已补则结构意义减弱
+4. 多周期FVG重叠区 = 高概率支撑/阻力
+5. 看涨FVG被跌破（价格收在缺口下沿下方）= 多头结构失效
+6. 详细算法、填充判定、实战案例见 `references/fvg-detection-methodology.md`
+
+## References (v6.9 · 2026-06-19)
+
+- `references/template-v69-execution-protocol.md` — ⚠ **已作废（2026-06-19）**：此文件教 setup_id/model_id/entry_tag/exit_tag 写入正文，与「正文零机器字段铁律」冲突。只保留三线结构/三源裁决/风控闸门思路，机器字段部分作废。机器字段只存 meta dict。
+- `references/master-template-v68.md` — **v6.9.5 统一主模板 (唯一权威)**
+- `references/api-pricing-sources.md` — **价格源与期货/现货区分（2026-06-21）**：加密Binance期货>CMC现货，XAU gold-api现货+YahooGC=F K线，`_price_label()` 格式
+- `references/binance-hmac-endpoints.md` — **Binance HMAC签名端点速查（2026-06-21）**：`/futures/data/*` vs `/fapi/v1/*` 正确路径+签名实现
+- `references/data-pipeline-health-audit.md` — **数据管线健康审计（2026-06-21）**：占位符扫描方法论
+- `references/template-v69-machine-fields.md` — ⚠ **正文部分已作废（2026-06-19）**：机器字段 setup_id/model_id/entry_tag/exit_tag 只写入 trade_plans 与 monitor_levels.latest_setup（后端/复盘用），绝不渲染进分析卡正文。卡面只保留中文人读内容。
+- `references/card-audit-checklist.md` — **出卡审计清单 (P0/P1/P2)**
+- `references/real-trade-closeloop.md` — **真实成交闭环速查（2026-06-19）**：开仓标记→平仓复盘→每5笔分市态分栏，累积≥20笔解锁权重调整。样本<20只定方向不定仓位。
+- `references/alert-rendering-v75.md` — **警报渲染铁律 v7.5（2026-06-21）**：display_name优先·禁止双重前缀·中文方向·`·`分隔·技术术语保留英文·REPORT_TOPIC修正
+- `references/telegram-card-display-format.md`
+- `references/btc-analysis-compact-template.md` — **精简6段分析模板（2026-06-22）**：社区审计后由10段+5段简化为6段，30秒读完。
+- `references/v7-audit-complete.md` — **BTC分析管线v7完善清单**：社区审计所有改进项记录。
+- `scripts/trade_journal.py` — **复盘闭环脚本**：记录每次分析判断供验证。`python trade_journal.py review`查看。
+- `references/pine-source-source-mapping-2026-06-23.md` — **Pine Script 源码参数映射（2026-06-23新增）**：CVD.txt + SVP综合指标的参数对照表，VWAP/EMA/CVD/DMI对齐值，dmi_decision.py验证方法
+- `references/dmi-evolution-as-signal.md` — **DMI 等级演变作为实时方向过滤器**：X→C等待 等演变模式是交易信号的一部分，出跟踪卡时必须对比前置 DMI 等级。
+- `references/magnet-score-cvd-divergence.md` — **Magnet Score（0-100）定量解读 + CVD Slope背离信号**：Magnet Score≥80=极强磁吸到目标位；CVD Value与CVD Slope方向不一致=分歧信号（卖压减速/买压吸收），配合价格行为做反转/延续判断。
+- `references/2026-06-23-full-system-audit.md` — **2026-06-23 全系统审计报告**：运行态发现(daemon已停/cron全缺/模板矛盾)+修复建议+当前BTC市场状态
+- `references/cron-quick-scoring-template.md` — **Cron快速多因子评分模板 v1.0**：8因子×10分=/80，阈值≥56推送。标准化agent cron评分避免ad-hoc不一致。
+- `references/ref-level-snapshot-pattern.md` — **Reference Level Snapshot**：轻量级TV MCP数据采集模式，只取study_values的VWAP/VAH/VAL/POC/W_VWAP + OHLCV summary，适合no_agent cron周期性更新参考位。不替代多周期分析协议。
+- **Ref-level cron静默写盘协议（2026-07-01实测，2026-07-02补丁）**：当定时任务要求“写JSON成功则不输出/Output NOTHING if success”时，最终回复必须用纯 `[SILENT]` 触发静默投递；不要解释成功。流程：`tv_health_check` 失败先 `tv_launch(kill_existing=false)` 尝试连接；仍不可用则跳过并 `[SILENT]`。成功后设置 `BINANCE:BTCUSDT.P` + `15`，等待8秒，读取 `study_values` 提取 `S VWAP`/`VAH Price`/`VAL Price`/`POC Price`/`W VWAP Price`/`DO Price`，读取100根OHLCV取 `recent_high`/`recent_low`，写入 `data/btc_ref_levels.json`，字段固定为 `vwap,val,vah,poc,do,w_vwap,recent_low,recent_high,updated_at`。
+  - **SVP缺失静默跳过**：ref-level cron 只负责刷新参考位，不是诊断报告。若 `chart_get_state`/`study_values` 显示当前图表只有 `Volume`、`Volume Aggregated Spot & Futures` 等副研究，缺少主 `SVP+ICT+VWAP+CVD`，或所需字段任一缺失，不要写入空值/旧值，也不要投递“未更新”说明；直接 `[SILENT]` 结束。需要人工修图表时留给专门的TV布局诊断任务处理。

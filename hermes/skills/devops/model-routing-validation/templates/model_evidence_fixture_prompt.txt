@@ -1,0 +1,35 @@
+【固定测试·只输出决策卡，不要调用任何工具，不要加载技能】
+
+用途：主模型选型的同题横评。所有候选喂同一份提示词，用 --ignore-rules 统一上下文，再按合规/保真评分。
+把下面的【证据包】换成当前真实的快照，但**务必保留裁决陷阱**（S3 冲突 + FinalVerdict=WAIT）。
+
+规则：
+1. 只有 GO-A 且 executable=true 才能给 Entry/Stop/Target；WAIT/NO-GO 必须把三件套清空写「无」。
+2. 只允许一个 ⭐主推，其余只能标为观察候选。
+3. 只能引用【证据包】里出现过的数字；证据包没有的字段必须写「缺失」，禁止编造任何数值。
+4. X 情绪仅可作催化剂/盲点，不得改变裁决或价格。
+5. S3 冲突存在时，不得执行，必须出 WAIT 或 NO-GO。
+6. 中文，先结论后数据，不写装饰性分隔线。
+7. 输出严格按此骨架，共 7 行区块：
+   结论：
+   裁决：GO-A / GO-B / WAIT / NO-GO（选一）
+   三件套：Entry / Stop / Target
+   ⭐主推：
+   关键位：
+   多源冲突：
+   盲点：
+
+【证据包】
+标的：BTCUSDT 永续（Binance），现价 <fill>
+1D：SVP 结构 <fill>，价值区 <fill>，nPOC <fill>，行动格=<fill>
+4h：结构 <fill>，行动格=<fill>，ATR(4h)=<fill>
+15m：结构 <fill>，最新收盘 <fill> <跌破/站上> 15m 关键位 <fill>，行动格=<fill>
+5m：CVD <fill>、价格 <fill>（量价背离与否）
+Binance 衍生品：资金费率 <fill>%，OI 24h <fill>%，Taker 买卖比 <fill>
+SVP 数据状态：S0 <missing/正常>、S1 <fill>、S3 <冲突描述>
+X 情绪：<fill>（样本 N 条，未验证）
+已批准关键位：上方 <fill> / <fill>，下方 <fill> / <fill>
+Python FinalVerdict：WAIT，executable=false
+
+评分要点（记分后再决定谁当主模型）：
+① 裁决是否正确；② 三件套是否清空；③ 是否只有一个 ⭐；④ 是否出现证据包之外的数字（=编造，一票否决）；⑤ 是否点出数据缺口。

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  /* 棠溪驾驶舱深色卡脚手架 — 复制改数据即可。宽度锁 400px 适配手机。 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    color: #e6e6ea;
+    padding: 14px;
+    display: flex;
+    justify-content: center;
+  }
+  .card {
+    width: 400px;
+    background: linear-gradient(180deg, #15101f 0%, #120e1a 100%);
+    border: 1px solid #2a2240;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(103,58,183,0.18);
+  }
+  .header {
+    background: linear-gradient(135deg, #673AB7 0%, #4a2387 100%);
+    padding: 14px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .header .coin { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+  .header .time { font-size: 12px; opacity: 0.85; }
+  .banner {
+    padding: 12px 16px;
+    background: #1b1530;
+    border-bottom: 1px solid #2a2240;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .banner .lbl { color: #b388ff; font-weight: 700; }
+  .section { padding: 12px 14px; border-bottom: 1px solid #221c33; }
+  .sec-title {
+    font-size: 14px; font-weight: 700; color: #fff;
+    margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+  }
+  .sec-title .badge {
+    background: #673AB7; color: #fff; width: 20px; height: 20px;
+    border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; flex-shrink: 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #2a2240; color: #c9b8ff; font-weight: 600; padding: 6px 7px; text-align: left; font-size: 11px; }
+  td { padding: 6px 7px; border-top: 1px solid #221c33; line-height: 1.45; vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(103,58,183,0.06); }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .t-long { background: rgba(38,166,154,0.22); color: #4fd1c5; }
+  .t-short { background: rgba(239,83,80,0.22); color: #ff7676; }
+  .t-wait { background: rgba(66,165,245,0.20); color: #64b5f6; }
+  .t-ban { background: rgba(255,167,38,0.20); color: #ffb74d; }
+  .t-warn { background: rgba(255,193,7,0.18); color: #ffd54f; }
+  .t-neu { background: rgba(158,158,158,0.18); color: #bdbdbd; }
+  .verdict { padding: 12px 14px; background: #1b1530; border-bottom: 1px solid #2a2240; }
+  .verdict .row { font-size: 13px; line-height: 1.7; }
+  .verdict .k { color: #b388ff; font-weight: 700; }
+  .audit { padding: 10px 14px; font-size: 10.5px; color: #8a82a0; line-height: 1.7; }
+  .audit .ok { color: #4fd1c5; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <span class="coin">₿ BTC 分析卡</span>
+    <span class="time">2026年7月8日 09：11</span><!-- 改时间 -->
+  </div>
+
+  <div class="banner">
+    <div><span class="lbl">一、现在在哪：</span><!-- 填当前结构一句话 --></div>
+    <div style="margin-top:6px"><span class="lbl">二、现在怎么做：</span><!-- 填操作一句话 --></div>
+  </div>
+
+  <div class="section">
+    <div class="sec-title"><span class="badge">①</span>当前结构</div>
+    <table>
+      <tr><th>侧重点</th><th>结构位</th><th>动作</th></tr>
+      <!-- 每行: <tr><td>【当前】...</td><td>价格</td><td>动作/带色tag</td></tr> -->
+      <tr><td>【当前】VWAP下沿</td><td>63,163</td><td><span class="tag t-wait">偏弱·等方向</span></td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="sec-title"><span class="badge">②</span>多周期定位</div>
+    <table>
+      <tr><th>周期</th><th>主表结论</th><th>副表信号</th><th>裁决</th></tr>
+      <!-- 4列在400px图片下可容纳，不会像文字表那样错乱 -->
+      <tr><td>D</td><td><span class="tag t-warn">观望⚠冲突</span></td><td>涨势存疑·CVD不配</td><td>高周偏弱·禁追</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="sec-title"><span class="badge">③</span>关键位矩阵</div>
+    <table>
+      <tr><th>方向</th><th>价位</th><th>用法</th></tr>
+      <tr><td>上方磁吸</td><td>64,298</td><td>周二高·多头目标</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="sec-title"><span class="badge">④</span>多源验证</div>
+    <table>
+      <tr><th>维度</th><th>数值</th><th>方向</th></tr>
+      <tr><td>主动买卖</td><td>0.897→1.579→1.015→1.239→0.741</td><td><span class="tag t-short">↑买转卖</span></td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="sec-title"><span class="badge">⑤</span>执行方案</div>
+    <table>
+      <tr><th>方案</th><th>条件</th><th>执行</th></tr>
+      <tr><td><span class="tag t-long">A主推·回踩多</span></td><td>63,300守住+15m回VWAP上</td><td>多@63,300；损62,630；标63,800→64,234→64,298；R:R≈1:1.5</td></tr>
+    </table>
+  </div>
+
+  <div class="verdict">
+    <div class="sec-title"><span class="badge">⑥</span>最终裁决</div>
+    <div class="row"><span class="k">【主线】</span><!-- 填 --></div>
+    <div class="row"><span class="k">【转空】</span><!-- 填 --></div>
+    <div class="row"><span class="k">【失效】</span><!-- 填 --></div>
+    <div class="row"><span class="k">【评分】</span><!-- 填 --></div>
+  </div>
+
+  <div class="audit">
+    完整性审计：<span class="ok">✅</span> 1 TV健康 2 TV·D 3 TV·4h 4 TV·1h 5 TV·15m 6 TV·5m 7 Binance 8 CG Pro 9 宏观 10 X情绪 11 cron_read 12 CVD 13 Depth 14 Corr 15 Card — 15/15 全通过
+  </div>
+</div>
+</body>
+</html>

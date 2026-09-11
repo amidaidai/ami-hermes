@@ -1,0 +1,81 @@
+# data/risk_constitution.json
+# 风控宪法可调参数 - 热更，无需重启
+# evaluate_risk() 每次调用读取（或 60s 缓存）
+
+{
+  "version": "2026-07-10",
+  "description": "棠溪风控宪法 v2.0 - 单一真相源",
+  
+  "position_sizing": {
+    "max_risk_per_trade_pct": 0.01,
+    "max_risk_usd_cap": 10.0,
+    "kelly_fraction": 0.20,
+    "min_stop_atr_ratio": 0.5,
+    "max_stop_atr_ratio": 2.5,
+    "required_rr_ratio": 2.0
+  },
+  
+  "drawdown_protection": {
+    "mode": "conservative",
+    "daily_limit_pct": {
+      "conservative": 0.02,
+      "aggressive": 0.05
+    },
+    "daily_hard_limit_pct": 0.10,
+    "weekly_limit_pct": 0.10,
+    "weekly_hard_limit_pct": 0.15,
+    "drawdown_degradation": {
+      "5%": 0.75,
+      "8%": 0.50,
+      "12%": 0.25,
+      "15%": 0.10,
+      "20%": 0.0
+    }
+  },
+  
+  "consecutive_losses": {
+    "max_consecutive": 3,
+    "action": "pause",
+    "half_position_after": 3,
+    "pause_after": 5
+  },
+  
+  "protections": {
+    "stoploss_guard_lookback_bars": 12,
+    "cooldown_after_loss_bars": 3,
+    "trade_cooldown_minutes": 15,
+    "max_trades_per_day": 10
+  },
+  
+  "volatility_targeting": {
+    "base_volatility": 0.02,
+    "min_multiplier": 0.3,
+    "max_multiplier": 1.5,
+    "bb_width_volatile": 0.03,
+    "bb_width_calm": 0.01
+  },
+  
+  "correlation_limits": {
+    "max_correlation": 0.7,
+    "btc_eth_correlation": 0.85,
+    "action_on_breach": "reduce_position_50pct"
+  },
+  
+  "portfolio_limits": {
+    "max_total_risk_pct": 0.15,
+    "force_reduce_at_pct": 0.25,
+    "force_reduce_target_pct": 0.20
+  },
+  
+  "news_blackout": {
+    "minutes_before": 60,
+    "minutes_after": 30,
+    "volatility_ban_btc": 0.05,
+    "volatility_ban_xau": 0.01
+  },
+  
+  "unreviewed_trades": {
+    "max_unreviewed": 0,
+    "action": "light_position_only"
+  }
+}
