@@ -1,190 +1,93 @@
-# 双指标 TV Pine → 分析卡 字段映射 v1.3
+# 双指标 TV Pine → 分析卡 字段映射 v2.0
 
 > 所属：棠溪交易驾驶舱 / `tradingview-indicator-analysis`
-> 更新：2026年9月10日（上一版 v1.2 = 2026年7月2日）
-> 权威来源：两份 v13 生产指标源码 + 2026-09-10 在 `BINANCE:BTCUSDT.P` 上的实盘读数
+> 更新：2026年9月11日（上一版 v1.3 = 2026-09-10，记录的是 v13 指标，**已失效**）
+> 权威来源：两份**定版**指标源码 + 2026-09-11 `BINANCE:BTCUSDT.P` 实盘读数
 > **唯一代码定义源**：`scripts/tv_indicator_contract.py`（改字段先改这里）
 
-## 0. 当前生产指标
+## 0. 当前生产指标（定版）
 
 | 指标 | Pine 文件 | sha256[:24] | 行数 | 分工 |
 |---|---|---:|---:|---|
-| 主指标 | `SVP_主指标_优化v13_清理死码_20260910.pine` | `98d6338b4cb77e5d4e56e5e4` | 3446 | 结构、位置、IA/FVG/OB、VWAP/EMA/CVD、DMI体制、13 行行动格、唯一执行授权 |
-| 副指标 | `AggVol_副指标_优化v13_清理死码_20260910.pine` | `9f71366943a2d773ccb0c1c4` | 921 | 5 所聚合成交、4 所 OI、估计 CVD、LSR、基差、6 行行动格、只确认/降级/否决 |
+| 主指标 | `SVP_主指标_行列优化_20260911.pine` | `84094d3228ff26d06fc592fe` | 3557 | 结构、位置、FVG/OB、VWAP/EMA/CVD、DMI 体制、13 行行动格、**唯一执行授权** |
+| 副指标 | `AggVol_副指标_最终版_20260911.pine` | `c4c563ef4a08b77cb0ceb73f` | 966 | 5 所聚合成交、4 所 OI、估计 CVD、LSR、基差、6 行行动格、**只确认/降级/否决** |
 
-## 1. v1.2 → v1.3 的实质变化（旧文档已失效的部分）
+优先级铁律不变：`X > WAIT > A > B/C`。X/WAIT 清空 Entry/Stop/Target；B/C 价格只进人工候选字段。
 
-| 项 | v1.2 记录 | v1.3 实际 | 影响 |
+## 1. v13 → v16/v15 的实质变化（卡/流程必须跟着改的部分）
+
+| 项 | v13 行为 | v16/v15 现在 | 对卡与流程的影响 |
 |---|---|---|---|
-| 主指标版本 | v5 / 3163 行 | **v13 / 3446 行** | 字段与行名大幅变化 |
-| 主指标行动格 | 10 行：结论/方向/进场/止损/目标/确认/风险/磁吸↑/磁吸↓/核对 | **13 行**：位置/结论/方向/路径/风控/CVD/OI/协同/结构/磁吸↑/磁吸↓/前位/现位 | 旧卡片只吃到 4/13 行 |
-| 进场·止损·目标 | 独立三行 | **折进「风控」行**：`入X·止Y·n.nA·标Z·n.nR` | 必须解析「风控」行才能拿到价格 |
-| 「风控」行标签 | 固定「风控」 | **动态四态**：风控 / 风控·观察 / 风控·未授权 / 禁做·不出价 | 只认字面「风控」会在观察态漏读 |
-| 副指标版本 | v6 / 469 行 | **v13 / 921 行** | — |
-| 副指标行动格 | 10 行 | **6 行**：信号/结论/流向/持仓/量能/操作 | 风险/高周/覆盖/爆仓已并入或删除 |
-| `OI Total` | 有 | **已不存在** | 旧映射恒空 |
-| `Estimated CVD Value` | 有 | **改名为 `CVD Value`** | 旧映射恒空 |
-| `MCP CVD Value` | 有 | **已不存在** | 旧映射恒空 |
-| `MCP EMA Length 1-4` / `MCP Risk Pack` / `MCP Bull FVG CE` | 有 | **均已不存在** | 旧映射恒空 |
-| 主副连接 | 无 | **`Basic Packed Bus`（合同号 22002）** | 主指标必须选源指向它 |
-| 配额 | 交易所 20 + 2 + 4 + 1 = 27/40 | **request.\* 8 / 8，input 193 / 38，alert 0** | — |
+| **合同号** | 22002 | **22003**（22002 向后兼容） | 主指标两个都接受；只换副不换主 → 主显示「副合同不匹配」，**fail-closed** |
+| **OI 缺失** | 全缺编码成 `0` → 显示「持平 0.00%」 | `oiPctEnc == 0` 作显式哨兵；主 `oiWired` 要求 `oiPresentInBus` | **卡面不再把「没数据」写成「持平」** |
+| **Coverage Feed Mode** | 1聚合/2回退/4异常（Single 也落 4） | **四态**：1聚合/2回退/**3单源不参与协同**/4异常 | 卡（`haldro_quality`）在非聚合态追加「· 数据源X」；单源不再报「异常」 |
+| **Trigger Pack 低位** | `signalState+1`，X 态为 −1 → 借位 | `signalState+3`（域 1..7，恒非负） | 解码必须 `-3`（`decode_trigger_pack`） |
+| **A 级执行门槛** | 不含 CVD 冲突 | **纳入 `cvdConflict`** | 面板说「等CVD」时，MCP 执行价**必须为空**；A 会变少 |
+| **HTF FVG/OB** | 返回值多套一层 `[1]` | 去掉外层偏移 | 区域**提前一根高周期柱**出现（日线早一天、4h 早 4 小时） |
+| **触发选择** | 先按优先级选、再看新鲜度 | **先按新鲜度过滤**再按优先级 | 路径行可能换成更新的那个触发 |
+| **扫线事件** | 被「隐藏已扫线」吃掉 | 事件判定不看视觉隐藏 | H1+ 开启隐藏时，结构/MSS/评分会变化 |
+| **稳定位** | 只在破位/走远/更优时更新 | 增加 **48h 年龄上限** | 超龄退役到「前位」，不再冒充活跃位 |
+| **OB 回踩资格** | `bar_index > bornBar`（来源柱） | `bar_index > confirmBar`（确认柱） | 新建 OB 当根不再算「已回踩」 |
+| **信号持续** | 无计划时只累加不复位 | 无计划即复位 | 多→无→无→多 不再算「持续 3 根」 |
+| **SMT** | 对照只请求 close | 对照请求 OHLC，两侧同用 high/low | 影线创高但收盘回落不再漏判 |
+| **执行价格式** | `"#.####"`（丢前导零、低价截 0） | `f_fmt_exec` 按 `format.mintick` | **入场/止损/目标是可直接下单的值** |
+| **结构行** | `…·守摆高·收缩·等放量·未扫N/M` | 结构文本已含同状态词时省略 regime 段 | 行更短；原版语义保留 |
+| **磁吸行** | `↑周四 纽 高 …·分74·100%(30/30)` | `周四纽高 …·分74·40%`（满窗不标样本量） | 去掉与行标签重复的箭头；未满窗才标 `(n/30)` |
+| **副指标文案** | `扫N`（实为未扫）、`⚠主导`、`·OI` | `未扫N/M`、`⚠永续主导`、`·OI最弱` | 语义纠正 |
+| **Single 模式请求** | 单源仍发 20 个 request | 补 `datatype=='Aggregated'` 门控 | 单源不再空烧配额 |
 
-## 2. 主指标行动格（13 行，权威读法）
+## 2. 解码契约（读之前必看）
 
-| # | 行 | 含义 | 卡片用途 | 授权含义 |
-|---:|---|---|---|---|
-| 1 | 位置 | 价在 VA 上/下 · VWAP 锚 · 周月偏空/多 · 波N% | 背景定位 | — |
-| 2 | 结论 | 副Sx·A禁/不执行 + 冲突/未收线标志 + 等待根数 | **裁决首读** | 决定等级 |
-| 3 | 方向 | 主倾向 · 趋势/震荡 · 评分 n/10 | 方向速览 | — |
-| 4 | 路径 | 触发链 + `·距n.nA↑/↓`（入场位距现价） | 触发条件 | — |
-| 5 | **风控** | 授权等级 + `入X·止Y·n.nA·标Z·n.nR` | 执行三件套 | **风控·观察 / 风控·未授权 / 禁做·不出价** |
-| 6 | CVD | 锚定周期 · 方向 · 质量 · `基差±n.nn%` | 订单流确认 | — |
-| 7 | OI | 四所 OI 共识 / 未接 | 持仓变化 | — |
-| 8 | 协同 | `副Sx…·高周N` | **主副一致性** | — |
-| 9 | 结构 | 多/空趋势 · BOS/CHoCH · 守摆高/低 · 扫位 n/m | 结构判定 | — |
-| 10 | 磁吸↑ | `↑周N 高/低 价格·n.nA·分N·N★HTF` | 上方目标 | — |
-| 11 | 磁吸↓ | 同上（下方） | 下方目标 | — |
-| 12 | 前位 | `名称 价格·生命周期·角色·距离·退役时刻` | 前关键位现状 | — |
-| 13 | 现位 | `多/空·反抽/回踩 XX·等MSS↑·HH:MM定` | 当前观察位 | — |
+`scripts/tv_indicator_contract.py` 是唯一权威，已提供：
 
-**前位行的生命周期与角色**：生命周期 = 已破 / 过期 / 被替代；角色 = 仍撑 / 破转阻 / 仍阻 / 破转撑。
-
-## 3. 副指标行动格（6 行）
-
-| 行 | 源码变量 | 含义 | 卡片用途 |
-|---|---|---|---|
-| 信号 | `panelStateA` + 共振 n/4 | 🔴S3冲突 / S1支持多 / S2支持空 / S4降权 / S0未接 + `·OI背离` | 订单流状态码 |
-| 结论 | `actText` | 实涨可信 / 缩量下跌 / 涨势存疑 / 回补 · 勿追·前N根 | 真假运动 |
-| 流向 | `flowPanelTxtA` | 锚定周期 · 采样口径 · `本锚近NK卖/买` · `净N%` · 滚动同向/逆 | CVD 确认/背离 |
-| 持仓 | `oiTxtA` | ⚡新空/新多/回补/平仓 · `n.nn%` · `同N%` · `滚NK` | 价仓四象限 |
-| 量能 | `volTxtA` | ▲放量/▼缩量/平量 · `xN.N` · `合N%` · `同步放量 n/5` | 能否追 |
-| 操作 | `comboTxt` | 不执行 / 不追 / 弱确认 / 仅作参考 / 确认多 / 确认空 | 最终执行建议 |
-
-## 4. Data Window 全量（35 + 27）
-
-### 主指标
-
-`S VWAP` `S VWAP ±Band1` `EMA 9/21/34/55` · `POC Price` `VAH Price` `VAL Price` `nPOC Price` `W VWAP Price` `M VWAP Price` `DO Price`
-`MCP Side Code`(1多/-1空/9X/0无) `MCP Grade Code`(3A/2B/1C/-1X/0等待) `MCP Setup Score`(0-10)
-`MCP Entry/Stop/Target Price` · `MCP CVD Method Code` · `MCP Quality Code` · `MCP FVG/OB Quality Score`
-**v13 新增接进卡片**：`MCP Entry Valid Code` `MCP RR Ratio` `MCP NoTrade Reason Code` `MCP Execution Pack` `MCP Trigger Pack` `MCP Regime Pack` `MCP Contract Pack` `MCP Evidence Pack/Bar Time/Close Time` `MCP StructPack`
-
-### 副指标
-
-`HALDRO Valid Code` `OI Change % (Normalized)` `CVD Value` `CVD Method Code` `CVD Quality Code` `LSR` `Volume Ratio` `Coverage Exchanges/Spot/Perp` `Coverage Feed Mode` `Exchange Dominance %` `Confirm Score` `Composite` `HALDRO Risk Code`
-**v13 新增接进卡片**：`Basic Packed Bus` `HALDRO State Pack` `OI Price Direction` `OI Breadth` `OI Agreement %` `HALDRO OI Pack` `OI Dispersion Ratio` `HALDRO Freshness Pack` `Stale Venue Count` `HALDRO Contract Pack` `HALDRO Flow Pack` `CVD Anchor Value`
-
-## 5. 解码器（v13 新增，全在契约文件里）
-
-### `MCP NoTrade Reason Code` — 位掩码，可多位置位（最有价值）
-
-| 位 | 含义 |
-|---:|---|
-| 1 | HTF 冲突 X |
-| 2 | 过热追高 X |
-| 4 | 低流动性 |
-| 8 | 价格几何不成立 |
-| 16 | R:R 不足 |
-| 32 | CVD 质量不达标 |
-| 64 | ADR 禁追 |
-| 128 | 溢折价不允许 |
-| 256 | 本根未收线 |
-| 512 | 触发不新鲜 |
-| 1024 | 副指标冲突/降权 |
-
-**实读样例**：`1976 = 8+16+32+128+256+512+1024` → 七项同时成立，与面板 `副S0未接·A禁 ⚠冲突 ⚠未收线` 自洽。
-
-### 其他
-
-| 字段 | 取值 |
-|---|---|
-| `MCP Entry Valid Code` | -3 X禁做 / -2 价格几何不成立 / -1 R:R不足 / 0 无方向 / 1 待确认 / 2 可执行(B/C) / 3 可执行(A) |
-| `HALDRO State Pack` | 0 S0未接 / 1 S1支持多 / 2 S2支持空 / 3 S3冲突 / 4 S4降权 |
-| `MCP RR Ratio` | ≥2.0 过硬闸（A级必需）；≥1.5 仅 B/C 直通；<1.5 不足 |
-| `MCP Execution Pack` | `几何*1e6 + 收线*1e5 + 止损ATR*10 + (入场码+3)`；实读 1801 → 几何0/未收线/1.80ATR/入场码-2 |
-| `MCP Trigger Pack` | `(触发码+10)*1e5 + 触发年龄*100 + 新鲜*10 + (信号态+1)` |
-| `MCP Contract Pack` | `171000 + 市场码*10 + 1`；实读 171011 = BTC/加密 |
-| `Basic Packed Bus` | 主副唯一总线；合同号 22002 为加密，22000 非加密 |
-
-## 6. 读取顺序（v13）
-
-```text
-①  TV 健康与品种校验：chart_get_state；价格数量级与品种必须匹配
-②  主指标 13 行行动格（pine_tables，study-filter SVP）—— 决策首读
-③  副指标 6 行行动格（study-filter 副指标名）
-④  主指标 DW：先读 Side/Grade/EntryValid/RR/NoTradeReason 五件套
-⑤  副指标 DW：State Pack / Valid Code / Confirm / Composite / Coverage
-⑥  解码：NoTrade 位掩码 → 原因链；EntryValid → 准入结论；RR → 闸门结论
-⑦  外部验证：Binance OI/Funding/Taker/多空比/Depth、F&G、CoinGecko、Jin10/X
-⑧  截图：全屏，含价格轴 + 主行动格 + 副行动格/CVD 窗格
-⑨  输出：多周期定位 → 关键位矩阵 → 多源交叉验证 → 矛盾点 → 方案 → 评分 → 完成度
+```
+decode_basic_bus(pack)     → {contract, valid, state, priceCode, oiDir, oiAgree, oiPct, oi_present, cvdBg}
+decode_trigger_pack(pack)  → {triggerCode, age, fresh, signalState}   状态偏移 -3
+decode_feed_mode(code)     → {mode, text, usable, aggregated, fallback, single, abnormal}
+decode_oi_presence(pack)   → {present, pct, text}   「OI未接 / OI缺失 / 空串=正常」
+decode_entry_valid / decode_no_trade / decode_haldro_state
 ```
 
-## 7. 合成裁决（**已落成代码**：`scripts/decision_matrix.py`）
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `CONTRACT_CURRENT` | 22003 | 当前合同 |
+| `SUPPORTED_CONTRACT_VERSIONS` | (22002, 22003) | 主指标两个都接受 |
+| `CONTRACT_NON_CRYPTO` | 22000 | 非加密 → 副不参与 |
 
-### 7.1 主副九宫格 `synthesis_verdict()`
+**精度边界**：最大合法总线 `2200342299199994` < 2^53 ✓
+**这也是「不能靠上移合同号新增字段」的原因** —— `22003×1e12` 越界，整数精度会崩；
+所以 F05 用「0 当哨兵」的零位移方案。
 
-输入：主指标等级 × 副指标状态 S0-S4 × R:R × 是否加密。
-输出：`verdict / authority / sub_role / executable / hard_block / rr / reason`。
+## 3. 分析卡的消费规则
 
-| 主指标 | 副指标 | 裁决 | 可执行 |
-|---|---|---|---|
-| A 多 | S1 支持多 | **A执行** | ✅ |
-| A 空 | S2 支持空 | **A执行** | ✅ |
-| A | S3 冲突 | **不执行·副冲突** | ❌ 硬阻断，清空三件套 |
-| A | S4 降权 | **A降级候选** | ❌ 降为 B 档人工候选 |
-| A | S0 / 未接 | **A降级候选** | ❌ 副未接不得假装同意 |
-| A | 反向（A多+S2） | **A降级候选** | ❌ |
-| B/C | 顺向 + R:R≥1.5 | **B/C人工候选** | ❌ 给触发与候选价，不给执行指令 |
-| X | 任意 | **X禁做** | ❌（副指标不覆盖 X） |
-| 非加密 | 任意 | **副不参与** | 按主指标，不得被副指标否决 |
+- **面板行按【行标签】取文本**：`位置/结论/方向/路径/风控/CVD/OI/协同/结构/磁吸↑/磁吸↓/前位/现位`
+  —— 行**值**的格式变动（去掉箭头、regime 段省略、样本量条件显示）**不破卡**；
+  但**禁止按 `·` 拆值取下标**（结构行段数会变）。
+- **「风控」行标签是动态四态**：`风控` / `风控·观察` / `风控·未授权` / `禁做·不出价`。
+  只认字面「风控」会在观察态漏读执行价。
+- **执行价只在「风控·观察」及以上存在**（`panelPlanVisible`）；X/WAIT 恒为 `止—`。
+- **OI 三态必须分清**：`OI未接`（总线没通）/ `OI缺失`（副说没数据）/ 有值（含真持平 0.00%）。
+- **单源降级写作「副单源·仅参考」**，不写「副指标无效」。
 
-**不变量**：全网格扫描（9 等级 × 6 副状态 × 5 R:R = 270 组）证明**合成永不升级** ——
-副指标只能确认/降权/否决，任何组合都不可能把 B/C 变成 A。
-代码位置 `_apply_matrix_guard()`（auto_card）：在 FinalVerdict 落定后做最后一次保守化，只降不升。
+## 4. 分析流程（对齐后的执行顺序）
 
-### 7.2 解除条件 `release_plan()` / `format_release()`
+1. `chart_get_state` → 确认品种/周期，**并确认两个 study 都在图上**
+2. `capture_screenshot`（full，含右侧价格轴 + 底部 CVD）→ 首行放核验截图
+3. `data_get_study_values` → 主指标 DW（MCP 系列 + 执行/触发/体制/合同包）
+4. **解码**：`decode_basic_bus` / `decode_trigger_pack` / `decode_feed_mode` / `decode_oi_presence`
+   —— 不自己拆位
+5. `data_get_pine_tables` → 主 13 行 + 副 6 行，按行标签取值
+6. `data_get_pine_lines` → DO/EMA/POC/VAH/VAL/W·M VWAP/nPOC 价位
+7. 多源交叉（Binance 衍生品 / CoinGecko / X·Grok 情绪）—— 只做催化剂与盲点，**不改裁决**
+8. 出卡：`render_tv_card.py`；唯一 `⭐主推`，`🔁备选` 只是失效路径
+9. 外部源失败**不阻塞**主流程，但状态必须可见（live/cache/stale_cache/unavailable/quota_cooldown）
 
-回答「现在是 A 禁，那我在等什么」。每个 NoTrade 位置对应一句**可验证**的等待条件：
+**验收口径**：主副两行的 S-code 必须一致（`副S0未接` / `副S4降权` / `副S3冲突` …）。
+不一致 = 总线没接或合同不匹配，先解决再出卡。
 
-| 位 | 解除条件 |
-|---:|---|
-| 1 | 等 HTF 与本级同向 |
-| 2 | 等过热回落（回到结构位/ATR 正常范围） |
-| 4 | 等流动性窗口（避开低流动时段） |
-| 8 | 等价格几何成立（入场与止损顺序正确、贴近结构位） |
-| 16 | 等 R:R ≥ 2.0 |
-| 32 | 等 CVD 质量达标（采样源恢复） |
-| 64 | 等 ADR 空间打开（当日波动耗尽，隔日再看） |
-| 128 | 等溢价/折价回到允许侧 |
-| 256 | 等本根收线 ★临时 |
-| 512 | 等新触发出现（旧触发已过期） ★临时 |
-| 1024 | 先修副指标总线 ★临时 |
+## 5. 本轮验收
 
-★ 临时项排在最前 —— 先做能立刻做的。
-
-### 7.3 R:R 档位 `rr_tier()`
-
-`≥2.0` A级（过硬闸）｜`≥1.5` 仅 B/C 直通｜`<1.5` 不足｜缺失 → 不给执行价。
-与指标侧 `rrHardOk / bcDirectOk` 同源同阈值。
-
-### 7.4 旧版文字规则（保留供理解）
-
-| 情况 | 裁决 |
-|---|---|
-| 主A + 副顺向 + 覆盖正常 + R:R≥2.0 | A 机会，可盯执行 |
-| 主A + 副 S3 冲突 | **不执行**（硬阻断，不得降级放行） |
-| 主A + 副 S4 降权 / S0未接 | 降权为人工候选 |
-| 主B/C + 副强 + R:R≥1.5 + 贴关键位/FVG | B/C 人工观察候选 |
-| 主X | 不出价；读 NoTrade 掩码写「解除条件」 |
-| NoTrade 含 1024 | 先修总线（主指标「免费版唯一总线」未指向副指标 `Basic Packed Bus`） |
-| NoTrade 含 256/512 | 等收线 / 等新触发，不得提前挂单 |
-
-## 8. 禁止事项
-
-- 禁止用 v1.2 的 10 行旧行名（进场/止损/目标/确认/核对）解析 v13 面板 —— 会静默丢 9 行。
-- 禁止只认字面「风控」行 —— v13 是动态四态标签。
-- 禁止把「风控·观察」里的候选价当成 A 级授权价（那是 B/C 人工观察档）。
-- 禁止强依赖副指标 `OI Total` / `Estimated CVD Value` —— 已不存在。
-- 禁止把副指标加密的 OI/Funding/Spot-Perp 逻辑套到 XAU/外汇/股票。
-- 禁止在指标侧改完行名/字段名后不改 `scripts/tv_indicator_contract.py` —— 那是唯一契约源。
+- `python -m pytest tests/ -q` → **702 passed**
+- 契约 DW 清单 vs 指标源码 plot 标题 → 主指标全对齐；副指标仅多一个视觉标记（非 DW 字段）
+- 两个指标云编译 **0 错 0 警**；绘图槽 主 41(≈45/64) / 副 59(≈63/64)
+- 主指标 CE10117 推算 99,865 / 100,256

@@ -670,6 +670,16 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     except (TypeError, ValueError):
         pass
 
+    # 20260911：接入 Coverage Feed Mode 四态（指标侧 F17）。
+    # 只在非聚合态追加标注，正常态保持卡面紧凑；
+    # 单源(3) 与 异常(4) 必须分开 —— 旧码把 Single 也报成「异常」，语义相反。
+    feed = TVC.decode_feed_mode(
+        tv_main.get("sub_coverage_feed_mode")
+        if tv_main.get("sub_coverage_feed_mode") is not None
+        else tv_sub.get("coverage_feed_mode")
+    )
+    feed_tail = TVC.feed_mode_tail(feed.get("mode"))
+
     comp_text = str(composite) if composite not in (None, "") else "待刷新"
     comp_num = None
     try:
@@ -707,6 +717,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     executable_grade = status.startswith(("A", "B", "C反"))
     downgraded_state = "X禁做观察" if hard_conflict and executable_grade else (
         "B等待（单源冲突）" if conflict and valid_code == 1 else
+        "B等待（副单源·仅参考）" if valid_code <= 0 and executable_grade and feed.get("single") else
         "B等待（副指标无效）" if valid_code <= 0 and executable_grade else
         "B等待（副指标风险）" if status.startswith("A") and (crowding_risk or flow_risk) else status
     )
@@ -717,9 +728,9 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "lsr": lsr,
         "lsr_source": lsr_source,
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
-        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'} · 风险 {risk_text}",
+        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'} · 风险 {risk_text}" + feed_tail,
         "haldro_confirm": f"Confirm {confirm or '待判'}",
-        "direction_verdict": "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if hard_conflict else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
+        "direction_verdict": "副单源，不参与协同" if valid_code <= 0 and feed.get("single") else "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if hard_conflict else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
         "structure_verdict": "结构顺向" if aligned else "结构需确认",
         "flow_verdict": "订单流冲突，不追" if conflict else f"订单流风险：{risk_text}" if flow_risk or crowding_risk else "订单流支持" if aligned else "等CVD/OI确认",
         "quality_verdict": f"副指标降级：{risk_text}" if risk_labels else "质量已读",

@@ -411,3 +411,59 @@ def decode_basic_bus(pack, contract=None):
         "oi_present": present,
         "cvdBg": cvd_bg,
     }
+
+
+# ── 20260911 新增：v16 / v15 指标语义 ─────────────────────────────────
+# 旧码与新码并存判定：22002 = 旧语义（oiPctEnc 的 0 就是 0.00%），
+# 22003 = 新语义（oiPctEnc == 0 表示 OI 缺失）。主指标两个都接受。
+SUPPORTED_CONTRACT_VERSIONS = (22002, 22003)
+CONTRACT_CURRENT = 22003
+CONTRACT_NON_CRYPTO = 22000
+
+# Coverage Feed Mode 四态（F17 修复后）。2=回退单图仍可用（指标侧
+# haldroUsableA = 使用聚合 or 回退），3/4 不可用。
+FEED_MODE = {
+    1: ("聚合", True),
+    2: ("回退单图", True),
+    3: ("单源·不参与协同", False),
+    4: ("异常", False),
+}
+
+
+def decode_feed_mode(code):
+    """解 Coverage Feed Mode。
+
+    返回 {mode, text, usable, aggregated, fallback, single, abnormal}。
+    mode 为 None 表示字段缺失。**注意**：单源(3)是设计内的降级态，
+    不是异常(4) —— 旧代码把两者混为一谈，卡面曾把 Single 报成「异常」。
+    """
+    try:
+        c = int(float(str(code).replace("\u2212", "-")))
+    except (TypeError, ValueError):
+        return {"mode": None, "text": "缺失", "usable": False,
+                "aggregated": False, "fallback": False, "single": False, "abnormal": False}
+    text, usable = FEED_MODE.get(c, (f"未知({c})", False))
+    return {"mode": c, "text": text, "usable": usable,
+            "aggregated": c == 1, "fallback": c == 2, "single": c == 3, "abnormal": c == 4}
+
+
+def feed_mode_tail(code):
+    """卡面用：只在【非聚合】时追加简短标注，正常态不撑宽。"""
+    d = decode_feed_mode(code)
+    if d["mode"] in (None, 1):
+        return ""
+    return " · 数据源" + d["text"]
+
+
+def decode_oi_presence(pack, contract=None):
+    """从 Basic Packed Bus 判断 OI 是「缺失」还是「真持平 0.00%」。
+
+    这是 F05 在系统侧的落点：主指标已用 oiPresentInBus 卡住渲染，
+    卡面若直接从总线取 OI%，也必须走同一判定，否则「没数据」会被写成「持平」。
+    """
+    d = decode_basic_bus(pack)
+    if d is None or not d.get("valid"):
+        return {"present": False, "pct": None, "text": "OI未接"}
+    if not d.get("oi_present"):
+        return {"present": False, "pct": None, "text": "OI缺失"}
+    return {"present": True, "pct": d.get("oiPct"), "text": ""}
