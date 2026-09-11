@@ -63,3 +63,14 @@ python scripts/maintenance/skills_snapshot.py --no-push    # 镜像+提交但不
 2026-09-11：1913 文件 / 15.0 MB（入库 1912 内容 + 1 清单）。
 护栏回归：`tests/test_skills_snapshot_20260911.py`（13 项，含「源目录塌陷时拒绝擦备份」
 与「无关改动不被顺手提交」）。
+
+## 自检三点（每次改完机制后跑）
+
+```bash
+python scripts/maintenance/skills_snapshot.py --status      # 0=同步 / 2=有漂移
+git log --oneline -1                                        # 看有没有新快照提交
+git log --oneline @{u}..HEAD                                # 空=已推送干净
+```
+
+`--status` 报 2 而 `--dry-run` 显示差异很小 → 正常；报 2 且差异巨大 → **先去查源目录**，
+不要盲目跑镜像（虽然 fail-closed 会拦，但要知道它在拦什么）。
