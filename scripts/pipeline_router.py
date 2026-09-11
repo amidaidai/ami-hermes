@@ -37,17 +37,25 @@ def parse_asset_identity(symbol: str) -> dict:
         exchange, ticker = normalized.split(":")
     ac = _legacy_asset_class(ticker or "")
     product_type, underlying = None, None
+    option = _option_parts(ticker or "")
     continuous = re.fullmatch(r"([A-Z][A-Z0-9]*?)([1-9][0-9]*)!", ticker or "")
     perpetual = re.fullmatch(r"([A-Z0-9]+?)(USDT|USDC|USD)\.P", ticker or "")
-    if continuous:
+    if option:
+        # OSI/OPRA：期权分析跟随底层品种（用户规则「option 跟随底层」）。
+        ac = "option"
+        product_type = option["right"] + "_option"
+        underlying = option["underlying"]
+    elif continuous:
         ac = "futures"
         product_type, underlying = "continuous_future", continuous.group(1)
     elif perpetual:
         ac = "crypto"
         product_type, underlying = "perpetual", perpetual.group(1)
+    underlying_class = _legacy_asset_class(underlying) if underlying else None
     return {"raw_symbol": symbol, "normalized_symbol": normalized,
             "exchange": exchange, "ticker": ticker, "asset_class": ac,
             "product_type": product_type, "underlying": underlying,
+            "underlying_class": underlying_class,
             "supported": ac != "other", "exchange_verified": False,
             "tick_size": None}
 
@@ -62,6 +70,9 @@ def _legacy_asset_class(symbol: str) -> str:
     # 期权必须先于 BTC/ETH/USDT 加密识别，否则 Deribit 格式
     # BTC-29MAR24-60000-C / ETH-29MAR24-3000-P 会误走 crypto 10步管线。
     if "CALL" in su or "PUT" in su or "OPTION" in su or re.search(r"-[CP]$", su_clean):
+        return "option"
+    if _option_parts(su_clean):
+        # OSI/OPRA 标准代码 AAPL240119C150 / SPX 240119C5000。
         return "option"
     if "XAU" in su or "GOLD" in su or "XAG" in su:
         return "gold"
@@ -78,9 +89,39 @@ def _legacy_asset_class(symbol: str) -> str:
                      "HE", "LE", "KC", "CT", "CC", "SB", "OJ", "RB", "HO"}
     if su_clean in futures_codes:
         return "futures"
+    if su_clean in _INDEX_TICKERS or su in _INDEX_TICKERS:
+        return "index"
     if su in ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN"] or (su.isalpha() and len(su) <= 5):
         return "stock"
     return "other"
+
+
+# 指数/现金指数（用户图表里有 SPX；不属于 stock 也不属于 futures）。
+_INDEX_TICKERS = {
+    "SPX", "SPX500", "SPXUSD", "US500", "NDX", "NAS100", "US100", "US30", "DJI", "WS30",
+    "DAX", "DE40", "UK100", "FTSE", "NIKKEI", "JP225", "VIX", "DXY", "USDOLLAR",
+}
+
+
+def _option_parts(ticker: str) -> dict | None:
+    """识别期权代码，返回 {underlying, expiry, right, strike}；识别不了返回 None。
+
+    支持两种写法：
+      1) OSI/OPRA：`<ROOT><YYMMDD><C|P><STRIKE>`，含 OCC 空格补齐；
+      2) Deribit：`<ROOT>-<DDMMMYY>-<STRIKE>-<C|P>`，如 BTC-29MAR24-60000-C。
+    """
+    compact = re.sub(r"\s+", "", ticker or "").upper()
+    match = re.fullmatch(r"([A-Z]{1,6})(\d{6})([CP])(\d{1,8})", compact)
+    if match:
+        return {"underlying": match.group(1), "expiry": match.group(2),
+                "right": "call" if match.group(3) == "C" else "put",
+                "strike": match.group(4)}
+    deribit = re.fullmatch(r"([A-Z0-9]{2,10})-([A-Z0-9]+)-([0-9.]+)-([CP])", compact)
+    if deribit:
+        return {"underlying": deribit.group(1), "expiry": deribit.group(2),
+                "right": "call" if deribit.group(4) == "C" else "put",
+                "strike": deribit.group(3)}
+    return None
 
 
 # ===== 五层时间框架规则（2026-06-29 用户确认） =====
@@ -97,38 +138,52 @@ TF_RULES = {
     "futures": {"layers": ["D", "4h", "1h", "15m", "5m"], "main": "15m", "screenshot": "15m",
                 "rationale": "ES 23h流动性·15m与加密同步"},
     "option":  {"layers": ["D", "4h", "1h", "15m", "5m"], "main": "15m", "screenshot": "15m",
-                "rationale": "跟底层品种"},
+                "rationale": "跟底层品种：timeframe_info 会按底层类别覆盖"},
+    "index":   {"layers": ["D", "4h", "1h", "15m", "5m"], "main": "15m", "screenshot": "15m",
+                "rationale": "现金指数无夜盘·15m与期货同步"},
     "other":   {"layers": ["D", "4h", "1h", "15m", "5m"], "main": "15m", "screenshot": "15m",
                 "rationale": "默认五层"},
 }
 
 
 def timeframe_info(symbol: str) -> dict:
-    """返回推荐的时间框架信息。{layers, main, screenshot, rationale}"""
-    ac = _asset_class(symbol)
+    """返回推荐的时间框架信息。{layers, main, screenshot, rationale}
+
+    期权跟随底层：AAPL 期权用 stock 的 1h，SPX 期权用 index 的 15m，
+    加密期权用 crypto 的 15m。只跟随**已知**底层类别，未知时退回 option 自身默认。
+    """
+    identity = parse_asset_identity(symbol)
+    ac = identity["asset_class"]
+    if ac == "option":
+        base = identity.get("underlying_class")
+        if base in TF_RULES and base not in ("option", "other"):
+            info = dict(TF_RULES[base])
+            info["rationale"] = f"期权跟随底层 {identity.get('underlying')}（{base}）：" + info["rationale"]
+            info["follows_underlying"] = base
+            return info
     return TF_RULES.get(ac, TF_RULES["other"])
 
 
 # ===== 每个步骤的定义 =====
 STEPS = {
     # 步骤ID: {label, description, 适用资产集合, executor}
-    "tv":       {"label": "TV技术面",    "desc": "TradingView SVP+Volume 五层(D/4h/1h/15m/5m)", "assets": {"crypto", "gold", "forex", "stock", "futures", "option"}},
+    "tv":       {"label": "TV技术面",    "desc": "TradingView SVP+Volume 五层(D/4h/1h/15m/5m)", "assets": {"crypto", "gold", "forex", "stock", "futures", "option", "index", "other"}},
     "binance":  {"label": "Binance衍生品","desc": "OI/费率/Taker/LS/多空比",           "assets": {"crypto"}},
     "cg_pro":   {"label": "CoinGecko Pro","desc": "板块/流动性/市值排名",                "assets": {"crypto"}},
-    "macro":    {"label": "宏观背景",     "desc": "SPX/VIX/DXY/US10Y + 金十日历 + Poly + FG(加密)", "assets": {"gold", "forex", "stock", "crypto", "futures"}},
+    "macro":    {"label": "宏观背景",     "desc": "SPX/VIX/DXY/US10Y + 金十日历 + Poly + FG(加密)", "assets": {"gold", "forex", "stock", "crypto", "futures", "index", "other"}},
     "jin10":    {"label": "金十日历",     "desc": "经济数据/利率决议/快讯 [已并入macro]", "assets": set()},  # merged into macro
     "poly":     {"label": "Polymarket",  "desc": "Fed/衰退/加密事件概率 [已并入macro]",  "assets": set()},  # merged into macro
     "fg":       {"label": "恐惧贪婪",     "desc": "加密恐惧贪婪指数 [已并入macro]",      "assets": set()},  # merged into macro
     "cron_read":{"label": "读Cron输出",   "desc": "读取最近cron输出(不重跑):dune+deribit+x+qlib+liq+stablecoin+COT",
-                                              "assets": {"crypto", "gold", "forex", "stock", "futures"}},
+                                              "assets": {"crypto", "gold", "forex", "stock", "futures", "index", "other"}},
     "etf_flow": {"label": "ETF Flow",    "desc": "BTC ETF 日净流入/流出 [SoSoValue被封·Dune替代]", "assets": set()},  # dead
     "dune":     {"label": "Dune链上",    "desc": "BTC流/CEX净流/稳定币 [已并入cron_read]", "assets": set()},  # merged into cron_read
     "deribit":  {"label": "Deribit期权", "desc": "OI/C/P比/MaxPain [已并入cron_read]",   "assets": set()},  # merged into cron_read
-    "x_sent":   {"label": "X情绪",       "desc": "x_search 实时X/Twitter情绪+恐贪+CGTrending", "assets": {"crypto", "gold", "forex", "stock", "futures"}},
+    "x_sent":   {"label": "X情绪",       "desc": "x_search 实时X/Twitter情绪+恐贪+CGTrending", "assets": {"crypto", "gold", "forex", "stock", "futures", "index", "other"}},
     "cot":      {"label": "COT持仓",     "desc": "投机/商业持仓方向 [已并入cron_read]",   "assets": set()},  # merged into cron_read
     "cvd":      {"label": "CVD订单流",   "desc": "量价背离/吸收/FVG",                   "assets": {"crypto", "gold"}},
     "depth":    {"label": "深度数据",     "desc": "挂单墙/清算池",                       "assets": {"crypto"}},
-    "corr":     {"label": "跨资产相关",   "desc": "BTC-SPX-XAU-DXY 相关性矩阵(FnanceKit)", "assets": {"crypto", "gold", "forex", "stock", "futures"}},
+    "corr":     {"label": "跨资产相关",   "desc": "BTC-SPX-XAU-DXY 相关性矩阵(FnanceKit)", "assets": {"crypto", "gold", "forex", "stock", "futures", "index", "other"}},
     # Crypto Full 的固定15步中，以下是实际执行器内部的决策阶段；
     # 它们不是空占位，auto_card 会在相应数据/裁决生成后写入完成度审计。
     "engine":   {"label": "核心模型引擎", "desc": "VWAP/EMA/CVD + 多模型候选",           "assets": {"crypto"}},
@@ -136,7 +191,7 @@ STEPS = {
     "dual":     {"label": "双指标确认",   "desc": "SVP主指标 + AggVol/HALDRO副指标",        "assets": {"crypto"}},
     "advanced": {"label": "高级订单流",   "desc": "吸收/FVG/OB/共振门控",                   "assets": {"crypto"}},
     "risk":     {"label": "FinalVerdict风控", "desc": "R:R/风险宪法/唯一执行裁决",            "assets": {"crypto"}},
-    "card":     {"label": "输出分析卡",   "desc": "结构化分析卡输出",                    "assets": {"crypto", "gold", "forex", "stock", "futures", "option"}},
+    "card":     {"label": "输出分析卡",   "desc": "结构化分析卡输出",                    "assets": {"crypto", "gold", "forex", "stock", "futures", "option", "index", "other"}},
     "gold_macro":{"label":"黄金宏观",     "desc": "DXY/TIP/GLD/GDX/白银比·央行黄金储备·金银比", "assets": {"gold"}},
     "fmp":      {"label": "FMP基本面",   "desc": "PE/市值/财报/板块",                    "assets": {"stock"}},
     "options_chain":{"label":"期权链",    "desc": "OI/IV/Greeks/到期日",                 "assets": {"option", "stock"}},
@@ -250,8 +305,20 @@ CRYPTO_FULL_PIPELINE = (
 
 
 def analysis_mode_spec(mode: str) -> dict:
-    """Return the required refresh and output contract for an analysis tier."""
-    return dict(MODE_SPECS.get(mode, MODE_SPECS["quick"]))
+    """Return the required refresh and output contract for an analysis tier.
+
+    模式名大小写不敏感（对话层会写 Quick/Full），但**未知模式必须显式失败**：
+    静默回落到 quick 会把「档位写错」伪装成一次正常的快速更新，
+    等于让 Full 少跑十一步而卡面看不出来。返回带 mode_error 的显式降级。
+    """
+    key = str(mode or "").strip().lower()
+    spec = MODE_SPECS.get(key)
+    if spec is None:
+        spec = dict(MODE_SPECS["quick"])
+        spec["mode_error"] = f"未知分析档位 {mode!r}；已按 quick 执行，请核对档位名"
+        spec["requested_mode"] = str(mode)
+    spec["mode"] = key if key in MODE_SPECS else "quick"
+    return dict(spec)
 
 
 def step_description(step: str, asset_class: str) -> str:
@@ -267,13 +334,26 @@ def cron_sources(symbol: str) -> list[str]:
 def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
     """返回应执行的步骤ID列表。
 
-    mode:
+    mode（大小写不敏感）:
       'full' — 完整分析（加密固定15步；其他资产按适用步骤路由）
       'quick' — 快速更新（3步核心）
-      'inherit' — 继承高周期，只刷新主执行/触发与加密衍生品
-      'monitor' — 监控模式（仅关键数据）
+      'inherit'/'standard' — 继承高周期，只刷新主执行/触发与加密衍生品
+      'monitor' — 监控模式（仅事件）
+
+    未知 mode 按 full 处理并向调用方暴露（见 analysis_mode_spec 的 mode_error）；
+    这里只做归一化，不静默改成 quick —— 少跑步骤比多跑更危险。
     """
-    ac = _asset_class(symbol)
+    identity = parse_asset_identity(symbol)
+    ac = identity["asset_class"]
+    mode = str(mode or "").strip().lower() or "full"
+    if mode not in MODE_SPECS:
+        mode = "full"
+    # 期权跟随底层：用底层的步骤集，再补上期权链。底层未知时用 option 自身规则。
+    follows = None
+    if ac == "option":
+        base = identity.get("underlying_class")
+        if base in TF_RULES and base not in ("option", "other"):
+            follows, ac = base, base
 
     if mode in ("quick", "inherit", "standard"):
         # 快速/继承不重拉宏观与X情绪；高周期上下文由调用方从最近一次完整卡继承。
@@ -285,25 +365,23 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
             "stock":   ["tv", "card"],
             "futures": ["tv", "card"],
             "option":  ["tv", "card"],
-            "other":    ["tv", "card"],
+            "index":   ["tv", "card"],
+            "other":   ["tv", "card"],
         }
-        return [s for s in quick_map.get(ac, ["tv", "card"]) if s in STEPS]
+        steps = [s for s in quick_map.get(ac, ["tv", "card"]) if s in STEPS]
+        return _add_option_chain(steps, identity)
 
     if mode == "monitor":
         mon_map = {
             # Monitor is an event-discovery mode. It must not render a
             # directional card or be mistaken for an analysis request.
+            # 因此 monitor 也**不补期权链**：那是分析步骤，不是事件发现。
             "crypto": ["binance"],
-            "gold":   [],
-            "forex":  [],
-            "stock":  [],
-            "futures":[],
-            "option": [],
         }
         return [s for s in mon_map.get(ac, []) if s in STEPS]
 
     if mode == "full" and ac == "crypto":
-        return list(CRYPTO_FULL_PIPELINE)
+        return _add_option_chain(list(CRYPTO_FULL_PIPELINE), identity)
 
     # full mode: 所有适用于该资产类别的步骤
     ordered = [
@@ -327,7 +405,27 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
         "options_chain",# ⑫ 期权链（期权/股票）
         "card",        # 🔚 出卡
     ]
-    return [s for s in ordered if s in STEPS and ac in STEPS[s]["assets"]]
+    steps = [s for s in ordered if s in STEPS and ac in STEPS[s]["assets"]]
+    assert steps, f"路由为空：asset_class={ac!r} symbol={symbol!r} 未命中任何步骤"
+    return _add_option_chain(steps, identity)
+
+
+def _add_option_chain(steps: list[str], identity: dict) -> list[str]:
+    """期权标的始终补上期权链步骤（放在出卡之前）。
+
+    期权分析跟随底层做方向，但 OI/IV/Greeks 只能从期权链来，少这一步
+    等于给期权一个残缺的方向卡。
+    """
+    if not steps:
+        # Monitor 等「仅事件」档位本来就无步骤：补期权链会把它变成一次分析。
+        return steps
+    if identity.get("asset_class") != "option" or "options_chain" not in STEPS:
+        return steps
+    if "options_chain" in steps:
+        return steps
+    out = list(steps)
+    out.insert(-1 if out and out[-1] == "card" else len(out), "options_chain")
+    return out
 
 
 def crypto_full_pipeline() -> list[str]:
