@@ -64,15 +64,66 @@ async def get_pine_tables(session, study_filter=None):
     result = await call_tool(session, "data_get_pine_tables", args)
     return result
 
+# 20260911：切图去冗余。
+# 多个定时任务抢同一张图，每次 set_symbol/set_timeframe 都会让 TV 重新拉数据、
+# 重绘指标（用户看到图表闪一下）。大量调用下发的其实已经是当前状态 ——
+# 例如 _prepare_xau_main_chart 在 _run_with_retry 刚切完之后又切一遍。
+# 已经是目标的就跳过：不改变任何数据语义，只去掉无谓重绘。
+SWITCH_STATS = {"symbol_skipped": 0, "symbol_set": 0,
+                "timeframe_skipped": 0, "timeframe_set": 0}
+
+
+async def _current_chart_state(session):
+    """读当前图表状态；失败返回 {}（失败时宁可不跳过，绝不误跳过）。"""
+    try:
+        raw = parse_result(await get_chart_state(session))
+        payload = json.loads(raw)
+        if isinstance(payload.get("result"), str):
+            payload = json.loads(payload["result"])
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
 async def set_symbol(session, symbol):
-    """Set chart symbol."""
+    """切换品种；已经是该品种则跳过（避免无谓重绘）。"""
+    want = str(symbol or "").strip()
+    if want:
+        cur = str((await _current_chart_state(session)).get("symbol") or "").strip()
+        if cur and cur.upper() == want.upper():
+            SWITCH_STATS["symbol_skipped"] += 1
+            return {"success": True, "skipped": True, "symbol": cur}
+    SWITCH_STATS["symbol_set"] += 1
     result = await call_tool(session, "chart_set_symbol", {"symbol": symbol})
     return result
 
 async def set_timeframe(session, timeframe):
-    """Set chart timeframe."""
+    """切换周期；已经是该周期则跳过（避免无谓重绘）。"""
+    want = str(timeframe or "").strip().upper()
+    if want:
+        cur = str((await _current_chart_state(session)).get("resolution") or "").strip().upper()
+        if cur and _tf_alias(cur) == _tf_alias(want):
+            SWITCH_STATS["timeframe_skipped"] += 1
+            return {"success": True, "skipped": True, "resolution": cur}
+    SWITCH_STATS["timeframe_set"] += 1
     result = await call_tool(session, "chart_set_timeframe", {"timeframe": timeframe})
     return result
+
+
+def _tf_alias(tf):
+    """把 TV 的周期写法归一，避免用不同写法表达同一个周期而误判为『不同』。"""
+    tf = str(tf or "").strip().upper()
+    return {"D": "1D", "1D": "1D", "W": "1W", "1W": "1W",
+            "60": "60", "1H": "60", "240": "240", "4H": "240",
+            "15": "15", "15M": "15", "5": "5", "5M": "5",
+            "1": "1", "1M": "1", "30": "30", "30M": "30"}.get(tf, tf)
+
+def switch_stats_line():
+    """一行汇总本轮图表切换/跳过次数（用于验证去冗余效果）。"""
+    s = SWITCH_STATS
+    return (f"图表切换 品种(实切{s['symbol_set']}/跳过{s['symbol_skipped']}) "
+            f"周期(实切{s['timeframe_set']}/跳过{s['timeframe_skipped']})")
+
 
 def parse_result(result):
     """Extract text content from MCP result."""

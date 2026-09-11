@@ -612,6 +612,11 @@ def main() -> int:
                     raise RuntimeError("XAU同步完成后恢复原TradingView图表失败")
                 if _PREVIOUS_CHART:
                     _mark_restored()          # 还回去了就清掉待归还标记
+        try:
+            from fetch_tv_mcp import switch_stats_line
+            print(f"  {switch_stats_line()}")
+        except Exception:
+            pass
         print(f"✅ XAU TV状态已原子发布 {OUT}")
         # Only publish externally after the validated state has been committed.
         # Test/degraded adapters may return a minimal synthetic snapshot; such
