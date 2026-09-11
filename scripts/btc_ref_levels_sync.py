@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -30,6 +31,14 @@ TV_LIVE = DATA / "tv_live.json"
 TV_LIVE_SYMBOL = DATA / "tv_live_BTCUSDT.json"
 TV_DMI = DATA / "tv_dmi_cache.json"
 OUT = DATA / "btc_ref_levels.json"
+
+
+def automated_delivery_target() -> str | None:
+    """Return an explicit automation target; syncs are local by default."""
+    target = os.environ.get("TANGXI_AUTOMATED_TG_TARGET", "").strip()
+    if os.environ.get("TANGXI_ENABLE_AUTOMATED_TG") != "1":
+        return None
+    return target if target.startswith("telegram:") else None
 
 
 def now_iso() -> str:
@@ -498,8 +507,10 @@ def main() -> int:
 **总体结论**: **{verdict}**（现价{cur_disp}），**{action}**。"""
             print(report)
             sys.path.insert(0, str(ROOT / "scripts"))
-            from telegram_reliable import push_tg_rich
-            push_tg_rich("telegram:-1003733144325:846", report)
+            target = automated_delivery_target()
+            if target:
+                from telegram_reliable import push_tg_rich
+                push_tg_rich(target, report)
         except Exception as _te:
             print(f"⚠ BTC关键位成功推送失败(已落盘): {_te}", file=sys.stderr)
         return 0
@@ -535,16 +546,17 @@ def main() -> int:
 | ○降级 | Binance可用 | 只保留高低点不下结论 |
 | ↑恢复 | 缓存30分钟内更新 | 重跑同步脚本 |"""
         print(report)
-        # v9.7: 统一走 RichMarkdown 真表格通道推 TG
+        # 只有显式启用自动投递并提供目标时才发送。
         try:
             sys.path.insert(0, str(ROOT / "scripts"))
-            from telegram_reliable import push_tg_rich
-            push_tg_rich("telegram:-1003733144325:846", report)
+            target = automated_delivery_target()
+            if target:
+                from telegram_reliable import push_tg_rich
+                push_tg_rich(target, report)
         except Exception as _te:
             print(f"⚠ BTC关键位失败告警RichMarkdown推送失败: {_te}", file=sys.stderr)
-        # v9.8: TV MCP 偶断时降级 exit 0，不因单一数据源(TV)偶断拖垮 cron
-        # 失败信息已推TG + 落盘 error.json，cron 看到 exit 0 不会误报
-        return 0
+        # 失败必须对调度器可见；采集任务不能把降级伪报成成功。
+        return 1
 
 
 if __name__ == "__main__":

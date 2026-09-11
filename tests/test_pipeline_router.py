@@ -51,3 +51,16 @@ def test_quick_route_contains_only_live_execution_inputs():
     router = _load_router()
     assert router.route_pipeline("BTCUSDT", "quick") == ["tv", "binance", "card"]
     assert router.route_pipeline("BTCUSDT", "inherit") == ["tv", "binance", "card"]
+
+
+def test_auto_card_uses_the_same_asset_taxonomy_as_router():
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    spec = importlib.util.spec_from_file_location("auto_card_taxonomy", ROOT / "scripts" / "auto_card.py")
+    assert spec is not None and spec.loader is not None
+    auto_card = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(auto_card)
+
+    router = _load_router()
+    for symbol in ("BTCUSDT", "XAUUSD", "XAGUSD", "EURUSD", "ES1!", "AAPL", "BTC-29MAR24-60000-C"):
+        assert auto_card._asset_class(symbol) == router._asset_class(symbol)

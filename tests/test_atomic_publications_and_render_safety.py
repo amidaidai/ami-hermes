@@ -12,6 +12,16 @@ import tv_data_bridge as bridge
 from render_v96 import render_v96_card
 
 
+def test_btc_reference_sync_delivery_is_explicitly_opt_in(monkeypatch):
+    monkeypatch.delenv("TANGXI_ENABLE_AUTOMATED_TG", raising=False)
+    monkeypatch.delenv("TANGXI_AUTOMATED_TG_TARGET", raising=False)
+    assert btc_sync.automated_delivery_target() is None
+
+    monkeypatch.setenv("TANGXI_ENABLE_AUTOMATED_TG", "1")
+    monkeypatch.setenv("TANGXI_AUTOMATED_TG_TARGET", "telegram:-1001:846")
+    assert btc_sync.automated_delivery_target() == "telegram:-1001:846"
+
+
 def test_btc_reference_output_uses_atomic_writer(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(btc_sync, "OUT", tmp_path / "btc_ref_levels.json")

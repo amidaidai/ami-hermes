@@ -144,6 +144,55 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat()
 
 
+def _xau_macro_context(max_age_hours: float = 24.0) -> dict[str, Any]:
+    """Return a fresh XAU macro snapshot, never relabeling stale data as live."""
+    cached = read_json(XAU_MACRO_FILE, {})
+    if isinstance(cached, dict) and cached:
+        raw_ts = cached.get("time") or cached.get("timestamp") or cached.get("updated_at")
+        try:
+            stamped = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+            if stamped.tzinfo is None:
+                stamped = stamped.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            age_hours = max(0.0, (datetime.now().astimezone() - stamped.astimezone()).total_seconds() / 3600.0)
+            if age_hours <= max_age_hours:
+                return cached
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        from macro_filter import fetch_macro_snapshot
+
+        raw = fetch_macro_snapshot()
+    except Exception:
+        raw = {}
+    mapping = {
+        "DXY": ("DX-Y.NYB", "dxy"),
+        "VIX": ("^VIX", "vix"),
+        "SPX": ("^GSPC", "spx"),
+        "US10Y": ("^TNX", "us10y"),
+        "GOLD_FUT": ("GC=F", "gold"),
+        "SILVER_FUT": ("SI=F", "silver"),
+    }
+    prices = {
+        name: {"symbol": ticker, "price": raw.get(key)}
+        for name, (ticker, key) in mapping.items()
+        if isinstance(raw.get(key), (int, float))
+    }
+    if not prices:
+        return cached if isinstance(cached, dict) else {}
+    refreshed = {
+        "schema": "xau_macro_context_v1",
+        "time": raw.get("timestamp") or now_iso(),
+        "quality": "A-" if len(prices) >= 4 else "B",
+        "bias": raw.get("risk_sentiment") or "neutral",
+        "prices": prices,
+        "notes": [raw.get("risk_label")] if raw.get("risk_label") else [],
+        "source_status": raw.get("source_status") or raw.get("_source_status") or "live",
+    }
+    write_json(XAU_MACRO_FILE, refreshed)
+    return refreshed
+
+
 def today_str() -> str:
     return datetime.now().astimezone().date().isoformat()
 
@@ -755,7 +804,7 @@ def source_snapshot(symbol: str, extra: dict[str, Any] | None = None) -> dict[st
     spread_pct = price_probe.get("spread_pct") if isinstance(price_probe.get("spread_pct"), (int, float)) else ((max(prices) - min(prices)) / (sum(prices) / len(prices)) * 100 if len(prices) >= 2 else None)
     quality = str(price_probe.get("quality") or "C")
     confidence = int(price_probe.get("confidence") or (92 if quality == "A" else 75 if quality == "B" else 55 if prices else 0))
-    macro_context = read_json(XAU_MACRO_FILE, {}) if normalize_asset(symbol) in {"XAU", "XAUUSD"} else {}
+    macro_context = _xau_macro_context() if normalize_asset(symbol) in {"XAU", "XAUUSD"} else {}
     snap = {
         "time": now_iso(),
         "symbol": native,

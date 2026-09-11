@@ -79,6 +79,9 @@ audit_svp_static.py
 btc_ref_levels_sync.*.txt
 btc_watchdog.*.txt
 keylevels_collect.*
+!scripts/audit_preflight.py
+!scripts/keylevels_collect.py
+!scripts/btc_tv_refresh.py
 node.direct.err
 node.direct.out
 nodecheck.err

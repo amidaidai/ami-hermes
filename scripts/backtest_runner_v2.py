@@ -24,7 +24,7 @@ def _regime(raw: Any) -> DecisionRegime | None:
     )
 
 
-def _snapshot_parts(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any]]:
+def _snapshot_parts(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any, dict[str, Any], dict[str, Any]]:
     """读取新嵌套契约；兼容早期影子JSONL的扁平记录。"""
     main = record.get("main")
     if not isinstance(main, dict):
@@ -53,7 +53,10 @@ def _snapshot_parts(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
             "allowed": str(record.get("final_state") or "WAIT") != "NO-GO",
             "risk_usd": record.get("risk_usd", 0.0), "violations": [],
         }
-    return dict(main), dict(dual), regime, dict(risk)
+    advanced = record.get("advanced")
+    if not isinstance(advanced, dict):
+        advanced = {}
+    return dict(main), dict(dual), regime, dict(risk), dict(advanced)
 
 
 def replay_shadow_records(
@@ -64,17 +67,33 @@ def replay_shadow_records(
 ) -> dict[str, Any]:
     """逐条复跑唯一裁决并标注后续结果；输入必须是当时快照，禁止未来字段。"""
     trades: list[dict[str, Any]] = []
+    orders: list[dict[str, Any]] = []
     blocked = 0
     gate_stats: Counter[str] = Counter()
     states: Counter[str] = Counter()
     for record in records:
-        main, dual, regime_raw, risk = _snapshot_parts(record)
+        # A replay may downgrade a historical decision, never erase its veto.
+        live = record.get("final_verdict") or record.get("final") or {}
+        live = live if isinstance(live, dict) else {}
+        live_state = record.get("final_state", live.get("state"))
+        live_blockers = record.get("blockers") or live.get("blockers") or []
+        if ((live_state is not None and live_state != "GO-A") or live_blockers
+                or record.get("execution_authorized") is False
+                or live.get("executable") is False or live.get("execution_authorized") is False):
+            blocked += 1
+            states[str(live_state or "WAIT")] += 1
+            gate_stats["recorded_live_block"] += 1
+            for reason in live_blockers:
+                gate_stats[str(reason)] += 1
+            continue
+        main, dual, regime_raw, risk, advanced = _snapshot_parts(record)
         final = resolve_final_verdict(
             str(record.get("symbol") or ""),
             main,
             dual,
             regime=_regime(regime_raw),
             risk=risk,
+            advanced=advanced,
         )
         states[final.state] += 1
         if not final.executable:
@@ -85,6 +104,8 @@ def replay_shadow_records(
         signal_id = str(record.get("signal_id") or "")
         signal = {
             **main,
+            "order_model": record.get("order_model", main.get("order_model")),
+            "cost_model": record.get("cost_model", main.get("cost_model")),
             "signal_id": signal_id,
             "symbol": record.get("symbol"),
             "side": final.side,
@@ -96,11 +117,18 @@ def replay_shadow_records(
             "regime": (regime_raw or {}).get("code", record.get("regime_code", "unknown")),
         }
         outcome = label_outcome(signal, future_bars_by_signal.get(signal_id, []), horizons=horizons)
-        trades.append({**signal, "outcome": outcome, "risk_usd": final.risk_usd})
+        order = {**signal, "outcome": outcome, "risk_usd": final.risk_usd}
+        orders.append(order)
+        if any(item.get("filled") is True for item in outcome.values()):
+            trades.append(order)
     return {
         "executed": len(trades),
+        "execution_basis": "simulated_ohlc_fill_not_broker_confirmation",
+        "authorized": len(orders),
+        "unfilled": len(orders) - len(trades),
+        "orders": orders,
         "blocked": blocked,
-        "total": len(trades) + blocked,
+        "total": len(orders) + blocked,
         "trades": trades,
         "gate_stats": dict(gate_stats),
         "state_stats": dict(states),

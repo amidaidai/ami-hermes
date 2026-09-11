@@ -47,6 +47,39 @@ SYMBOL_MAP = {
     "CL": ("NYMEX:CL1!", "15", "15m"),
 }
 DEFAULT_TF = ("15", "15m")
+INDICATOR_RECALC_SECONDS = 20
+
+
+def _tool_json(result) -> dict:
+    texts = []
+    for item in getattr(result, "content", []) or []:
+        text = getattr(item, "text", None)
+        if text is None and isinstance(item, dict):
+            text = item.get("text")
+        if text:
+            texts.append(str(text))
+    raw = "\n".join(texts)
+    try:
+        payload = json.loads(raw)
+        if isinstance(payload, dict) and isinstance(payload.get("result"), str):
+            payload = json.loads(payload["result"])
+        return payload if isinstance(payload, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def chart_state_is_ready(state: dict, symbol: str, timeframe: str) -> bool:
+    actual_symbol = str(state.get("symbol") or state.get("ticker") or "").upper()
+    actual_tf = str(state.get("resolution") or state.get("timeframe") or "").upper()
+    expected_tf = {"5": "5M", "15": "15M", "60": "1H", "240": "4H", "D": "1D"}.get(timeframe, timeframe).upper()
+    studies = state.get("studies") or []
+    names = [str(row.get("name") if isinstance(row, dict) else row) for row in studies]
+    return (
+        actual_symbol == symbol.upper()
+        and actual_tf in {timeframe.upper(), expected_tf}
+        and any("SVP" in name for name in names)
+        and any("Volume Aggregated" in name for name in names)
+    )
 
 
 def _sym_tf(symbol: str):
@@ -60,7 +93,7 @@ def _sym_tf(symbol: str):
     return (s, "15", "15m")
 
 
-async def _capture(symbol: str) -> str | None:
+async def _capture(symbol: str, *, reuse_verified: bool = False) -> str | None:
     if not SERVER_SCRIPT.exists():
         print(f"[tv_screenshot] TV MCP server 未找到: {SERVER_SCRIPT}", file=sys.stderr)
         return None
@@ -77,22 +110,25 @@ async def _capture(symbol: str) -> str | None:
     out_path = SCREENSHOT_DIR / f"{symbol.replace('/', '_')}_{tf_label}_{stamp}.png"
 
     server_params = StdioServerParameters(command="node", args=[str(SERVER_SCRIPT)])
-    async with stdio_client(server_params) as (read, write):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from tv_data_bridge import tv_collection_lock
+    with tv_collection_lock(timeout=60):
+      async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            # 切符号
             try:
-                await session.call_tool("chart_set_symbol", {"symbol": tv_sym})
-                await asyncio.sleep(2)
+                state = _tool_json(await session.call_tool("chart_get_state", {}))
+                ready = reuse_verified and chart_state_is_ready(state, tv_sym, tf_code)
+                if not ready:
+                    await session.call_tool("chart_set_symbol", {"symbol": tv_sym})
+                    await session.call_tool("chart_set_timeframe", {"timeframe": tf_code})
+                    await asyncio.sleep(INDICATOR_RECALC_SECONDS)
+                    state = _tool_json(await session.call_tool("chart_get_state", {}))
+                    if not chart_state_is_ready(state, tv_sym, tf_code):
+                        print("[tv_screenshot] 图表身份/周期/studies重算校验失败", file=sys.stderr)
+                        return None
             except Exception as e:
-                print(f"[tv_screenshot] set_symbol 失败: {e}", file=sys.stderr)
-                return None
-            # 切主周期
-            try:
-                await session.call_tool("chart_set_timeframe", {"timeframe": tf_code})
-                await asyncio.sleep(3)
-            except Exception as e:
-                print(f"[tv_screenshot] set_timeframe 失败: {e}", file=sys.stderr)
+                print(f"[tv_screenshot] 图表准备失败: {e}", file=sys.stderr)
                 return None
             # 截图（chart 区域）
             try:
@@ -125,7 +161,12 @@ async def _capture(symbol: str) -> str | None:
                 return None
 
 
-def capture_analysis_setup(symbol: str, direction: str | None = None) -> str | None:
+def capture_analysis_setup(
+    symbol: str,
+    direction: str | None = None,
+    *,
+    reuse_verified: bool = True,
+) -> str | None:
     """同步入口：用 hermes venv 的 python 3.11 子进程抓主周期图表。
 
     hermes venv 内的 mcp / pydantic_core 是 cp311 编译，必须用 venv 自带的
@@ -136,7 +177,7 @@ def capture_analysis_setup(symbol: str, direction: str | None = None) -> str | N
     if not venv_py.exists():
         # 回退：尝试当前解释器直接跑（同 ABI 时可用）
         try:
-            return asyncio.run(_capture(symbol))
+            return asyncio.run(_capture(symbol, reuse_verified=reuse_verified))
         except Exception as e:
             print(f"[tv_screenshot] 子进程 python 缺失且直跑失败: {e}", file=sys.stderr)
             return None
@@ -146,7 +187,7 @@ def capture_analysis_setup(symbol: str, direction: str | None = None) -> str | N
         clean_env = {k: v for k, v in os.environ.items()
                      if k.upper() not in ("PYTHONPATH", "PYTHONHOME")}
         r = subprocess.run(
-            [str(venv_py), __file__, symbol],
+            [str(venv_py), __file__, symbol, *( ["--reuse-verified"] if reuse_verified else [] )],
             capture_output=True, text=True, timeout=60,
             encoding="utf-8", errors="replace",
             env=clean_env,
@@ -170,6 +211,6 @@ if __name__ == "__main__":
     # 注意：直接运行时走 async worker，不要调 capture_analysis_setup
     # （那是给外部主进程用的子进程封装，会再 spawn 自身造成递归）。
     try:
-        print(asyncio.run(_capture(sym)) or "")
+        print(asyncio.run(_capture(sym, reuse_verified="--reuse-verified" in sys.argv)) or "")
     except Exception as e:
         print(f"[tv_screenshot] 异常: {e}", file=sys.stderr)

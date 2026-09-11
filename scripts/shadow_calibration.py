@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -58,47 +59,109 @@ def label_outcome(
     *,
     horizons: tuple[int, ...] = (4, 8, 16),
 ) -> dict[str, dict[str, Any]]:
-    """只消费信号之后的K线，按R记录MFE/MAE及先触发止损/目标。"""
+    """OHLC模拟，不是实际成交证明。调用者保证仅传信号后的闭柱。
+
+    order_model.type: limit(GTC)或market_next_open；禁止猜测订单类型。
+    同柱双触达止损优先；盘中限价成交柱不能假设此前高点可止盈。
+    R以计划风险为分母；无完整成本模型仅报gross，绝不补零冒充net。
+    cost_model: fee_bps/slippage_bps(每侧)，funding=none或per_bar。
+    per_bar为持仓每柱显式funding_rate乘该柱close；正值多付空收。
+    未成熟、未成交、未平仓均不输出已实现收益；不强行期末平仓。
+    """
     bars = list(future_bars)
     entry = _f(signal.get("entry"))
     stop = _f(signal.get("stop"))
     target = _f(signal.get("target"))
     side = str(signal.get("side") or "long").lower()
     risk = abs(entry - stop)
-    if entry <= 0 or stop <= 0 or target <= 0 or risk <= 0:
+    if (not all(math.isfinite(v) and v > 0 for v in (entry, stop, target))
+            or side not in {"long", "short"} or risk <= 0
+            or not (stop < entry < target if side == "long" else target < entry < stop)):
         raise ValueError("signal entry/stop/target must define positive risk")
-
+    model = signal.get("order_model") or {}
+    order_type = model.get("type") if isinstance(model, dict) else None
+    costs = signal.get("cost_model") or {}
+    sign = 1 if side == "long" else -1
     result: dict[str, dict[str, Any]] = {}
     for horizon in horizons:
         sample = bars[: max(0, int(horizon))]
-        if side == "short":
-            mfe = max((entry - _f(bar.get("low"))) / risk for bar in sample) if sample else 0.0
-            mae = max((_f(bar.get("high")) - entry) / risk for bar in sample) if sample else 0.0
-        else:
-            mfe = max((_f(bar.get("high")) - entry) / risk for bar in sample) if sample else 0.0
-            mae = max((entry - _f(bar.get("low"))) / risk for bar in sample) if sample else 0.0
-
-        first_hit = "none"
-        bars_to_hit = None
+        out: dict[str, Any] = dict(mature=False, observed_bars=len(sample),
+            filled=False, fill_price=None, fill_bar=None, exit_price=None,
+            first_hit="none", bars_to_hit=None, mfe_r=None, mae_r=None,
+            gross_r=None, net_r=None, fee_r=None, slippage_r=None, funding_r=None,
+            status="insufficient_bars", cost_status="unavailable", simulation=True)
+        result[f"h{horizon}"] = out
+        valid = all(isinstance(b, dict) and b.get("closed") is not False
+            and all(math.isfinite(_f(b.get(k))) and _f(b.get(k)) > 0 for k in ("open", "high", "low", "close"))
+            and _f(b["low"]) <= min(_f(b["open"]), _f(b["close"]))
+            <= max(_f(b["open"]), _f(b["close"])) <= _f(b["high"]) for b in sample)
+        if not valid:
+            out["status"] = "invalid_bars"
+            continue
+        out["mature"] = len(sample) == horizon and horizon > 0
+        if order_type not in {"limit", "market_next_open"}:
+            out["status"] = "missing_order_model"
+            continue
+        fill = None
+        held = []
+        mfe = mae = 0.0
         for idx, bar in enumerate(sample, 1):
-            high, low = _f(bar.get("high")), _f(bar.get("low"))
-            if side == "short":
-                stop_hit, target_hit = high >= stop, low <= target
-            else:
-                stop_hit, target_hit = low <= stop, high >= target
-            # 同根同时触发时采取保守口径：先记止损，避免回测乐观偏差。
+            op, high, low = (_f(bar[k]) for k in ("open", "high", "low"))
+            intrabar_fill = False
+            if fill is None:
+                at_open = order_type == "market_next_open" or (op <= entry if sign == 1 else op >= entry)
+                if at_open:
+                    fill = op
+                elif low <= entry <= high:
+                    fill = entry
+                    intrabar_fill = True
+                else:
+                    continue
+                out.update(filled=True, fill_price=fill, fill_bar=idx)
+            held.append(bar)
+            # MFE/MAE are bar-envelope bounds, not reconstructed intrabar paths.
+            mfe = max(mfe, ((high - fill) if sign == 1 else (fill - low)) / risk)
+            mae = max(mae, ((fill - low) if sign == 1 else (high - fill)) / risk)
+            stop_hit = low <= stop if sign == 1 else high >= stop
+            target_hit = high >= target if sign == 1 else low <= target
             if stop_hit:
-                first_hit, bars_to_hit = "stop", idx
+                exit_price = min(op, stop) if sign == 1 else max(op, stop)
+                out.update(first_hit="stop", bars_to_hit=idx, exit_price=exit_price)
                 break
-            if target_hit:
-                first_hit, bars_to_hit = "target", idx
+            if target_hit and not intrabar_fill:
+                # Resting take-profit limit: no invented favorable gap improvement.
+                out.update(first_hit="target", bars_to_hit=idx, exit_price=target)
                 break
-        result[f"h{horizon}"] = {
-            "mfe_r": round(max(0.0, mfe), 4),
-            "mae_r": round(max(0.0, mae), 4),
-            "first_hit": first_hit,
-            "bars_to_hit": bars_to_hit,
-        }
+        if fill is not None:
+            out.update(mfe_r=round(mfe, 4), mae_r=round(mae, 4))
+        out["status"] = ("insufficient_bars" if not out["mature"] else
+                         "unfilled" if fill is None else
+                         "closed" if out["exit_price"] is not None else "open")
+        if out["status"] != "closed" or fill is None:
+            continue
+        exit_price = _f(out["exit_price"])
+        out["gross_r"] = sign * (exit_price - fill) / risk
+        if not isinstance(costs, dict) or not all(k in costs for k in ("fee_bps", "slippage_bps", "funding")):
+            continue
+        try:
+            fee, slip = float(costs["fee_bps"]), float(costs["slippage_bps"])
+            if not all(math.isfinite(v) and v >= 0 for v in (fee, slip)):
+                continue
+            if costs["funding"] == "none":
+                funding = 0.0
+            elif costs["funding"] == "per_bar":
+                rates = [float(b["funding_rate"]) for b in held]
+                if not all(math.isfinite(v) for v in rates):
+                    continue
+                funding = sign * sum(r * _f(b["close"]) for r, b in zip(rates, held)) / risk
+            else:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.update(fee_r=(fill + exit_price) * fee / 10000 / risk,
+                   slippage_r=(fill + exit_price) * slip / 10000 / risk,
+                   funding_r=funding, cost_status="modeled")
+        out["net_r"] = out["gross_r"] - out["fee_r"] - out["slippage_r"] - funding
     return result
 
 
@@ -118,7 +181,8 @@ def calibrate_groups(
         else:
             regime = str(regime_raw or "unknown")
         model = str(row.get("model_id") or ((row.get("main") or {}).get("model_id") if isinstance(row.get("main"), dict) else "") or "unknown")
-        hit = str(((row.get("outcome") or {}).get(hkey) or {}).get("first_hit") or "none")
+        outcome = ((row.get("outcome") or {}).get(hkey) or {})
+        hit = str(outcome.get("first_hit") or "none") if outcome.get("mature") is True and outcome.get("filled") is True else "ineligible"
         buckets[f"{regime}|{model}"].append(hit)
 
     result: dict[str, dict[str, Any]] = {}
@@ -126,13 +190,24 @@ def calibrate_groups(
         wins = hits.count("target")
         losses = hits.count("stop")
         decisive = wins + losses
-        calibrated = wins / decisive if len(hits) >= min_samples and decisive else None
+        calibrated = wins / decisive if decisive >= max(1, min_samples) else None
+        interval = None
+        if calibrated is not None:
+            z = 1.959963984540054
+            denominator = 1 + z * z / decisive
+            center = (calibrated + z * z / (2 * decisive)) / denominator
+            half = z * math.sqrt(calibrated * (1 - calibrated) / decisive + z * z / (4 * decisive * decisive)) / denominator
+            interval = [max(0.0, center - half), min(1.0, center + half)]
         result[key] = {
+            "min_samples": max(1, min_samples),
+            "win_rate_interval": interval,
+            "interval_method": "wilson_95",
             "samples": len(hits),
+            "eligible_samples": len(hits) - hits.count("ineligible"),
             "decisive_samples": decisive,
             "wins": wins,
             "losses": losses,
             "calibrated_win_rate": calibrated,
-            "reliable": len(hits) >= min_samples,
+            "reliable": decisive >= max(1, min_samples),
         }
     return result

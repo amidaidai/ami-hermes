@@ -25,7 +25,38 @@ if callable(_stderr_reconfigure):
     _stderr_reconfigure(encoding="utf-8", errors="replace")
 
 
+def parse_asset_identity(symbol: str) -> dict:
+    """Parse local routing identity; this does NOT verify a listed instrument.
+
+    Raw input is never repaired. Normalization is separate, case-only, and
+    tick size/listing/settlement metadata require a real provider lookup.
+    """
+    normalized = symbol.upper() if isinstance(symbol, str) else None
+    exchange, ticker = None, normalized
+    if normalized and normalized.count(":") == 1:
+        exchange, ticker = normalized.split(":")
+    ac = _legacy_asset_class(ticker or "")
+    product_type, underlying = None, None
+    continuous = re.fullmatch(r"([A-Z][A-Z0-9]*?)([1-9][0-9]*)!", ticker or "")
+    perpetual = re.fullmatch(r"([A-Z0-9]+?)(USDT|USDC|USD)\.P", ticker or "")
+    if continuous:
+        ac = "futures"
+        product_type, underlying = "continuous_future", continuous.group(1)
+    elif perpetual:
+        ac = "crypto"
+        product_type, underlying = "perpetual", perpetual.group(1)
+    return {"raw_symbol": symbol, "normalized_symbol": normalized,
+            "exchange": exchange, "ticker": ticker, "asset_class": ac,
+            "product_type": product_type, "underlying": underlying,
+            "supported": ac != "other", "exchange_verified": False,
+            "tick_size": None}
+
+
 def _asset_class(symbol: str) -> str:
+    return parse_asset_identity(symbol)["asset_class"]
+
+
+def _legacy_asset_class(symbol: str) -> str:
     su = symbol.upper()
     su_clean = su.split(":")[-1].replace("1!", "").replace("!", "")
     # 期权必须先于 BTC/ETH/USDT 加密识别，否则 Deribit 格式

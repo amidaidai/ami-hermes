@@ -113,7 +113,16 @@ def _mark_restored() -> None:
         _save_chart_owner(state)
 
 
+# 20260911：归还图表同样改【有界重试】（同一缺陷的第三处）。
+# 原实现「切品种+切周期 → sleep(20) → 单次检查」：TV 先落品种、周期稍后才到，
+# 20 秒内周期没跟上就判失败 —— 品种已经回去了，周期却留在 XAU 同步用的 5m。
+# 实测证据：图表归属记录 user_timeframe=15，同步跑完图却停在 BTC 5m。
+_RESTORE_ATTEMPTS = 6
+_RESTORE_WAIT = 5.0
+
+
 def _restore_chart(previous: dict[str, Any]) -> bool:
+    """把图表还给用户：品种与周期都必须确认到位才算成功（有界重试）。"""
     symbol = str(previous.get("symbol") or previous.get("ticker") or "").strip()
     timeframe = str(previous.get("resolution") or previous.get("timeframe") or "").strip()
     if not symbol:
@@ -122,31 +131,64 @@ def _restore_chart(previous: dict[str, Any]) -> bool:
         return False
     if timeframe and not _tv_command("timeframe", timeframe)[1]:
         return False
-    time.sleep(20)
-    actual = _chart_state()
-    actual_symbol = str(actual.get("symbol") or actual.get("ticker") or "").strip().upper()
-    actual_tf = str(actual.get("resolution") or actual.get("timeframe") or "").strip().upper()
-    return actual_symbol == symbol.upper() and (not timeframe or actual_tf == timeframe.upper())
+    last = ""
+    for attempt in range(1, _RESTORE_ATTEMPTS + 1):
+        time.sleep(_RESTORE_WAIT)
+        actual = _chart_state()
+        actual_symbol = str(actual.get("symbol") or actual.get("ticker") or "").strip().upper()
+        actual_tf = str(actual.get("resolution") or actual.get("timeframe") or "").strip().upper()
+        if actual_symbol == symbol.upper() and (not timeframe or actual_tf == timeframe.upper()):
+            if attempt > 1:
+                print(f"  ✅ 图表已归还（第{attempt}次确认，{attempt * _RESTORE_WAIT:.0f}s）")
+            return True
+        last = f"symbol={actual_symbol} tf={actual_tf}（目标 {symbol.upper()} {timeframe.upper()}）"
+        print(f"  ⏳ 归还未就位（第{attempt}/{_RESTORE_ATTEMPTS}次）: {last[:130]}")
+    print(f"  ✗ 图表归还失败，最后观测: {last[:170]}")
+    return False
+
+
+# 20260911：切图确认改【有界重试】。
+# 原实现是 sleep(20) + 单次检查 —— TV 换品种需要加载（比切周期慢），
+# 20 秒在负载高时不够，单次检查失败就把整轮五周期快照丢掉（实测约 1/3 命中）。
+# 与 keylevels_collect 的切周期确认同一教训，那里已改、这里当时漏了。
+_XAU_PREP_ATTEMPTS = 6
+_XAU_PREP_WAIT = 5.0
 
 
 def _prepare_xau_main_chart() -> bool:
-    """Wait for XAU 5m indicators before reading the action grid."""
+    """Wait for XAU 5m indicators before reading the action grid.
+
+    有界重试：最多 _XAU_PREP_ATTEMPTS 次、每次间隔 _XAU_PREP_WAIT 秒，
+    直到 品种/周期/两个研究 同时就位。仍未就位才判失败（并打印当时实际状态）。
+    """
     if not _tv_command("symbol", SYMBOL)[1]:
         return False
     if not _tv_command("timeframe", "5")[1]:
         return False
-    time.sleep(20)
-    actual = _chart_state()
-    names = [
-        str(row.get("name") if isinstance(row, dict) else row)
-        for row in (actual.get("studies") or [])
-    ]
-    return (
-        str(actual.get("symbol") or "").upper() == SYMBOL
-        and str(actual.get("resolution") or actual.get("timeframe") or "").upper() in {"5", "5M"}
-        and any("SVP" in name for name in names)
-        and any("Volume Aggregated" in name for name in names)
-    )
+    last = ""
+    for attempt in range(1, _XAU_PREP_ATTEMPTS + 1):
+        time.sleep(_XAU_PREP_WAIT)
+        actual = _chart_state()
+        names = [
+            str(row.get("name") if isinstance(row, dict) else row)
+            for row in (actual.get("studies") or [])
+        ]
+        got_symbol = str(actual.get("symbol") or "").upper()
+        got_res = str(actual.get("resolution") or actual.get("timeframe") or "").upper()
+        ok = (
+            got_symbol == SYMBOL
+            and got_res in {"5", "5M"}
+            and any("SVP" in name for name in names)
+            and any("Volume Aggregated" in name for name in names)
+        )
+        if ok:
+            if attempt > 1:
+                print(f"  ✅ XAU 主图就位（第{attempt}次尝试，{attempt * _XAU_PREP_WAIT:.0f}s）")
+            return True
+        last = f"symbol={got_symbol} res={got_res} studies={names}"
+        print(f"  ⏳ XAU 主图未就位（第{attempt}/{_XAU_PREP_ATTEMPTS}次）: {last[:150]}")
+    print(f"  ✗ XAU 主图确认失败，最后观测: {last[:200]}")
+    return False
 
 
 def _parse_timestamp(value: Any) -> datetime | None:

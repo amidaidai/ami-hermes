@@ -35,6 +35,34 @@ def test_quick_and_inherit_are_lightweight():
     assert "x_sent" not in r.route_pipeline("BTCUSDT", "inherit")
 
 
+def test_quick_analysis_does_not_publish_a_partial_full_artifact():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert 'publish_full_artifact = effective_mode == "full"' in source
+    assert 'if publish_full_artifact:' in source
+    quick_render = source.index("if not publish_full_artifact:", source.index('publish_full_artifact = effective_mode == "full"'))
+    gate = source.index("from go_nogo_gate import check_gate", quick_render)
+    assert quick_render < gate
+
+
+def test_fresh_source_snapshot_is_reused_before_network_refresh():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    block = source[source.index("def _refresh_and_mark_snapshot"):source.index("def _freshness_line")]
+    assert block.index('if prior.get("usable"):') < block.index("from trading_system import source_snapshot")
+
+
+def test_quick_crypto_reuses_cached_spot_and_skips_cmc_global_network_calls():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert 'if effective_mode == "full":\n                cmc = cmc_quote' in source
+    assert 'glob = cmc_global() if "macro" in pipeline_steps else {}' in source
+
+
+def test_xau_preflight_validates_fresh_pair_before_starting_expensive_sync():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    block = source[source.index('if _asset_class(symbol) == "gold":'):source.index("# XAU 已由 xau_tv_sync")]
+    assert block.index("xau_contract = _load_xau_tv_contract()") < block.index("xau_sync = subprocess.run(")
+    assert "跳过重复切图" in block
+
+
 def test_context_path_is_symbol_scoped():
     r = router()
     assert r.context_file("BTCUSDT").name == "analysis_context_BTCUSDT.json"

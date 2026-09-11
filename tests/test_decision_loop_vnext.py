@@ -23,6 +23,8 @@ def _main(**overrides):
         "grade": "A多", "direction": "long", "model_id": "fvg_pullback",
         "entry": 100.0, "stop": 98.0, "target": 105.0, "rr": 2.5,
         "mcp_fvg_quality_score": 82.0, "mcp_ob_quality_score": 70.0,
+        "data_grade": "A", "snapshot_age_sec": 10.0,
+        "location_valid": True, "trigger_confirmed": True, "bar_closed": True,
     }
     data.update(overrides)
     return data
@@ -61,7 +63,11 @@ def test_invalid_haldro_does_not_invent_conflict_but_requires_wait():
 
 def test_non_crypto_ignores_haldro_and_can_go():
     dual = {"asset_is_crypto": False, "valid_code": 0, "conflict": True}
-    out = resolve_final_verdict("XAUUSD", _main(), dual, regime=_trend())
+    out = resolve_final_verdict(
+        "XAUUSD", _main(), dual, regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
     assert out.state == "GO-A"
     assert out.entry == 100.0
 
@@ -99,6 +105,7 @@ def test_all_hard_gates_pass_returns_go_a():
     out = resolve_final_verdict(
         "BTCUSDT", _main(), _dual(), regime=_trend(),
         risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
     )
     assert out.state == "GO-A"
     assert out.side == "long"
@@ -160,6 +167,7 @@ def test_short_execution_uses_short_geometry_and_geometric_rr():
         _dual(),
         regime=_trend(),
         risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
     )
 
     assert out.state == "GO-A"
@@ -242,7 +250,46 @@ def test_unknown_legacy_model_is_inferred_from_active_zone_quality():
     main = _main(model_id="无", mcp_fvg_quality_score=82, mcp_ob_quality_score=50)
     out = resolve_final_verdict("BTCUSDT", main, _dual(), regime=_trend())
     assert out.model_id == "fvg_pullback"
-    assert out.state == "GO-A"
+    assert out.state == "NO-GO"
+    assert "risk_constitution" in out.blockers
+
+
+def test_execution_candidate_missing_explicit_data_evidence_fails_closed():
+    main = _main()
+    for key in ("data_grade", "snapshot_age_sec", "location_valid", "trigger_confirmed"):
+        main.pop(key)
+    out = resolve_final_verdict(
+        "BTCUSDT", main, _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "NO-GO"
+    assert "decision_evidence" in out.blockers
+
+
+def test_execution_candidate_missing_advanced_gate_can_only_wait():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(), _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+    )
+    assert out.state == "WAIT"
+    assert "advanced_pending" in out.blockers
+
+
+def test_source_snapshot_uses_the_same_one_hour_ttl_as_data_boundary():
+    ok = resolve_final_verdict(
+        "BTCUSDT", _main(snapshot_age_sec=3599), _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    stale = resolve_final_verdict(
+        "BTCUSDT", _main(snapshot_age_sec=3601), _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert ok.state == "GO-A"
+    assert stale.state == "NO-GO"
+    assert "data" in stale.blockers
 
 
 def test_unclosed_svp_action_text_forces_wait_even_when_legacy_grade_is_a():

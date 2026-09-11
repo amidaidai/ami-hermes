@@ -52,13 +52,12 @@ def _signal_projection(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _bar_dict(raw: Any) -> dict[str, float] | None:
+def _bar_dict(raw: Any) -> dict[str, Any] | None:
     if isinstance(raw, dict):
-        high, low = _num(raw.get("high")), _num(raw.get("low"))
-        return {"high": high, "low": low} if high > 0 and low > 0 else None
-    if isinstance(raw, (list, tuple)) and len(raw) >= 4:
-        high, low = _num(raw[2]), _num(raw[3])
-        return {"high": high, "low": low} if high > 0 and low > 0 else None
+        return dict(raw)
+    if isinstance(raw, (list, tuple)) and len(raw) >= 7:
+        return dict(open=_num(raw[1]), high=_num(raw[2]), low=_num(raw[3]),
+                    close=_num(raw[4]), open_time=_num(raw[0]), close_time=_num(raw[6]))
     return None
 
 
@@ -71,7 +70,7 @@ def label_ready_records(
     existing_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """标注已拥有完整最长周期闭柱的加密候选；不支持资产只计数，不误报失败。"""
-    del now_ms  # fetcher负责只返回已收柱；保留参数便于测试和未来时钟门禁。
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     existing = set(existing_ids or ())
     stats: Counter[str] = Counter()
     labeled: list[dict[str, Any]] = []
@@ -93,13 +92,41 @@ def label_ready_records(
         if signal["side"] not in {"long", "short"} or min(signal["entry"], signal["stop"], signal["target"]) <= 0:
             stats["invalid"] += 1
             continue
-        raw_bars = fetcher(symbol, str(record.get("timeframe") or "15m"), int(record.get("ts") or 0) + 1, required)
+        signal_ts = int(record.get("ts") or 0)
+        timeframe = str(record.get("timeframe") or "15m")
+        # Validate against the requested interval, never infer it from returned
+        # bars: missing bars could otherwise masquerade as a longer interval.
+        step_ms = {
+            "1m": 60_000, "3m": 180_000, "5m": 300_000,
+            "15m": 900_000, "30m": 1_800_000,
+            "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+            "6h": 21_600_000, "8h": 28_800_000, "12h": 43_200_000,
+            "1d": 86_400_000,
+        }.get(timeframe.replace("min", "m"))
+        if step_ms is None:
+            stats["unsupported"] += 1
+            continue
+        first_open = (signal_ts // step_ms + 1) * step_ms
+        raw_bars = fetcher(symbol, timeframe, signal_ts + 1, required)
         bars = [bar for raw in raw_bars if (bar := _bar_dict(raw)) is not None]
-        if len(bars) < required:
+        bars = [b for b in bars if b.get("closed") is not False
+                and signal_ts < _num(b.get("open_time")) <= _num(b.get("close_time")) < now_ms]
+        bars = sorted({b["open_time"]: b for b in bars}.values(), key=lambda b: b["open_time"])
+        if len(bars) < required or any(
+            _num(bar.get("open_time")) != first_open + index * step_ms
+            for index, bar in enumerate(bars[:required])
+        ):
             stats["waiting"] += 1
             continue
-        outcome = label_outcome(signal, bars[:required], horizons=horizons)
-        labeled.append({**signal, "outcome": outcome, "labeled_at": int(time.time() * 1000)})
+        try:
+            outcome = label_outcome(signal, bars[:required], horizons=horizons)
+        except ValueError:
+            stats["invalid"] += 1
+            continue
+        if not all(item["mature"] for item in outcome.values()):
+            stats["invalid"] += 1
+            continue
+        labeled.append({**signal, "outcome": outcome, "labeled_at": now_ms})
         existing.add(signal_id)
         stats["labeled"] += 1
     return labeled, dict(stats)
@@ -117,8 +144,7 @@ def fetch_binance_closed_bars(symbol: str, timeframe: str, start_ms: int, limit:
     params = f"symbol={symbol}&interval={interval}&startTime={int(start_ms)}&limit={max(1, min(int(limit) + 2, 1000))}"
     urls = [
         f"https://fapi.binance.com/fapi/v1/klines?{params}",
-        f"https://api.binance.com/api/v3/klines?{params}",
-        f"https://data-api.binance.vision/api/v3/klines?{params}",
+
     ]
     now_ms = int(time.time() * 1000)
     for url in urls:

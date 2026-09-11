@@ -93,6 +93,7 @@ def test_main_refreshes_xau_data_window_cache_after_success(monkeypatch, tmp_pat
         return {}
 
     monkeypatch.setattr(xau_tv_sync, "_refresh_tv_live_cache", refresh)
+    monkeypatch.setattr(xau_tv_sync, "_prepare_xau_main_chart", lambda: True)
     monkeypatch.setattr(xau_tv_sync, "validate_xau_outputs", lambda *args, **kwargs: {"usable": True})
 
     assert xau_tv_sync.main() == 0

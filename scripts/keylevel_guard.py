@@ -15,7 +15,7 @@
   }
 }
 
-价格自上次巡检以来穿过任一 level → 写 data/trigger_{symbol}.json，供 agent 分析推送。
+价格自上次巡检以来穿过任一 level → 写 data/trigger_{symbol}.json，并直接发一条“到价请看图”提醒。
 防刷屏：每 level 独立 30 分钟冷却。守护挂了由 keylevel_guard_watchdog 自动拉起。
 """
 import json
@@ -23,6 +23,7 @@ import hashlib
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,9 +42,12 @@ CONFIG_FILE = DATA / "keylevels_config.json"
 STATE_FILE = DATA / ".keylevel_guard_state.json"
 HEARTBEAT_FILE = DATA / ".keylevel_guard_heartbeat.json"
 LOCK_FILE = DATA / ".keylevel_guard.lock"
+TZ = timezone(timedelta(hours=8))
 
 COOLDOWN_SECONDS = 1800   # 每 level 独立冷却 30 分钟
 POLL_SECONDS = 0.5
+PRICE_ALERTS_ENABLED = True  # 用户明确授权：只提醒到价，不做方向判断/下单
+PRICE_ALERT_TARGET = "telegram:-1003733144325:386"
 
 import urllib.request
 
@@ -89,10 +93,30 @@ def level_is_active(level, now_epoch):
         return False
 
 
+def structure_review_is_current(config, now_epoch=None) -> bool:
+    """Reject all approved levels after the policy's maximum structure age."""
+    config = config if isinstance(config, dict) else {}
+    policy = config.get("auto_approval_policy") or {}
+    if not isinstance(policy, dict) or policy.get("max_structure_age_hours") is None:
+        return True
+    try:
+        max_hours = float(policy["max_structure_age_hours"])
+        reviewed_raw = policy.get("structure_reviewed_at") or policy.get("authorized_at")
+        reviewed = datetime.fromisoformat(str(reviewed_raw).replace("Z", "+00:00"))
+        if reviewed.tzinfo is None:
+            reviewed = reviewed.replace(tzinfo=TZ)
+        now_value = time.time() if now_epoch is None else float(now_epoch)
+        return max_hours > 0 and now_value <= reviewed.timestamp() + max_hours * 3600.0
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def active_approved_level_count(config=None, now_epoch=None) -> int:
     """Count currently valid, explicitly approved levels in the sole source."""
     config = config if isinstance(config, dict) else load_config()
     now_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if not structure_review_is_current(config, now_epoch):
+        return 0
     total = 0
     for block in (config.get("symbols", {}) or {}).values():
         if not isinstance(block, dict):
@@ -169,6 +193,24 @@ def split_trigger(symbol, level, price, direction, *, revision):
     atomic_write_json(f, data)
 
 
+def send_price_arrival_alert(symbol, level, price, direction):
+    """直接通知到价；禁止在守卫层加入多空判断或执行价格。"""
+    if not PRICE_ALERTS_ENABLED:
+        return False, "disabled"
+    text = (
+        f"○ {symbol} 到价：{price:,.0f}，触及{level.get('name', '关键位')} "
+        f"{float(level['price']):,.0f}\n"
+        "请查看 TradingView 15m 图表，自己确认结构。\n"
+        "仅提醒，不代表方向，不自动下单。"
+    )
+    try:
+        from telegram_direct import send_telegram_direct
+        return send_telegram_direct(PRICE_ALERT_TARGET, text, timeout=10)
+    except Exception as exc:
+        log(f"ALERT_SEND_FAILED {type(exc).__name__}")
+        return False, type(exc).__name__
+
+
 def acquire_instance_lock():
     """确保 Windows/Linux 上只有一个多品种守护实例。"""
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +256,11 @@ def main_loop():
         revision = str(cfg.get("config_revision") or config_revision())
         now = ts()
 
+        if not structure_review_is_current(cfg, now):
+            heartbeat("structure_review_required")
+            time.sleep(POLL_SECONDS)
+            continue
+
         for sym, c in cfg.get("symbols", {}).items():
             url = c.get("ws_price") or f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}"
             price = get_price(url)
@@ -238,6 +285,8 @@ def main_loop():
                     if now >= cool_until or info.get("dir") != crossed:
                         log(f"TRIGGER {sym} {lv['name']} {crossed} price={price:,.1f}")
                         split_trigger(sym, lv, price, crossed, revision=revision)
+                        ok, reason = send_price_arrival_alert(sym, lv, price, crossed)
+                        log(f"ALERT {'OK' if ok else 'FAIL'} {sym} {lv['name']} {reason}")
                         triggered[key] = {"dir": crossed, "cool_until": now + COOLDOWN_SECONDS}
                         save_state({"triggered": triggered, "last_price": last_price_by_sym})
             last_price_by_sym[sym] = price

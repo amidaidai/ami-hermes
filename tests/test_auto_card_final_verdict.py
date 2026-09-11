@@ -352,6 +352,12 @@ def test_non_crypto_does_not_use_aggvol_direct_card_path():
     assert 'if not engine_data.get("_binance_data_collected"):' in source
     assert 'engine_data["_binance_data_collected"] = True' in source
     assert 'cvd_dir = ""' in source and 'funding_rate = ""' in source
+
+
+def test_final_verdict_is_locked_once_per_analysis_run():
+    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert 'engine_data.get("_final_verdict_locked") is True' in source
+    assert 'engine_data["_final_verdict_locked"] = True' in source
     metal_block = source[source.index('elif asset == "metal":'):source.index('elif asset in {"stock", "forex", "futures"}:')]
     assert '_collect_binance_data(engine_data, symbol)' not in metal_block
 
@@ -379,9 +385,24 @@ def test_gate_failure_cannot_enter_external_push_branch():
 
 
 def test_pipeline_audit_does_not_count_binance_periods_as_tv_five_tf_evidence():
-    source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
-    assert 'five_tf_required = bool(engine_data.get("_tv_five_tf_required"))' in source
-    assert 'not five_tf_required or bool(five_tf_status.get("usable"))' in source
+    result = auto_card._pipeline_tv_step_status({
+        "_tv_live_status": {"usable": True},
+        "_tv_five_tf_required": True,
+        "_tv_five_tf_status": {"usable": False, "coverage": 5, "reason": "过期"},
+        "klines": {tf: {"close": 1} for tf in ("D", "4h", "1h", "15m", "5m")},
+    })
+    assert result["usable"] is False
+    assert result["main_usable"] is True
+    assert result["five_usable"] is False
+
+
+def test_quick_tv_step_requires_live_main_but_not_full_five_tf_contract():
+    result = auto_card._pipeline_tv_step_status({
+        "_tv_live_status": {"usable": True},
+        "_tv_five_tf_required": False,
+        "_tv_five_tf_status": {"usable": False, "coverage": 5, "reason": "过期"},
+    })
+    assert result["usable"] is True
 
 
 def test_tv_cache_status_requires_identity_and_complete_action_contract():
@@ -422,3 +443,30 @@ def test_source_snapshot_status_rejects_generic_cache_from_other_asset(monkeypat
     result = auto_card._source_snapshot_status("BTCUSDT", max_age_hours=1)
     assert result["usable"] is False
     assert "匹配品种" in result["reason"] or "缺失" in result["reason"]
+
+
+def test_binance_timeframes_are_fetched_with_bounded_concurrency(monkeypatch):
+    import threading
+    import binance_public
+
+    barrier = threading.Barrier(5)
+    threads = set()
+
+    def fake_fetch(_path, _params, timeout):
+        threads.add(threading.get_ident())
+        barrier.wait(timeout=1)
+        return [
+            [0, "100", "102", "99", "101", "10", 0, 0, 0, "6"],
+            [0, "101", "103", "100", "102", "11", 0, 0, 0, "7"],
+        ]
+
+    monkeypatch.setattr(binance_public, "fetch_futures", fake_fetch)
+    monkeypatch.setattr(binance_public, "fapi_available", lambda timeout=2: False)
+    monkeypatch.setattr(auto_card, "_load_binance_keys", lambda: (None, None))
+    monkeypatch.setattr(auto_card, "_inject_orion_derivatives_fallback", lambda *_args: None)
+
+    data = {}
+    auto_card._collect_binance_data(data, "BTCUSDT")
+
+    assert len(threads) == 5
+    assert set(data["klines"]) == {"D", "4h", "1h", "15m", "5m"}

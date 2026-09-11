@@ -1,5 +1,6 @@
 import importlib.util
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,22 @@ def test_expired_or_disabled_levels_are_not_active():
     assert guard.level_is_active({"price": 1, "enabled": False}, 100) is False
     assert guard.level_is_active({"price": 1, "valid_until": 99}, 100) is False
     assert guard.level_is_active({"price": 1, "valid_until": 101}, 100) is True
+
+
+def test_config_health_rejects_levels_after_structure_review_deadline():
+    guard = load("keylevel_guard.py")
+    reviewed = datetime(2026, 9, 4, 16, 0, tzinfo=timezone.utc)
+    now = reviewed + timedelta(hours=25)
+    config = {
+        "auto_approval_policy": {
+            "max_structure_age_hours": 24,
+            "structure_reviewed_at": reviewed.isoformat(),
+        },
+        "symbols": {"BTCUSDT": {"levels": [
+            {"price": 80000, "enabled": True, "valid_until": (now + timedelta(hours=5)).isoformat()},
+        ]}},
+    }
+    assert guard.config_health(config, now.timestamp())["active_approved_levels"] == 0
 
 
 def test_trigger_is_price_event_not_trade_signal(tmp_path, monkeypatch):
@@ -110,3 +127,162 @@ def test_xau_sync_validates_all_timeframes_before_writing_snapshot():
 def test_btc_collector_does_not_overwrite_candidate_file_with_partial_tf_data():
     source = (ROOT / "scripts" / "keylevels_collect.py").read_text(encoding="utf-8")
     assert source.index("missing_timeframes =") < source.index("atomic_write_json(OUT, payload)")
+
+
+def test_collector_supervisor_rejects_false_zero_exit_without_new_publication(tmp_path, monkeypatch):
+    collector = load("keylevels_collect.py")
+    out = tmp_path / "keylevels_candidates.json"
+    out.write_text(
+        '{"ts":"old","timeframes_complete":true,"timeframes":{"D":{},"240":{},"60":{},"15":{},"5":{}},"candidates":[1]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(collector, "OUT", out)
+
+    class Child:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    calls = []
+    monkeypatch.setattr(collector.subprocess, "run", lambda *args, **kwargs: calls.append(args) or Child())
+    assert collector._run_cli() == 1
+    assert len(calls) == 2
+
+
+def test_watchdog_persisted_policy_renews_only_existing_approved_levels(monkeypatch, tmp_path):
+    watchdog = load("btc_keylevel_guard_watchdog.py")
+    tz = timezone(timedelta(hours=8))
+    now = datetime(2026, 9, 4, 20, 0, tzinfo=tz)
+    config_path = tmp_path / "keylevels_config.json"
+    config_path.write_text(json.dumps({
+        "auto_approval_policy": {
+            "enabled": True,
+            "scope": "existing_levels_only",
+            "ttl_hours": 6,
+            "renew_before_minutes": 30,
+        },
+        "symbols": {"BTCUSDT": {"levels": [
+            {"name": "approved", "price": 80000, "enabled": True, "valid_until": (now + timedelta(minutes=10)).isoformat()},
+            {"name": "disabled", "price": 90000, "enabled": False, "valid_until": (now + timedelta(minutes=10)).isoformat()},
+        ]}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(watchdog, "CONFIG", config_path)
+
+    result = watchdog.auto_renew_existing_approved_levels(now)
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert result["changed"] is True
+    assert result["renewed_count"] == 1
+    assert written["symbols"]["BTCUSDT"]["levels"][0]["valid_until"] == (now + timedelta(hours=6)).isoformat()
+    assert written["symbols"]["BTCUSDT"]["levels"][1]["valid_until"] == (now + timedelta(minutes=10)).isoformat()
+    assert written["approval_renewal"]["source"] == "用户持久授权自动续期(现有批准位)"
+
+
+def test_watchdog_auto_renew_never_accepts_candidate_promotion_scope(monkeypatch, tmp_path):
+    watchdog = load("btc_keylevel_guard_watchdog.py")
+    config_path = tmp_path / "keylevels_config.json"
+    original = {"auto_approval_policy": {"enabled": True, "scope": "candidate_pool"}, "symbols": {}}
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(watchdog, "CONFIG", config_path)
+
+    result = watchdog.auto_renew_existing_approved_levels()
+
+    assert result == {"changed": False, "error": "unsupported_scope"}
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+
+
+def test_watchdog_stops_renewing_when_structure_review_is_too_old(monkeypatch, tmp_path):
+    watchdog = load("btc_keylevel_guard_watchdog.py")
+    tz = timezone(timedelta(hours=8))
+    now = datetime(2026, 9, 5, 18, 0, tzinfo=tz)
+    config_path = tmp_path / "keylevels_config.json"
+    original = {
+        "auto_approval_policy": {
+            "enabled": True,
+            "scope": "existing_levels_only",
+            "ttl_hours": 6,
+            "renew_before_minutes": 30,
+            "max_structure_age_hours": 24,
+            "structure_reviewed_at": (now - timedelta(hours=25)).isoformat(),
+        },
+        "symbols": {"BTCUSDT": {"levels": [
+            {"name": "old", "price": 80000, "enabled": True,
+             "valid_until": (now + timedelta(minutes=10)).isoformat()},
+        ]}},
+    }
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(watchdog, "CONFIG", config_path)
+
+    result = watchdog.auto_renew_existing_approved_levels(now)
+
+    assert result["changed"] is False
+    assert result["error"] == "structure_review_required"
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+
+
+def test_watchdog_caps_level_expiry_at_structure_review_deadline(monkeypatch, tmp_path):
+    watchdog = load("btc_keylevel_guard_watchdog.py")
+    tz = timezone(timedelta(hours=8))
+    reviewed = datetime(2026, 9, 4, 16, 0, tzinfo=tz)
+    now = reviewed + timedelta(hours=22)
+    config_path = tmp_path / "keylevels_config.json"
+    config_path.write_text(json.dumps({
+        "auto_approval_policy": {
+            "enabled": True, "scope": "existing_levels_only",
+            "ttl_hours": 6, "renew_before_minutes": 30,
+            "max_structure_age_hours": 24,
+            "structure_reviewed_at": reviewed.isoformat(),
+        },
+        "symbols": {"BTCUSDT": {"levels": [
+            {"price": 80000, "enabled": True, "valid_until": (now + timedelta(minutes=10)).isoformat()},
+        ]}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(watchdog, "CONFIG", config_path)
+
+    result = watchdog.auto_renew_existing_approved_levels(now)
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert result["changed"] is True
+    assert written["symbols"]["BTCUSDT"]["levels"][0]["valid_until"] == (reviewed + timedelta(hours=24)).isoformat()
+
+
+def test_btc_refresh_skips_when_both_contracts_are_fresh(monkeypatch):
+    refresh = load("btc_tv_refresh.py")
+    monkeypatch.setattr(refresh, "btc_five_tf_status", lambda: {"usable": True})
+    monkeypatch.setattr(refresh, "source_snapshot_status", lambda: {"fresh": True})
+    called = []
+    monkeypatch.setattr(refresh, "run_collector", lambda: called.append("collector") or 0)
+    monkeypatch.setattr(refresh, "refresh_source_snapshot", lambda: called.append("snapshot") or True)
+
+    assert refresh.main() == 0
+    assert called == []
+
+
+def test_btc_refresh_runs_only_the_stale_contract(monkeypatch):
+    refresh = load("btc_tv_refresh.py")
+    monkeypatch.setattr(refresh, "btc_five_tf_status", lambda: {"usable": False})
+    monkeypatch.setattr(refresh, "source_snapshot_status", lambda: {"fresh": True})
+    called = []
+    monkeypatch.setattr(refresh, "run_collector", lambda: called.append("collector") or 0)
+    monkeypatch.setattr(refresh, "refresh_source_snapshot", lambda: called.append("snapshot") or True)
+
+    assert refresh.main() == 0
+    assert called == ["collector"]
+
+
+def test_btc_collector_restores_and_verifies_previous_chart(monkeypatch):
+    collector = load("keylevels_collect.py")
+    calls = []
+
+    def fake_cli(*args, **kwargs):
+        calls.append(args)
+        if args == ("state",):
+            return json.dumps({"symbol": "OANDA:XAUUSD", "resolution": "5"})
+        return "{}"
+
+    monkeypatch.setattr(collector, "_cli", fake_cli)
+    monkeypatch.setattr(collector.time, "sleep", lambda _seconds: None)
+
+    assert collector._restore_chart_state({"symbol": "OANDA:XAUUSD", "resolution": "5"}) is True
+    assert calls[:2] == [("symbol", "OANDA:XAUUSD"), ("timeframe", "5")]
+    assert calls[-1] == ("state",)

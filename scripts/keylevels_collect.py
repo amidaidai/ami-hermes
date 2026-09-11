@@ -440,6 +440,29 @@ def _restore_chart_state(previous: dict) -> bool:
     return True
 
 
+def _dump_candidate_diagnosis(data_by_tf: dict, path: str) -> None:
+    """候选池为空时，把每个周期实际拿到了什么打出来（20260911 新增）。
+
+    没有这段时只看到一句 RuntimeError，无法区分是「图没切过去」、
+    「SVP 位没渲染完」还是「解析规则不匹配」。
+    """
+    print(f"  [诊断:{path}] 候选池为空，分周期明细：")
+    for tf in TFS:
+        d = data_by_tf.get(tf)
+        if not isinstance(d, dict):
+            print(f"    {tf:>4}: 缺失")
+            continue
+        sym = d.get("symbol") or d.get("ticker") or "?"
+        lv = d.get("levels") or d.get("key_levels") or []
+        try:
+            n = len(lv)
+        except TypeError:
+            n = -1
+        print(f"    {tf:>4}: symbol={sym} price={d.get('price')} levels={n} keys={sorted(d.keys())[:8]}")
+    print(f"  [诊断:{path}] 若 symbol 不是 {SYMBOL} → 图被别人切走了；"
+          f"若 symbol 对但 levels=0 → 指标没渲染完或解析不匹配。")
+
+
 def main_cli():
     """Collect and publish all five timeframes through isolated CLI calls."""
     if not TV_CLI.exists():
@@ -458,6 +481,9 @@ def main_cli():
                 _diagnostic(f"timeframe:{tf}:done", data_by_tf=data_by_tf)
             candidates = dedupe(build_report(data_by_tf))
             if not candidates:
+                # 20260911：这个守卫本身是对的（禁止用空池覆盖旧池），
+                # 但只报一句话无法定位。失败前打出每个周期拿到了什么。
+                _dump_candidate_diagnosis(data_by_tf, "cli")
                 raise RuntimeError("empty candidate pool")
             main_data = data_by_tf.get("15") or next(iter(data_by_tf.values()))
             atomic_write_json(OUT, build_snapshot_payload(
@@ -690,6 +716,8 @@ async def main():
     if not cands:
         # A stale/mismatched TV chart must never overwrite the previous
         # candidate pool with a syntactically-valid but empty “success”.
+        # 20260911：加分周期明细，把「为什么空」变成可定位的。
+        _dump_candidate_diagnosis(data_by_tf, "stdio")
         raise RuntimeError("empty candidate pool")
 
     main_d = data_by_tf.get("15") or next(iter(data_by_tf.values()))

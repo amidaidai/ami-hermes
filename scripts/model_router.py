@@ -2,7 +2,8 @@
 """体制→模型路由器：只选一个主模型，旧confidence不作为概率。"""
 from __future__ import annotations
 
-from typing import Any, Iterable
+import math
+from typing import Any, Iterable, cast
 
 from decision_regime import DecisionRegime
 
@@ -12,6 +13,25 @@ def _f(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _validated_calibration_rate(cal: Any) -> float | None:
+    """Do not trust a legacy reliable flag without its decisive denominator."""
+    if not isinstance(cal, dict) or cal.get("reliable") is not True:
+        return None
+    n, wins, losses = (cal.get(key) for key in ("decisive_samples", "wins", "losses"))
+    minimum = cal.get("min_samples", 30)
+    if any(type(value) is not int or value < 0 for value in (n, wins, losses, minimum)):
+        return None
+    n, wins, losses, minimum = cast(tuple[int, int, int, int], (n, wins, losses, minimum))
+    if n < max(30, minimum) or wins + losses != n:
+        return None
+    rate = cal.get("calibrated_win_rate")
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate):
+        return None
+    if not 0 <= rate <= 1 or not math.isclose(rate, wins / n, rel_tol=1e-6, abs_tol=1e-8):
+        return None
+    return float(rate)
 
 
 def select_primary_model(
@@ -36,8 +56,9 @@ def select_primary_model(
         }
         cal = calibration.get(f"{regime.code}|{model_id}") or {}
         # 只有达到最小样本后才可用校准概率做轻微排序；绝不使用旧写死confidence。
-        if cal.get("reliable") and cal.get("calibrated_win_rate") is not None:
-            score_components["calibration"] = float(cal["calibrated_win_rate"]) * 10.0
+        calibrated_rate = _validated_calibration_rate(cal)
+        if calibrated_rate is not None:
+            score_components["calibration"] = calibrated_rate * 10.0
         route_score = sum(score_components.values())
         evaluated.append({
             **item,

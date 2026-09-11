@@ -37,13 +37,13 @@ def test_push_card_uses_phone_friendly_one_table_format():
             "vah": 63820,
             "val": 61950,
             "poc": 63100,
-            "entry": "扫低收回 62,480",
-            "stop": "61,950 (1.8ATR)",
-            "target": "POC 63,820 R:R 2.5R",
+            "entry": 62480,
+            "stop": 61950,
+            "target": 63820,
             "_final_verdict": {
                 "state": "GO-A", "executable": True, "side": "long",
-                "grade": "A多", "entry": "扫低收回 62,480",
-                "stop": "61,950 (1.8ATR)", "target": "POC 63,820 R:R 2.5R",
+                "grade": "A多", "entry": 62480,
+                "stop": 61950, "target": 63820,
             },
             "magnet_up": "前高 64,120 分82",
             "magnet_down": "VAL 61,950 分76",
@@ -61,12 +61,13 @@ def test_push_card_uses_phone_friendly_one_table_format():
     )
     assert card.startswith("📊 BTC · ")
     assert "🟢做多 · 🟢A多" in card
-    assert "| 优先级 | 触发价 | 操作 |" in card
-    assert "| ⭐主推 多 | 扫低收回 62,480 | 多 损61,950 (1.8ATR) 标POC 63,820 R:R 2.5R |" in card
-    assert "| 🔁备选 空 | 前高 64,120" in card
-    assert "持仓▲新多进场" in card and "CVD▲买盘占优" in card
-    assert "**" not in card
-    assert card.count("| 优先级 |") == 1
+    assert "| 执行 | 触发/价格 | 风险与目标 |" in card
+    assert "| ⭐主推 多 | 62480 | 损61950 · 标63820 |" in card
+    assert "| 🔁失效看空 | 前高 64,120" in card
+    assert "订单流：持仓▲新多进场 · CVD▲买盘占优" in card
+    assert "**实涨可信 · 新钱+买盘**" in card
+    assert card.count("| 执行 |") == 1
+    assert "| 验证 |" not in card
 
 
 def test_auto_card_builds_v2_action_panel_fields_for_renderer():
@@ -179,7 +180,7 @@ def test_renderer_never_shows_star_order_when_final_verdict_is_no_go():
         {"signal": "偏空"}, "BTCUSDT", 100, mode="push",
     )
     assert "⭐主推" not in card
-    assert "主推 等" in card
+    assert "等待确认" in card
     assert "X禁做" in card
 
 
@@ -229,7 +230,7 @@ def test_wait_card_does_not_leak_raw_entry_as_a_trigger_price():
         },
         {"signal": "等待确认"}, "BTCUSDT", 99, mode="push",
     )
-    assert "| 🔵主推 等 | — | 等结构位确认 |" in card
+    assert "| 🔵等待确认 | — | 不追现价 |" in card
     assert "| 🔵主推 等 | 100 |" not in card
 
 
@@ -313,4 +314,69 @@ def test_push_card_shows_compact_source_status_summary():
         {"signal": "等待"}, "BTCUSDT", 100, mode="push",
     )
 
-    assert "来源 TV五周期:live·裁决 / X情绪:stale_cache·辅助" in card
+    assert "数据状态：TV五周期:live·裁决 / X情绪:stale_cache·辅助" in card
+
+
+def test_push_card_uses_narrow_blocks_and_clean_table_boundaries():
+    render = _load(RENDER, "render_tv_card_layout_contract")
+    card = render.render_tv_card(
+        {"grade": "C等待", "_final_verdict": {"state": "WAIT", "executable": False}},
+        {"signal": "等待确认", "oi": "持平", "cvd_flow": "中性", "volume": "缩量"},
+        "BTCUSDT", 100, mode="push",
+    )
+    lines = card.splitlines()
+    tables = [i for i in range(len(lines) - 1)
+              if lines[i].startswith("|") and lines[i + 1].startswith("|")
+              and "---" in lines[i + 1]]
+    assert len(tables) == 2
+    for i in tables:
+        assert i > 0 and lines[i - 1] == ""
+        assert len(lines[i].split("|")) - 2 <= 3
+    assert "【" not in card and "】" not in card
+
+
+def test_inconsistent_go_a_side_and_geometry_never_render_as_execution():
+    render = _load(RENDER, "render_tv_card_inconsistent_final")
+    card = render.render_tv_card(
+        {
+            "grade": "A多", "entry": 100, "stop": 98, "target": 105,
+            "_final_verdict": {
+                "state": "GO-A", "executable": True, "grade": "A多",
+                "side": "short", "entry": 100, "stop": 98, "target": 105,
+            },
+        },
+        {"signal": "支持"}, "BTCUSDT", 100, mode="push",
+    )
+    assert "⭐主推 多" not in card
+    assert "⭐主推 空" not in card
+    assert "等待确认" in card
+def test_a07_preserves_complete_prices_percentages_negation_and_source_status():
+    render = _load(RENDER, "render_a07_complete_text")
+    for text in ("回踩 64,321.25 未站稳不可做多", "新空持续增加但未确认 -0.05%", "HALDRO/AggVolume:live_not_confirmed"):
+        assert render._clean_text(text, 12) == text
+    card = render.render_tv_card(
+        {"_source_matrix": [
+            {"label": "HALDRO/AggVolume", "status": "live_not_confirmed"},
+            {"label": "外部衍生品覆盖", "status": "stale_cache_not_executable"},
+        ]},
+        {"oi": "新空持续增加但未确认 -0.05%"}, "BTCUSDT", 100,
+    )
+    assert "新空持续增加但未确认 -0.05%" in card
+    assert "HALDRO/AggVolume:live_not_confirmed" in card
+    assert "stale_cache_not_executable" in card
+
+
+def test_a07_missing_and_inherited_timeframes_are_explicit():
+    render = _load(RENDER, "render_a07_timeframes")
+    empty = render._tf_mini({})
+    assert empty == "D未取 · 4h未取 · 1h未取 · 15m未取 · 5m未取"
+    line = render._tf_mini({"_klines": {
+        "1D": {"description": "偏空"},
+        "4h": {"description": "偏多", "inherited": True, "timestamp": "2026-09-05 12:00"},
+        "1h": {"description": "偏空", "inherited": True},
+        "15m": {"description": "未收线"},
+    }})
+    assert "D🔴" in line
+    assert "4h🟢继承2026-09-05 12:00" in line
+    assert "1h🔴继承时间未提供" in line
+    assert "5m未取" in line

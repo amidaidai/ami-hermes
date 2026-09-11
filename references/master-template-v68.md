@@ -1,6 +1,6 @@
-# 棠溪分析卡 · 主模板 v9.10（手机驾驶舱 · 结构位前置 · 双指标全用 · 唯一主推裁决 · 排版精简）
+# 棠溪分析卡 · 主模板 v9.11（手机驾驶舱 · 结构位前置 · 双指标全用 · 唯一主推裁决 · 排版精简）
 
-定位：这是棠溪 Telegram 交易驾驶舱的权威输出模板。v9.10 在 v9.9 基础上精简排版：结构位用法去内部ID、订单流压缩、HALDRO精简、快速卡加裁决收尾。
+定位：这是棠溪 Telegram 交易驾驶舱的权威输出模板。v9.11 在 v9.10 基础上优化手机排版：首屏结论前置、执行/验证分成窄三列表、数据源放入验证表、删除重复标题和长句。
 
 ## 权威铁律
 
@@ -63,23 +63,35 @@
 失效 `{INV_LINE}` · 数据{DATA_GRADE} · 主副指标已纳入
 ```
 
-## 快速更新模板（v9.10 · 11行左右）
+## 快速更新模板（v9.11 · 手机窄卡）
 
 ```markdown
 📊 {SHORT_SYMBOL} · {TIME_CN}
-{UP_LEVEL}｜⚖现{PRICE}｜{DOWN_LEVEL}
-{DIR_EMOJI}{DIRECTION} · {GRADE_EMOJI}{GRADE} · {CONCLUSION}
+{DIR_EMOJI}{DIRECTION} · {GRADE_EMOJI}{GRADE}
+**{CONCLUSION}**
+现价 `{PRICE}` · 日高 `{HIGH}` · 日低 `{LOW}` · `{CHANGE}%`
 D{D_EMOJI} · 4h{4H_EMOJI} · 1h{1H_EMOJI} · 15m{15M_EMOJI} · 5m{5M_EMOJI}
 
-| 优先级 | 触发价 | 操作 |
+| 结构 | 价格 | 距现价 |
 |:---|:---:|:---|
-| ⭐主推 {DIR} | {ENTRY} | {DIR} 损{STOP} 标{TARGET} |
-| 🔁备选 {REV_DIR} | {MAGNET} | 主推失效后再看 |
+| {UP_LEVEL} | `{UP_PRICE}` | {UP_DIST} |
+| ⚖现价 | `{PRICE}` | — |
+| {DOWN_LEVEL} | `{DOWN_PRICE}` | {DOWN_DIST} |
+
+| 执行 | 触发/价格 | 风险与目标 |
+|:---|:---|:---|
+| ⭐主推 {DIR} | {ENTRY} | 损{STOP} · 标{TARGET} |
+| 🔁失效看{REV_DIR} | {MAGNET} | 主推失效后再看 |
 | ⚠️禁止 | 追单/冲突 | 主副不共振不做 |
 
-SVP {SVP_ACTION} · HALDRO {HALDRO_ACTION} · {DUAL_VERDICT}
-持仓{OI} · CVD{CVD} · 量{VOLUME} · 覆盖{COVERAGE}
-【裁决】{DIR_EMOJI}{DIRECTION} · 主副指标已纳入 · 不追单
+| 验证 | 当前读数 | 作用 |
+|:---|:---|:---|
+| SVP主驾驶 | {SVP_ACTION} | 结构与执行 |
+| HALDRO副驾驶 | {HALDRO_ACTION} | {DUAL_VERDICT} |
+| 订单流 | 持仓{OI} · CVD{CVD} · 量{VOLUME} · 覆盖{COVERAGE} | 确认/降级 |
+
+**下一步**：{DIR_EMOJI}{DIRECTION} · 主副指标已纳入 · 不追单
+**失效**：{INVALIDATION}
 ```
 
 ## 社区对标结论
@@ -97,5 +109,5 @@ SVP {SVP_ACTION} · HALDRO {HALDRO_ACTION} · {DUAL_VERDICT}
 | 场景 | 渲染器 | 要求 |
 |:---|:---|:---|
 | 完整卡 | `render_v96_card()` | 4表：多周期/结构位/双指标/最推荐 · 结构位用法去内部ID · 订单流精简 |
-| 快速卡 | `render_tv_card(..., mode="push")` | 结构位前置 + 五周期行 + 1张执行表 + 双指标合并一行 + 裁决收尾 |
+| 快速卡 | `render_tv_card(..., mode="push")` | 首屏结论 + 结构表 + 执行表 + 验证表；每表≤3列，表格块前留空行 |
 | 推送通道 | `send_telegram_reliable(parse_mode='RichMarkdown')` / `telegram_reliable.send_telegram_reliable(parse_mode="RichMarkdown")` | 必须 RichMarkdown 真表格 |
