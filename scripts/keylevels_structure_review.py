@@ -170,6 +170,19 @@ def review(config: dict | None = None, snapshot: dict | None = None,
     }
 
 
+def _write_report(result: dict) -> None:
+    """把复核结果落盘（20260911 新增，统一出口）。
+
+    原先只有 main() 写这个文件，而守护是直接调 apply_review() 的 ——
+    于是复核天天在跑、报告文件却永不更新，害得数据新鲜度看门狗误报。
+    """
+    try:
+        from atomic_json import atomic_write_json
+        atomic_write_json(REVIEW_OUT, result)
+    except Exception:
+        REVIEW_OUT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def apply_review(config_path: Path = CONFIG, result: dict | None = None,
                  now: datetime | None = None, force: bool = False) -> dict:
     """复核通过才把 structure_reviewed_at 写进配置。"""
@@ -181,11 +194,13 @@ def apply_review(config_path: Path = CONFIG, result: dict | None = None,
     if not result.get("ok"):
         result["stamped"] = False
         result["stamp_reason"] = "复核未通过，不盖章（安全闸保留）"
+        _write_report(result)   # 20260911：未通过更要留痕（这是安全闸的现场证据）
         return result
     if (not force and last_stamp is not None
             and (now - last_stamp).total_seconds() < MIN_STAMP_INTERVAL_MIN * 60):
         result["stamped"] = False
         result["stamp_reason"] = f"距上次盖章不足 {MIN_STAMP_INTERVAL_MIN} 分钟，跳过写盘"
+        _write_report(result)   # 20260911：跳过盖章也要留痕，否则报告文件看着像停了
         return result
 
     policy["structure_reviewed_at"] = now.isoformat()
@@ -200,17 +215,13 @@ def apply_review(config_path: Path = CONFIG, result: dict | None = None,
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     result["stamped"] = True
     result["stamp_reason"] = f"复核通过 {result['valid']}/{result['checked']}，已更新 structure_reviewed_at"
+    _write_report(result)   # 20260911：通过时也落盘
     return result
 
 
 def main() -> int:
     result = review()
-    result = apply_review(result=result)
-    try:
-        from atomic_json import atomic_write_json
-        atomic_write_json(REVIEW_OUT, result)
-    except Exception:
-        REVIEW_OUT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    result = apply_review(result=result)   # 内部已负责落盘报告
     if result.get("stamped"):
         print(f"✅ 结构复核通过 {result['valid']}/{result['checked']} → 已续授权 "
               f"(现价 {result['price']})")

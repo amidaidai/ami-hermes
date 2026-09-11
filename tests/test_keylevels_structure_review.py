@@ -168,3 +168,50 @@ def test_save_cache_without_symbol_still_writes_primary(monkeypatch, tmp_path):
     monkeypatch.setattr(B, "CACHE", tmp_path / "tv_dmi_cache.json")
     B.save_cache({"grade": "?"})
     assert any("tv_dmi_cache" in p for p in written)
+
+def test_apply_review_always_writes_report_even_when_skip_stamp(monkeypatch, tmp_path):
+    """20260911 回归：报告文件必须在【跳过盖章】时也落盘。
+
+    线上症状：structure_reviewed_at 是新的（复核天天在跑），
+    但 keylevels_structure_review.json 停在 12.6 小时前 ——
+    因为报告写盘只在 main() 里，而守护是直接调 apply_review() 的。
+    该文件是数据新鲜度看门狗的监视对象 → 造成「有信号但是假信号」。
+    """
+    import importlib
+    R = importlib.import_module("keylevels_structure_review")
+
+    out = tmp_path / "review.json"
+    monkeypatch.setattr(R, "REVIEW_OUT", out)
+
+    # 复核通过、但距上次盖章不足 → stamped=False 的跳过分支
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(
+        '{"auto_approval_policy": {"structure_reviewed_at": "'
+        + (now - timedelta(minutes=1)).isoformat() + '"}}',
+        encoding="utf-8",
+    )
+    result = R.apply_review(config_path=cfg, result={"ok": True, "valid": 8, "checked": 8,
+                                                    "method": "svp-drift+band", "price": 1.0},
+                            now=now)
+    assert result["stamped"] is False
+    assert out.exists(), "跳过盖章路径也必须写报告（否则看门狗误报）"
+    import json as _json
+    assert _json.loads(out.read_text(encoding="utf-8"))["ok"] is True
+
+
+def test_apply_review_writes_report_on_failure(monkeypatch, tmp_path):
+    """复核未通过时更要留痕 —— 那是安全闸的现场证据。"""
+    import importlib
+    R = importlib.import_module("keylevels_structure_review")
+    out = tmp_path / "review.json"
+    monkeypatch.setattr(R, "REVIEW_OUT", out)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"auto_approval_policy": {}}', encoding="utf-8")
+    result = R.apply_review(config_path=cfg, result={"ok": False, "valid": 0, "checked": 8,
+                                                    "method": "svp-drift+band"})
+    assert result["stamped"] is False
+    assert out.exists()
+    import json as _json
+    assert _json.loads(out.read_text(encoding="utf-8"))["stamped"] is False
