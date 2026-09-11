@@ -101,3 +101,14 @@ test_fetch_tf_mock.py
 *.bak-*
 *.bak.2026*
 scripts/_disabled_20260829/
+
+# ===== 技能快照：token/secret 是文档主题（CE10117 token 上限、jbbtoken 渠道、如何写密钥）=====
+# 不是凭据。已由 scripts/maintenance/skills_snapshot.py 做**内容级**密钥扫描兜底
+# （命中即拒绝入库），因此这里可以安全豁免文件名规则 —— 2026-09-11。
+!hermes/skills/**/*token*/
+!hermes/skills/**/*token*
+!hermes/skills/**/*secret*/
+!hermes/skills/**/*secret*
+!hermes/skills/**/*.bak-*
+# 技能自带的审计脚本副本（与仓库根那份内容不同），非本机审计产物
+!hermes/skills/**/audit_preflight.py
