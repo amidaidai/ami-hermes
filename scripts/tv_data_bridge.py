@@ -466,6 +466,20 @@ def _contract_dw_aliases():
     return _CONTRACT_DW_LOOKUP
 
 
+def _contract_sub_keys() -> frozenset:
+    """契约里副指标（AggVol）的 canonical snake_case 键集合。
+
+    用于「只从副研究采副字段」的白名单 —— 副研究不得写入任何主指标字段。
+    """
+    try:
+        import tv_indicator_contract as _TVC
+        keys = list(getattr(_TVC, "DW_ALIASES_SUB", {}) or {})
+        keys += list(getattr(_TVC, "LEGACY_DW_ALIASES_SUB", {}) or {})
+        return frozenset(keys)
+    except Exception:
+        return frozenset()
+
+
 def read_indicators(symbol=None):
     """读取指标值：VWAP/EMA/CVD/POC/VAH/VAL等。
 
@@ -481,15 +495,15 @@ def read_indicators(symbol=None):
     studies = data.get("studies")
     if not isinstance(studies, list):
         return {}
+    sub_keys = _contract_sub_keys()
     for study in studies:
         if not isinstance(study, dict):
             continue
-        # 只读主 SVP 研究的 values，跳过副研究免止污染
-        if not _is_main_study(study):
+        values = study.get("values")
+        if not isinstance(values, dict):
             continue
-        if not isinstance(study, dict) or not isinstance(study.get("values"), dict):
-            continue
-        for key, val in study["values"].items():
+        is_main = _is_main_study(study)
+        for key, val in values.items():
             if not isinstance(key, str):
                 continue
             norm = key.lower().replace(" ", "_")
@@ -498,14 +512,22 @@ def read_indicators(symbol=None):
             if norm.startswith("mcp_evidence_") or norm in (
                     "mcp_location_valid", "mcp_trigger_confirmed", "mcp_bar_closed"):
                 continue
-            indicators[norm] = val
-            # v13：契约驱动的稳定别名（覆盖带括号/百分号/中文后缀的 DW 名）。
-            # 必须跳过 evidence 前缀 —— 那是 _read_evidence() 专属，
-            # 不能让通用别名把未校验的证据标志漏进缓存。
             _aliases = _contract_dw_aliases()
             _hit = _aliases.get(key) or _aliases.get(key.split(" (")[0])
-            if _hit and not _hit.startswith("mcp_evidence_"):
-                indicators[_hit] = val
+            if is_main:
+                indicators[norm] = val
+                # v13：契约驱动的稳定别名（覆盖带括号/百分号/中文后缀的 DW 名）。
+                # 必须跳过 evidence 前缀 —— 那是 _read_evidence() 专属，
+                # 不能让通用别名把未校验的证据标志漏进缓存。
+                if _hit and not _hit.startswith("mcp_evidence_"):
+                    indicators[_hit] = val
+            elif _hit in sub_keys and _is_sub_study(study):
+                # 副研究（Volume Aggregated Spot & Futures / HALDRO）：
+                # **只**接受契约 SUB 别名，主指标字段与证据标志一律不采 —— 主/副隔离不变。
+                # 2026-09-12：此处此前是整段 `if not _is_main_study: continue`，
+                # 把 AggVol 的 Composite / HALDRO Valid / CVD / LSR / Coverage
+                # 全部丢掉，卡面长期显示「副指标待刷新」。setdefault 保证主研究优先。
+                indicators.setdefault(_hit, val)
             # 旧的 startswith 链已删：MCP StructPack / Risk Pack / EMA Length /
             # CVD Method Code / OI Change % / HALDRO * 全部由上面的契约别名覆盖
             # （含「带公式说明的长标题」用 key.split(" (")[0] 命中的短名）。
@@ -520,6 +542,17 @@ def _is_main_study(study):
     name = study.get("name", "")
     return bool(name and _re.match(
         r"^SVP(?:$|[+\s])", name, _re.IGNORECASE))
+
+
+def _is_sub_study(study):
+    """是否为副指标（AggVol / HALDRO / Volume Aggregated）研究。
+
+    副字段的来源必须是**具名的副指标研究**，不能是随便一个第三方指标 ——
+    否则用户图上任何带 "Composite"/"CVD Value" 字段的研究都可能污染裁决输入。
+    """
+    import re as _re
+    name = str(study.get("name") or "")
+    return bool(_re.search(r"(?:AggVol|Aggregated|HALDRO)", name, _re.IGNORECASE))
 
 def read_dmi_table(symbol=None, study_role: str = "main"):
     """读取行动格/决策表。symbol 给定时 --symbol 直读。
