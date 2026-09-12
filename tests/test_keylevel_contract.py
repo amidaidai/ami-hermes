@@ -36,6 +36,31 @@ def test_config_health_rejects_levels_after_structure_review_deadline():
         ]}},
     }
     assert guard.config_health(config, now.timestamp())["active_approved_levels"] == 0
+    assert guard.config_health(config, now.timestamp())["status"] == "degraded"
+
+
+def test_silenced_levels_are_idle_not_degraded():
+    """用户主动 enabled=false 不是监控崩溃，看门狗不应每两分钟记 error。"""
+    guard = load("keylevel_guard.py")
+    now = datetime.now(timezone.utc)
+    config = {
+        "auto_approval_policy": {
+            "max_structure_age_hours": 24,
+            "structure_reviewed_at": now.isoformat(),
+        },
+        "symbols": {"BTCUSDT": {"levels": [
+            {"name": "VAH", "price": 77310, "enabled": False,
+             "valid_until": (now + timedelta(hours=5)).isoformat()},
+            {"name": "VAL", "price": 76450, "enabled": False,
+             "valid_until": (now + timedelta(hours=5)).isoformat()},
+        ]}},
+    }
+    health = guard.config_health(config, now.timestamp())
+    assert health["status"] == "idle"
+    assert health["active_approved_levels"] == 0
+    assert health["configured_levels"] == 2
+    assert health["enabled_levels"] == 0
+    assert health["disabled_levels"] == 2
 
 
 def test_trigger_is_price_event_not_trade_signal(tmp_path, monkeypatch):

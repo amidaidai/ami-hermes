@@ -127,12 +127,50 @@ def active_approved_level_count(config=None, now_epoch=None) -> int:
     return total
 
 
-def config_health(config=None, now_epoch=None) -> dict:
-    """Return a machine-readable health result; zero valid levels is degraded."""
-    count = active_approved_level_count(config, now_epoch)
+def approved_level_inventory(config=None) -> dict:
+    """Count configured levels without applying expiry or structure-review gates."""
+    config = config if isinstance(config, dict) else load_config()
+    enabled = 0
+    disabled = 0
+    for block in (config.get("symbols", {}) or {}).values():
+        if not isinstance(block, dict):
+            continue
+        for level in block.get("levels", []) or []:
+            if not isinstance(level, dict):
+                continue
+            if level.get("enabled", True) is False:
+                disabled += 1
+            else:
+                enabled += 1
     return {
-        "status": "ok" if count > 0 else "degraded",
+        "enabled": enabled,
+        "disabled": disabled,
+        "configured": enabled + disabled,
+    }
+
+
+def config_health(config=None, now_epoch=None) -> dict:
+    """Return a machine-readable health result.
+
+    - ok: at least one enabled, unexpired, structure-current level
+    - idle: levels exist but the user has silenced every one (enabled=false)
+    - degraded: zero active levels for any other reason (expiry / no config)
+    """
+    config = config if isinstance(config, dict) else load_config()
+    count = active_approved_level_count(config, now_epoch)
+    inventory = approved_level_inventory(config)
+    if count > 0:
+        status = "ok"
+    elif inventory["configured"] > 0 and inventory["enabled"] == 0:
+        status = "idle"
+    else:
+        status = "degraded"
+    return {
+        "status": status,
         "active_approved_levels": count,
+        "configured_levels": inventory["configured"],
+        "enabled_levels": inventory["enabled"],
+        "disabled_levels": inventory["disabled"],
         "source": str(CONFIG_FILE),
         "checked_at": now_bjt_iso(),
     }
@@ -282,7 +320,9 @@ def main_loop():
                     key = f"{sym}:{lv['name']}"
                     info = triggered.get(key, {})
                     cool_until = info.get("cool_until", 0.0)
-                    if now >= cool_until or info.get("dir") != crossed:
+                    # 所有结构统一冷却：冷却期内不因反向穿越而再次刷屏。
+                    # 只有冷却结束后重新穿越，才允许再次提醒。
+                    if now >= cool_until:
                         log(f"TRIGGER {sym} {lv['name']} {crossed} price={price:,.1f}")
                         split_trigger(sym, lv, price, crossed, revision=revision)
                         ok, reason = send_price_arrival_alert(sym, lv, price, crossed)

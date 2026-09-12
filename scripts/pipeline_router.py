@@ -15,6 +15,7 @@ v1.1 (2026-06-29): 五层TF统一(D/4h/1h/15m/5m)·cron_read捷径·步数精简
 import sys
 import re
 import hashlib
+from copy import deepcopy
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 _stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
@@ -259,6 +260,100 @@ def x_model_can_override_final_verdict() -> bool:
     return False
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 分析档位（唯一权威）— L1/L2/L3 与机器名只在这里对应一次
+# ═══════════════════════════════════════════════════════════════════════════
+# 20260911 收敛：此前档位词汇三套并存 —— 技能写 L1/L2/L3、router 写
+# quick/inherit/standard/full/monitor、对话里又混用 Quick/Full；更糟的是关键词表
+# 不一致（技能承诺「扫一下 / 状态」属标准档，router 不认 → 静默降成轻量档）。
+# 从现在起：本表是唯一权威，技能 / 文档 / 卡面一律引用这里，不得另抄一份。
+ANALYSIS_TIERS = {
+    "L1": {
+        "machine": "quick",
+        "label": "轻量",
+        "display_name": "轻量",
+        "scope": "主周期行动格 + 现价 + 一张截图（加密再补衍生品方向票）",
+        "refresh_scope": "execution_only",
+    },
+    "L2": {
+        "machine": "standard",
+        "label": "标准",
+        "display_name": "标准",
+        "scope": "轻量 + 相邻周期结论行 + 关键位/多源交叉（高周期继承）",
+        "refresh_scope": "execution_plus_context",
+    },
+    "L3": {
+        "machine": "full",
+        "label": "完整",
+        "display_name": "完整",
+        "scope": "全管线：五周期全源 + 来源矩阵 + 管线审计",
+        "refresh_scope": "all_sources",
+    },
+    "MON": {
+        "machine": "monitor",
+        "label": "监控",
+        "display_name": "监控",
+        "scope": "仅事件发现，不出方向卡、不出执行三件套",
+        "refresh_scope": "event_only",
+    },
+}
+
+# 顺序敏感：先匹配到的档位赢。裸品种名（无动词）不在这里，落默认 L1。
+_TIER_KEYWORD_ROUTES = (
+    ("L3", ("分析", "深度", "完整卡", "出完整卡", "全面", "全周期", "重新从高周期", "刷高周期")),
+    ("L2", ("现在呢", "更新", "扫一下", "状态", "继续", "接着", "继承", "追踪")),
+    ("L1", ("看下", "看一眼", "看一下", "扫一眼", "瞄一眼", "快速")),
+)
+TIER_ORDER = ("L1", "L2", "L3", "MON")
+MODE_TO_TIER = {spec["machine"]: tier for tier, spec in ANALYSIS_TIERS.items()}
+# 「分析」是硬开关：说出它就必须上完整档，不因刚出过卡而降级。
+HARD_FULL_KEYWORDS = ("分析", "深度", "完整卡", "出完整卡")
+
+
+def tier_for_mode(mode: str) -> str:
+    """机器名 → 对话档位名（quick→L1 / standard→L2 / full→L3 / monitor→MON）。"""
+    key = validate_analysis_mode(mode)
+    return MODE_TO_TIER["standard" if key == "inherit" else key]
+
+
+def tier_label(mode: str) -> str:
+    """机器名 → 中文显示档位（轻量/标准/完整/监控）。"""
+    return ANALYSIS_TIERS[tier_for_mode(mode)]["display_name"]
+
+
+def tier_scope(mode: str) -> str:
+    """机器名 → 该档实际跑什么（一句话）。"""
+    return ANALYSIS_TIERS[tier_for_mode(mode)]["scope"]
+
+
+def tier_table() -> list[dict]:
+    """档位表（供文档/卡面渲染）。唯一权威，别处不要另抄一份。"""
+    return [
+        {
+            "tier": tier,
+            "machine": ANALYSIS_TIERS[tier]["machine"],
+            "label": ANALYSIS_TIERS[tier]["label"],
+            "display_name": ANALYSIS_TIERS[tier]["display_name"],
+            "scope": ANALYSIS_TIERS[tier]["scope"],
+            "triggers": [kw for t, kws in _TIER_KEYWORD_ROUTES if t == tier for kw in kws],
+        }
+        for tier in TIER_ORDER
+    ]
+
+
+def resolve_tier(request: str) -> str:
+    """自然语言 → 对话档位（L1/L2/L3/MON）。
+
+    默认 L1：无动词的裸品种名（「BTC」「XAU」）按轻量起步，用户追问再升级；
+    绝不默认上全管线。含硬开关词（分析/深度/完整卡）一定落 L3。
+    """
+    text = str(request or "").strip().lower()
+    for tier, keywords in _TIER_KEYWORD_ROUTES:
+        if any(kw in text for kw in keywords):
+            return tier
+    return "L1"
+
+
 MODE_SPECS = {
     "quick": {
         "refresh_scope": "execution_only",
@@ -304,20 +399,24 @@ CRYPTO_FULL_PIPELINE = (
 )
 
 
+def validate_analysis_mode(mode: str) -> str:
+    """Normalize a known machine mode; reject explicit invalid input."""
+    key = mode.strip().lower() if isinstance(mode, str) else None
+    if key not in MODE_SPECS:
+        raise ValueError(f"Unknown analysis mode {mode!r}; expected one of: {', '.join(MODE_SPECS)}")
+    return key
+
+
 def analysis_mode_spec(mode: str) -> dict:
     """Return the required refresh and output contract for an analysis tier.
 
     模式名大小写不敏感（对话层会写 Quick/Full），但**未知模式必须显式失败**：
     静默回落到 quick 会把「档位写错」伪装成一次正常的快速更新，
-    等于让 Full 少跑十一步而卡面看不出来。返回带 mode_error 的显式降级。
+    等于让 Full 少跑十一步而卡面看不出来。未知档位统一抛出 ValueError。
     """
-    key = str(mode or "").strip().lower()
-    spec = MODE_SPECS.get(key)
-    if spec is None:
-        spec = dict(MODE_SPECS["quick"])
-        spec["mode_error"] = f"未知分析档位 {mode!r}；已按 quick 执行，请核对档位名"
-        spec["requested_mode"] = str(mode)
-    spec["mode"] = key if key in MODE_SPECS else "quick"
+    key = validate_analysis_mode(mode)
+    spec = deepcopy(MODE_SPECS[key])
+    spec["mode"] = key
     return dict(spec)
 
 
@@ -340,14 +439,12 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
       'inherit'/'standard' — 继承高周期，只刷新主执行/触发与加密衍生品
       'monitor' — 监控模式（仅事件）
 
-    未知 mode 按 full 处理并向调用方暴露（见 analysis_mode_spec 的 mode_error）；
-    这里只做归一化，不静默改成 quick —— 少跑步骤比多跑更危险。
+    未知 mode 与 analysis_mode_spec 一致抛出 ValueError，不生成任何管线。
+    省略 mode 仍默认 full；显式空值不等于省略。
     """
+    mode = validate_analysis_mode(mode)
     identity = parse_asset_identity(symbol)
     ac = identity["asset_class"]
-    mode = str(mode or "").strip().lower() or "full"
-    if mode not in MODE_SPECS:
-        mode = "full"
     # 期权跟随底层：用底层的步骤集，再补上期权链。底层未知时用 option 自身规则。
     follows = None
     if ac == "option":
@@ -439,18 +536,19 @@ def crypto_full_pipeline() -> list[str]:
 
 
 def resolve_analysis_mode(request: str, *, has_context: bool = False) -> str:
-    """把自然语言请求映射到 quick/standard/full 三档。
+    """把自然语言请求映射到 quick/standard/full 三档（= L1/L2/L3）。
 
-    标准档在对话层固定对应“现在呢/继续/接着看/更新”等追踪请求，
-    不因上下文是否存在而偷偷降为 quick；内部仍接受 inherit 作为兼容名。
-    ``has_context`` 只供调用方判断继承内容是否可用，不改变用户所选档位。
+    档位判定**唯一走 `resolve_tier`**，避免关键词表两处漂移（这正是 20260911
+    修掉的缺陷：技能承诺「扫一下/状态」= 标准档，而这张表不认 → 静默降档）。
+    标准档在对话层固定对应「现在呢/继续/接着看/更新」等追踪请求，不因上下文是否
+    存在而偷偷降为 quick；``has_context`` 只供调用方判断继承内容是否可用，不改变
+    用户所选档位。
     """
-    text = str(request or "").strip().lower()
-    if any(k in text for k in ("分析", "全面", "全周期", "深度", "重新从高周期", "完整卡")):
-        return "full"
-    if any(k in text for k in ("现在呢", "继续", "接着", "更新", "继承")):
-        return "standard"
-    return "quick"
+    tier = resolve_tier(request)
+    if tier not in ANALYSIS_TIERS:
+        return "quick"
+    machine = ANALYSIS_TIERS[tier]["machine"]
+    return machine if machine in MODE_SPECS else "quick"
 
 
 def context_file(symbol: str) -> Path:

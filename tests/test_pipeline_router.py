@@ -90,15 +90,15 @@ def test_full_route_is_never_empty_for_any_recognised_class():
             steps = router.route_pipeline(symbol, mode)
             assert steps, f"{symbol} 在 {mode} 档返回了空管线"
             assert all(s in router.STEPS for s in steps)
-        # 未知档位不得静默变成 quick：走 full 并在 spec 里暴露 mode_error
-        assert router.route_pipeline(symbol, "Fuuull") == router.route_pipeline(symbol, "full")
+        # 未知档位必须拒绝，不能静默改成 quick 或 full。
+        with __import__("pytest").raises(ValueError, match="Unknown analysis mode"):
+            router.route_pipeline(symbol, "Fuuull")
 
 
 def test_unknown_analysis_mode_is_reported_not_silently_downgraded():
     router = _load_router()
-    spec = router.analysis_mode_spec("Fuuull")
-    assert "mode_error" in spec and spec["requested_mode"] == "Fuuull"
-    assert spec["mode"] == "quick"                 # 兜底明确标注为 quick
+    with __import__("pytest").raises(ValueError, match="Unknown analysis mode"):
+        router.analysis_mode_spec("Fuuull")
     # 档位名大小写不敏感
     assert router.analysis_mode_spec("Quick")["mode"] == "quick"
     assert router.analysis_mode_spec("FULL")["card"] == "full"

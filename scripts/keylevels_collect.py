@@ -55,6 +55,8 @@ MCP_CALL_TIMEOUT_SECONDS = 45
 # 改为最多 4 次、等待 5/10/15s 递增，总代价上限约 30s，仍远小于一次采集耗时。
 _TF_SET_ATTEMPTS = 4
 _TF_SET_RETRY_WAIT = 5
+# 本轮让路（交互式分析进行中）的专用退出码：cron 侧必须能区分「让路」与「失败」。
+DEFER_EXIT_CODE = 7
 TV_CLI = ROOT / "tools" / "tradingview-mcp" / "src" / "cli" / "index.js"
 
 
@@ -94,6 +96,31 @@ def _diagnostic(stage: str, *, status: str = "running", error: str | None = None
     except OSError:
         pass
     print(f"[BTC关键位] {status} stage={stage} collected={payload['collected_timeframes']}", flush=True)
+
+
+def _require_no_analysis_lease() -> None:
+    """交互式分析进行中 → 本轮让路（抛 AnalysisLeaseActive，由调用方按成功处理）。
+
+    20260911：共用同一张 TradingView 图表。后台续航按 cron 切周期，而对话里的
+    分析是直接读行动格 + 截图、不持 tv_collection_lock，于是续航会在读图中途把图
+    切走（实测 14:07 读 5m 被连抢两次，行动格读成空表）。租约把「分析进行中」
+    变成后台任务看得见的事实：让路一轮不丢数据，比硬闯读出一张空表划算。
+    """
+    from tv_data_bridge import AnalysisLeaseActive, analysis_lease_status
+    status = analysis_lease_status()
+    if status.get("active"):
+        _diagnostic(
+            "lease:deferred", status="deferred",
+            error=(f"交互式分析进行中（剩 {status.get('remaining_seconds')}s）"
+                   f"，本轮续航让路"),
+        )
+        raise AnalysisLeaseActive(status.get("reason") or "analysis in progress")
+
+
+def _resolve_restore_target(cur_symbol: str, cur_timeframe: str) -> dict:
+    """棘轮保护：决定采完后把图还给谁（与 XAU 同步同一套规则，见 tv_data_bridge）。"""
+    from tv_data_bridge import chart_owner_resolve_restore
+    return chart_owner_resolve_restore(SYMBOL, cur_symbol, cur_timeframe)
 
 
 # ── JSON 解析兜底：mcp 返回的是 CallToolResult，先 parse_result 再 json.loads ──
@@ -437,6 +464,9 @@ def _restore_chart_state(previous: dict) -> bool:
         raise RuntimeError(
             f"chart restore mismatch: expected {symbol} {timeframe}, got {restored_symbol} {restored_tf}"
         )
+    # 归还成功才清「待归还」——失败时保留记录，下一轮据此打断棘轮。
+    from tv_data_bridge import chart_owner_mark_restored
+    chart_owner_mark_restored()
     return True
 
 
@@ -468,11 +498,17 @@ def main_cli():
     if not TV_CLI.exists():
         raise RuntimeError(f"TradingView CLI不存在: {TV_CLI}")
     from tv_data_bridge import tv_collection_lock
+    _require_no_analysis_lease()
     data_by_tf: dict[str, dict] = {}
     _diagnostic("cli:lock_wait")
     with tv_collection_lock(timeout=180):
+        # 拿到锁后再查一次：排队等锁的这段时间里用户可能刚开始分析。
+        _require_no_analysis_lease()
         _diagnostic("cli:lock_acquired")
         previous = _j(_cli("state"))
+        _prev_symbol, _prev_tf = _chart_identity(previous)
+        # 棘轮保护：不把上一轮残留的采集周期当成「用户图表」。
+        previous = _resolve_restore_target(_prev_symbol, _prev_tf)
         try:
             _cli("symbol", SYMBOL)
             time.sleep(INDICATOR_RECALC_SECONDS)
@@ -760,6 +796,7 @@ async def main():
 
 def _run_worker() -> int:
     """Run collection and fail closed if no fresh candidate publication lands."""
+    from tv_data_bridge import AnalysisLeaseActive
     previous_ts = None
     try:
         previous = json.loads(OUT.read_text(encoding="utf-8"))
@@ -768,6 +805,10 @@ def _run_worker() -> int:
         pass
     try:
         result = main_cli()
+    except AnalysisLeaseActive:
+        # 让路不是失败：分析只占几分钟，下一轮 cron 自然补上。
+        print("BTC关键位采集本轮让路（交互式分析进行中），不计失败", file=sys.stderr, flush=True)
+        return DEFER_EXIT_CODE
     except KeyboardInterrupt:
         print("BTC关键位采集被中断", file=sys.stderr, flush=True)
         return 1
@@ -817,6 +858,10 @@ def _run_cli() -> int:
             print(child.stdout, end="", flush=True)
         if child.stderr:
             print(child.stderr, end="", file=sys.stderr, flush=True)
+        if child.returncode == DEFER_EXIT_CODE:
+            # 让路：本轮没有新发布是**预期**的，不能记成采集失败再去重试一遍。
+            print("BTC关键位采集本轮让路（交互式分析进行中），不计失败", file=sys.stderr, flush=True)
+            return 0
         try:
             published = json.loads(OUT.read_text(encoding="utf-8"))
             changed = str(published.get("ts") or "") not in ("", previous_ts)

@@ -200,15 +200,26 @@ def main() -> int:
         f"reason={xau_contract.get('reason', '')}"
     )
 
-    config = read_json(DATA / "keylevels_config.json")
-    symbols = config.get("symbols", {}) if isinstance(config, dict) else {}
-    levels = []
-    if isinstance(symbols, dict):
-        for block in symbols.values():
-            if isinstance(block, dict):
-                levels.extend(level for level in (block.get("levels", []) or []) if isinstance(level, dict) and level.get("enabled", True))
-    active = sum(1 for level in levels if not level.get("valid_until") or age_hours(level["valid_until"]) <= 0)
-    print(f"批准关键位: {'OK' if active else 'DEGRADED'} active={active} configured={len(levels)}")
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from keylevel_guard import config_health
+        kl_health = config_health()
+    except Exception as exc:
+        kl_health = {
+            "status": "degraded",
+            "active_approved_levels": 0,
+            "configured_levels": 0,
+            "enabled_levels": 0,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+    kl_status = str(kl_health.get("status") or "degraded")
+    kl_label = {"ok": "OK", "idle": "IDLE", "degraded": "DEGRADED"}.get(kl_status, kl_status.upper())
+    print(
+        f"批准关键位: {kl_label} "
+        f"active={kl_health.get('active_approved_levels')} "
+        f"configured={kl_health.get('configured_levels')} "
+        f"enabled={kl_health.get('enabled_levels')}"
+    )
     keylevel_runtime = keylevel_runtime_report()
     print(
         "关键位守护运行态: "
@@ -249,7 +260,7 @@ def main() -> int:
     core_ok = bool(
         cdp_ok
         and all(result.get("fresh") for result in cache_results)
-        and active > 0
+        and kl_status in {"ok", "idle"}
         and keylevel_runtime.get("usable")
         and btc_contract.get("usable")
         and xau_contract.get("usable")

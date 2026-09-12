@@ -235,7 +235,12 @@ def main():
     health = check_config_health()
     write_health(health)
     active_levels = int(health.get("active_approved_levels", 0) or 0)
-    if active_levels < MIN_ACTIVE_APPROVED_LEVELS:
+    if health.get("status") == "idle":
+        log(
+            "IDLE: 全部批准位已用户静默（enabled=false）；"
+            "守护保持单实例，不记 DEGRADED"
+        )
+    elif active_levels < MIN_ACTIVE_APPROVED_LEVELS:
         log("DEGRADED: keylevels_config 当前无有效批准关键位；不把进程存活误报为监控正常")
         sys.exit(2)
 

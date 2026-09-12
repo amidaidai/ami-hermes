@@ -30,11 +30,12 @@ def test_legacy_watchdog_is_opt_in_only():
     assert 'cron_watchdog_is_authority' in text
 
 
-def test_market_watchdog_uses_psutil_and_removes_lock_after_kill():
+def test_market_watchdog_is_retired_and_does_not_restart_legacy_monitor():
     text = (ROOT / "scripts" / "monitor" / "market_watchdog.py").read_text(encoding="utf-8")
-    assert 'import psutil' in text
-    assert '["wmic", "process"' not in text
-    assert text.index('psutil.Process(int(pid)).kill()') < text.index('os.remove(LOCK)')
+    assert "已退役" in text
+    assert "keylevel_guard" in text
+    assert "subprocess.Popen" not in text
+    assert "push_tg_rich" not in text
 
 
 def _minimal_klines(price=64000.0):

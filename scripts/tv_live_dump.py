@@ -37,7 +37,10 @@ def _symbol_key(symbol: str) -> str:
 
 def cache_paths_for_symbol(symbol: str) -> list[Path]:
     key = _symbol_key(symbol)
-    return [ROOT / "data" / "tv_live.json", ROOT / "data" / f"tv_live_{key}.json"]
+    specific = ROOT / "data" / f"tv_live_{key}.json"
+    if key in {"BTCUSDT", "BTCUSD"}:
+        return [ROOT / "data" / "tv_live.json", specific]
+    return [specific]
 
 
 if __name__ == "__main__":

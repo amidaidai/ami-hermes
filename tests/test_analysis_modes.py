@@ -143,6 +143,57 @@ def test_mode_specs_distinguish_snapshot_update_and_full_analysis():
     assert r.analysis_mode_spec("full")["requires_new_screenshot"] is True
 
 
+# ── 档位单一权威（20260911）：L1/L2/L3 ↔ quick/standard/full 只对应一次 ──
+
+
+def test_tier_vocabulary_is_single_source():
+    r = router()
+    assert r.resolve_tier("看一下BTC") == "L1"
+    assert r.resolve_tier("扫一下BTC") == "L2"
+    assert r.resolve_tier("状态") == "L2"
+    assert r.resolve_tier("分析BTC") == "L3"
+    assert r.resolve_tier("BTC") == "L1"          # 裸品种名 → 轻量起步
+    assert r.tier_for_mode("quick") == "L1"
+    assert r.tier_for_mode("standard") == "L2"
+    assert r.tier_for_mode("full") == "L3"
+    assert r.tier_for_mode("monitor") == "MON"
+    assert r.tier_label("quick") == "轻量"
+    assert r.tier_label("full") == "完整"
+    assert r.tier_table()[1]["display_name"] == "标准"
+    assert r.tier_table()[3]["display_name"] == "监控"
+    assert r.tier_scope("monitor")
+
+def test_tier_table_and_mode_specs_do_not_drift():
+    """档位表与 MODE_SPECS 的 refresh_scope 必须一致 —— 漂移即静默降档。"""
+    r = router()
+    for row in r.tier_table():
+        spec = r.analysis_mode_spec(row["machine"])
+        assert spec["refresh_scope"] == r.ANALYSIS_TIERS[row["tier"]]["refresh_scope"]
+
+
+def test_every_declared_trigger_resolves_to_its_own_tier():
+    r = router()
+    for row in r.tier_table():
+        if row["tier"] == "MON":
+            # 监控档不由自然语言触发（只有事件发现走它），所以没有关键词。
+            assert row["triggers"] == []
+            continue
+        assert row["triggers"], row["tier"]
+        for keyword in row["triggers"]:
+            assert r.resolve_tier(keyword) == row["tier"], (row["tier"], keyword)
+
+
+def test_skill_promised_keywords_do_not_silently_downgrade():
+    """技能承诺「扫一下/状态」= 标准档；修前 router 不认，会静默降成 quick。"""
+    r = router()
+    for keyword in ("扫一下", "状态", "更新", "现在呢"):
+        assert r.resolve_analysis_mode(keyword) == "standard", keyword
+    # 「分析」是硬开关，任何时候都是完整档，不因刚出过卡而降级。
+    for keyword in r.HARD_FULL_KEYWORDS:
+        assert r.resolve_tier(keyword) == "L3", keyword
+        assert r.resolve_analysis_mode(keyword) == "full", keyword
+
+
 def test_auto_card_honors_route_boundaries_for_full_only_sources():
     source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
     grok_block = source[source.index("# ═══ Step 3: Grok催化剂验证"):source.index("# ═══ Step 4: 市场热点搜索")]

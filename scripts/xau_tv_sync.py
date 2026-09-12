@@ -31,11 +31,11 @@ SYMBOL = "OANDA:XAUUSD"
 # v9.7: 补 D 层日线，使"自上而下确认"有大背景（原只同步 5m/15m/1h/4h）
 TIMEFRAMES = [("1D", "D"), ("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
 SOURCE_SNAPSHOT = ROOT / "data" / "source_snapshot_XAUUSD.json"
-_ACTION_KEYS = ("结论", "方向", "路径", "风控", "操作")
+_ACTION_KEYS = ("结论", "方向", "路径")
 _PREVIOUS_CHART: dict[str, Any] = {}
-# 图表归属状态：记录「用户的图表在哪」，并把「待归还目标」持久化，
-# 用于打断「上次没恢复干净 → 下次把残留当成用户图表 → 永久锁死」的棘轮。
-CHART_OWNER = ROOT / "data" / "tv_chart_owner.json"
+# 图表归属状态（data/tv_chart_owner.json）由 tv_data_bridge 统一读写：记录
+# 「用户的图表在哪」+「待归还目标」，用于打断「上次没恢复干净 → 下次把残留当成
+# 用户图表 → 永久锁死」的棘轮。BTC 续航与 XAU 同步共用同一份实现。
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,62 +55,20 @@ def _chart_state() -> dict[str, Any]:
     return _tv_json("state", timeout=30) or {}
 
 
-def _load_chart_owner() -> dict[str, Any]:
-    try:
-        data = json.loads(CHART_OWNER.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError, UnicodeError):
-        return {}
-
-
-def _save_chart_owner(state: dict[str, Any]) -> None:
-    try:
-        CHART_OWNER.parent.mkdir(parents=True, exist_ok=True)
-        CHART_OWNER.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass          # 状态文件写不了也不能阻断采集
-
-
 def _resolve_restore_target(cur_symbol: str, cur_timeframe: str) -> dict[str, Any]:
-    """决定采完后该把图表还给谁。
+    """决定采完后该把图表还给谁（规则收敛在 tv_data_bridge，BTC/XAU 共用一份）。
 
     - 进入时看到非本任务品种 → 那是用户的图表，记下来并作为归还目标
     - 进入时已在 XAU 上 → 优先用「待归还」记录修回来（打断棘轮）；
       没有待归还记录才认为用户真的在看 XAU，保持不动
     """
-    cur_symbol = str(cur_symbol or "").strip()
-    cur_timeframe = str(cur_timeframe or "").strip()
-    state = _load_chart_owner()
-    is_our_target = cur_symbol.upper() == SYMBOL.upper()
-
-    if cur_symbol and not is_our_target:
-        state["user_symbol"] = cur_symbol
-        state["user_timeframe"] = cur_timeframe
-        state["pending_restore"] = {"symbol": cur_symbol, "resolution": cur_timeframe}
-        state["captured_at"] = datetime.now(TZ).isoformat()
-        _save_chart_owner(state)
-        return {"symbol": cur_symbol, "resolution": cur_timeframe}
-
-    pending = state.get("pending_restore") or {}
-    pending_symbol = str(pending.get("symbol") or "").strip()
-    if pending_symbol and pending_symbol.upper() != SYMBOL.upper():
-        # 上次没还回去 → 用记录修回来，不要顺着残留继续「恢复」成 XAU
-        state["ratchet_break_at"] = datetime.now(TZ).isoformat()
-        state["ratchet_break_from"] = cur_symbol
-        _save_chart_owner(state)
-        return {"symbol": pending_symbol,
-                "resolution": str(pending.get("resolution") or "")}
-
-    # 用户真的在看 XAU（或首次运行无记录）→ 保持原样
-    return {"symbol": cur_symbol, "resolution": cur_timeframe}
+    from tv_data_bridge import chart_owner_resolve_restore
+    return chart_owner_resolve_restore(SYMBOL, cur_symbol, cur_timeframe)
 
 
 def _mark_restored() -> None:
-    state = _load_chart_owner()
-    if state.pop("pending_restore", None) is not None:
-        state["restored_at"] = datetime.now(TZ).isoformat()
-        _save_chart_owner(state)
+    from tv_data_bridge import chart_owner_mark_restored
+    chart_owner_mark_restored()
 
 
 # 20260911：归还图表同样改【有界重试】（同一缺陷的第三处）。
@@ -223,11 +181,23 @@ def _validate_live_payload(
     age_seconds = None if timestamp is None else (now_utc - timestamp).total_seconds()
     fresh = age_seconds is not None and -60.0 <= age_seconds <= max_age_minutes * 60.0
     table = data.get("decision_table")
+    core_complete = (
+        isinstance(table, dict)
+        and all(str(table.get(key) or "").strip() for key in _ACTION_KEYS)
+    )
+    risk_complete = False
+    if core_complete:
+        try:
+            from tv_indicator_contract import risk_row_label
+            risk_label = risk_row_label(table)
+        except Exception:
+            risk_label = "风控" if str((table or {}).get("风控") or "").strip() else ""
+        risk_complete = bool(risk_label and str(table.get(risk_label) or "").strip())
     action_table_complete = (
         data.get("identity_valid") is True
         and data.get("action_table_complete") is True
-        and isinstance(table, dict)
-        and all(key in table and str(table.get(key) or "").strip() for key in _ACTION_KEYS)
+        and core_complete
+        and risk_complete
     )
     usable = identity_valid and fresh and data.get("fresh") is True and data.get("stale") is not True and action_table_complete
     if not identity_valid:
@@ -329,6 +299,37 @@ def validate_xau_outputs(
     }
 
 
+def published_xau_cache_usable() -> dict[str, Any]:
+    """Read the last published pair without touching the shared chart."""
+    try:
+        state = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else None
+        live = json.loads(LIVE_OUT.read_text(encoding="utf-8")) if LIVE_OUT.exists() else None
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"usable": False, "reason": "XAU已发布缓存无法解析"}
+    return validate_xau_outputs(state, live, require_batch_id=True)
+
+
+def analysis_lease_defer_exit() -> int | None:
+    """None=无租约；0=让路且缓存仍可用；1=让路但已发布缓存已过期，调度器必须看见。"""
+    try:
+        from tv_data_bridge import analysis_lease_status
+        lease = analysis_lease_status()
+    except Exception:
+        return None
+    if not lease.get("active"):
+        return None
+    remain = lease.get("remaining_seconds")
+    cache = published_xau_cache_usable()
+    if cache.get("usable"):
+        print(f"↷ XAU同步本轮让路：交互式分析进行中（剩 {remain}s）")
+        return 0
+    print(
+        f"↷ XAU同步让路但已发布缓存不可用：交互式分析进行中（剩 {remain}s）"
+        f"·{cache.get('reason')}"
+    )
+    return 1
+
+
 def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1800) -> None:
     """Keep XAU's multi-source quality snapshot inside the 30-minute freshness gate."""
     try:
@@ -371,15 +372,16 @@ def _refresh_tv_live_cache(batch_id: str | None = None) -> dict[str, Any]:
     # the live refresh in-process so lock ownership is structural, not an
     # environment-variable claim that an arbitrary child can forge.
     from tv_data_bridge import _collect_and_cache_locked
-    live = _collect_and_cache_locked(alert_mode=False, expect_symbol=SYMBOL)
+    live = _collect_and_cache_locked(
+        alert_mode=False, expect_symbol=SYMBOL, expected_timeframe="5",
+    )
     if not isinstance(live, dict) or live.get("stale") or not live.get("fresh"):
         raise RuntimeError("XAU主周期行动格刷新失败或过期")
     if batch_id:
         live["batch_id"] = batch_id
     live["source"] = "tv_live_dump"
     from atomic_json import atomic_write_json
-    for live_path in (ROOT / "data" / "tv_live.json", ROOT / "data" / "tv_live_XAUUSD.json"):
-        atomic_write_json(live_path, live)
+    atomic_write_json(LIVE_OUT, live)
     status = _validate_live_payload(live)
     if not status["usable"]:
         raise RuntimeError(f"tv_live_XAUUSD.json未通过主周期契约: {status['reason']}")
@@ -402,6 +404,10 @@ async def _run(sync_id: str):
                 return 0
     except Exception:
         return 0
+    # 交互式分析租约：分析期间不切用户正在看的图。缓存仍可用才静默让路。
+    defer = analysis_lease_defer_exit()
+    if defer is not None:
+        return defer
     try:
         from mcp.client.stdio import stdio_client, StdioServerParameters
         import importlib.util
@@ -633,6 +639,13 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
 def main() -> int:
     """Run the TV sync with a cron-safe three-level degradation path."""
     global _PREVIOUS_CHART
+    # Check before touching staged output or acquiring the collection lock.
+    # `_run()` also checks after the CDP probe, but returning 0 from that inner
+    # path must not let the outer publication/validation path reinterpret a
+    # deliberate defer as a failed sync.
+    defer = analysis_lease_defer_exit()
+    if defer is not None:
+        return defer
     try:
         try:
             STAGED_OUT.unlink()

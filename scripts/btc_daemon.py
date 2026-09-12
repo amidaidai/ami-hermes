@@ -391,9 +391,5 @@ def main_loop():
 
 
 if __name__ == "__main__":
-    try:
-        main_loop()
-    except KeyboardInterrupt:
-        log("Shutdown")
-        if PID_FILE.exists():
-            PID_FILE.unlink()
+    print("已退役·生产权威为 keylevel_guard.py", flush=True)
+    raise SystemExit(0)

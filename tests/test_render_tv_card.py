@@ -73,6 +73,60 @@ def test_push_card_uses_phone_friendly_one_table_format():
     assert "| 验证 |" not in card
 
 
+def test_auto_card_builds_current_risk_row_into_execution_prices():
+    ac = _load(AUTO_CARD, "auto_card_under_test_risk_row")
+    main = ac._build_tv_main_data(
+        {
+            "结论": "A空 反抽失败",
+            "方向": "偏空 · 走弱",
+            "路径": "等反抽不过",
+            "风控": "入64200·止64850·1.4A·标62900·2.1R",
+            "磁吸↑": "PDH 65200 分80",
+            "磁吸↓": "VAL 62900 分85",
+        },
+        {
+            "S VWAP": 64000, "VAH Price": 64600, "VAL Price": 62900, "POC Price": 63800,
+            "MCP Entry Price": 64200, "MCP Stop Price": 64850, "MCP Target Price": 62900,
+        },
+    )
+    assert main["risk_label"] == "风控"
+    assert main["entry"] == 64200
+    assert main["stop"] == 64850
+    assert main["target"] == 62900
+    assert main["price_source"] == "SVP执行导出"
+    assert main["magnet_down"].startswith("VAL")
+
+
+def test_auto_card_panel_risk_text_is_not_execution_export():
+    ac = _load(AUTO_CARD, "auto_card_under_test_panel_not_export")
+    main = ac._build_tv_main_data(
+        {
+            "结论": "A空 反抽失败",
+            "风控": "入64200·止64850·1.4A·标62900·2.1R",
+        },
+        {"S VWAP": 64000},
+    )
+    assert main["risk_label"] == "风控"
+    assert main.get("entry") is None
+    assert main.get("price_source") == "none"
+    assert "缺失" in str(main.get("price_contract_error") or "")
+
+
+def test_auto_card_observation_risk_does_not_become_entry():
+    ac = _load(AUTO_CARD, "auto_card_under_test_obs_risk")
+    main = ac._build_tv_main_data(
+        {
+            "结论": "B空·等收线",
+            "风控·观察": "入64200·止64850·1.8A·标62900·2.0R",
+            "位置": "价在VA上",
+        },
+        {},
+    )
+    assert main.get("entry") in (None, "", [])
+    assert main["candidate_entry"] == 64200
+    assert main["candidate_source"] == "SVP风控·观察"
+
+
 def test_auto_card_builds_v2_action_panel_fields_for_renderer():
     ac = _load(AUTO_CARD, "auto_card_under_test_render")
     main = ac._build_tv_main_data(

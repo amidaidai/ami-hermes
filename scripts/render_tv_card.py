@@ -103,6 +103,33 @@ def _clean_text(text: object, limit: int | None = None) -> str:
     return s
 
 
+def _chart_evidence_lines(main: dict) -> list[str]:
+    """Render compact price-bar/ICT evidence, never execution authority."""
+    evidence = main.get("chart_evidence") if isinstance(main, dict) else None
+    if not isinstance(evidence, dict):
+        return []
+    price = evidence.get("price_context") or {}
+    ict = evidence.get("ict") or {}
+    status = str(evidence.get("status") or "unavailable")
+    identity = evidence.get("identity") or {}
+    def value(key: str) -> str:
+        raw = price.get(key)
+        return _fmt_num(raw) if raw not in (None, "") else "—"
+    lines = [f"图表证据：{status} · {identity.get('timeframe') or '周期未知'}"]
+    if price.get("complete"):
+        lines.append(f"价格栏：O{value('open')} H{value('high')} L{value('low')} C{value('close')} · 现{value('last_price')}")
+    lines.append("ICT：" + " · ".join([
+        f"FVG{len(ict.get('fvg') or [])}",
+        f"OB{len(ict.get('ob') or [])}",
+        f"BOS/MSS{len(ict.get('structure_labels') or [])}",
+        f"流动性{len(ict.get('liquidity') or [])}",
+        f"区域{len(ict.get('zones') or [])}",
+    ]))
+    if status != "verified":
+        lines.append("ICT对象未完整读回：只观察，不升级GO-A")
+    return lines
+
+
 def _fmt_num(v):
     if v is None or v == "":
         return "—"
@@ -325,7 +352,7 @@ def render_tv_card(main: dict | None = None, sub: dict | None = None, symbol: st
     vah = main.get("vah")
     val = main.get("val")
     poc = main.get("poc")
-    entry = main.get("entry") or main.get("进场") or main.get("position")
+    entry = main.get("entry") or main.get("进场")
     stop = main.get("stop") or main.get("止损")
     target = main.get("target") or main.get("目标")
     magnet_up = main.get("magnet_up") or main.get("磁吸↑")
@@ -386,6 +413,7 @@ def _render_push(symbol, price, grade, direction, treatment, signal, conclusion,
         f"**{conclusion_clean}**",
         quote_line,
         tf_line,
+        *_chart_evidence_lines(main),
         "",
         _level_table(vwap, vah, val, poc, price),
         "",

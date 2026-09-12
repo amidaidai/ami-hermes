@@ -24,8 +24,11 @@ import subprocess, json, re, sys, os, time, threading
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 from atomic_json import atomic_write_json
+from chart_evidence import build_chart_evidence, normalize_timeframe, symbol_matches
+from binance_public import fetch_futures
 
 TZ = timezone(timedelta(hours=8))
 ROOT = Path(os.environ.get("HERMES_ROOT", "D:/Hermes agent"))
@@ -86,6 +89,210 @@ def tv_collection_lock(timeout: float = 30.0):
             TV_LOCK.unlink()
         except FileNotFoundError:
             pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 交互式分析租约 — 「有人正在看图分析」这件事，后台任务必须看得见
+# ═══════════════════════════════════════════════════════════════════════════
+# tv_collection_lock 只序列化**后台任务彼此**。交互式分析（对话里直接读行动格 +
+# 截图）不持锁，于是后台续航会在读图中途把图切走 —— 实测 2026-09-11 14:07 读 5m
+# 时被 btc_tv_refresh 连抢两次，行动格整张读成空表。租约把「分析进行中」变成后台
+# 任务可见的事实：有效期内后台切图任务 defer 到下一轮，而不是硬闯。
+#
+# 契约：租约只影响**后台切图任务的调度**，不改任何数据内容与裁决。
+ANALYSIS_LEASE = ROOT / "data" / "tv_analysis_lease.json"
+ANALYSIS_LEASE_DEFAULT_MINUTES = 10.0
+ANALYSIS_LEASE_MAX_MINUTES = 30.0
+
+
+def begin_analysis_lease(minutes: float = ANALYSIS_LEASE_DEFAULT_MINUTES, *,
+                         note: str = "", symbol: str = "") -> dict:
+    """声明「交互式分析进行中」。
+
+    TTL 有上限（30 分钟）——分析脚本崩了也不会把后台续航永久锁死。
+    """
+    try:
+        ttl = float(minutes)
+    except (TypeError, ValueError):
+        ttl = ANALYSIS_LEASE_DEFAULT_MINUTES
+    ttl = max(0.5, min(ANALYSIS_LEASE_MAX_MINUTES, ttl))
+    now = datetime.now(TZ)
+    payload = {
+        "active": True,
+        "started_at": now.isoformat(timespec="seconds"),
+        "expires_at": (now + timedelta(minutes=ttl)).isoformat(timespec="seconds"),
+        "minutes": ttl,
+        "pid": os.getpid(),
+        "note": str(note or "")[:200],
+        "symbol": str(symbol or "").upper(),
+    }
+    try:
+        atomic_write_json(ANALYSIS_LEASE, payload)
+    except OSError:
+        pass
+    return payload
+
+
+def end_analysis_lease() -> dict:
+    """释放租约（幂等；不存在也算成功）。"""
+    try:
+        ANALYSIS_LEASE.unlink()
+    except (FileNotFoundError, OSError):
+        pass
+    return {"active": False}
+
+
+def read_analysis_lease() -> dict:
+    try:
+        data = json.loads(ANALYSIS_LEASE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, UnicodeError):
+        return {}
+
+
+def _lease_holder_alive(pid) -> bool | None:
+    """True=持有进程还在；False=已死；None=无法判断（保持 TTL 判定）。"""
+    try:
+        pid_i = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_i <= 0:
+        return False
+    try:
+        import psutil
+        return bool(psutil.pid_exists(pid_i))
+    except Exception:
+        return None
+
+
+def analysis_lease_status(now=None) -> dict:
+    """租约状态。文件缺失 / active 非真 / 已过期 / 持有进程已死，一律视为「无分析」。"""
+    data = read_analysis_lease()
+    if not data or not data.get("active"):
+        return {"active": False, "reason": "无分析租约"}
+    try:
+        expires = datetime.fromisoformat(str(data.get("expires_at") or ""))
+    except ValueError:
+        return {"active": False, "reason": "租约时间戳不可解析", "lease": data}
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=TZ)
+    current = now or datetime.now(TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=TZ)
+    remaining = (expires - current).total_seconds()
+    if remaining <= 0:
+        return {"active": False, "reason": "租约已过期", "lease": data,
+                "remaining_seconds": round(remaining, 1)}
+    alive = _lease_holder_alive(data.get("pid"))
+    if alive is False:
+        return {
+            "active": False,
+            "reason": "租约持有进程已退出",
+            "lease": data,
+            "holder_pid": data.get("pid"),
+            "remaining_seconds": round(remaining, 1),
+        }
+    return {
+        "active": True,
+        "reason": "交互式分析进行中",
+        "remaining_seconds": round(remaining, 1),
+        "expires_at": expires.isoformat(timespec="seconds"),
+        "holder_pid": data.get("pid"),
+        "note": data.get("note") or "",
+        "symbol": data.get("symbol") or "",
+        "lease": data,
+    }
+
+
+def analysis_in_progress() -> bool:
+    """后台任务入口处的一个布尔判断：现在要不要让路。"""
+    return bool(analysis_lease_status().get("active"))
+
+
+class AnalysisLeaseActive(RuntimeError):
+    """后台切图任务撞上交互式分析租约时抛出；调用方按「本轮让路」处理，不算失败。"""
+
+
+# ═══ 图表归属（棘轮保护）— BTC / XAU 共用同一套规则 ═══
+# 历史缺陷：BTC 侧只把「进入时看到什么」当用户图表。一旦某轮恢复失败（残留周期
+# 留在采集用的 TF 上），下一轮就把残留认成用户图表，从此越跑越偏。XAU 侧已修，
+# BTC 侧没跟上 —— 同一个 bug 的两份实现漂移。现在收敛到这一处。
+CHART_OWNER = ROOT / "data" / "tv_chart_owner.json"
+
+
+def load_chart_owner() -> dict:
+    try:
+        data = json.loads(CHART_OWNER.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, UnicodeError):
+        return {}
+
+
+def save_chart_owner(state: dict) -> None:
+    try:
+        CHART_OWNER.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(CHART_OWNER, state)
+    except OSError:
+        pass          # 状态文件写不了也不能阻断采集
+
+
+def chart_owner_resolve_restore(our_symbol: str, current_symbol: str,
+                                current_timeframe: str) -> dict:
+    """决定采集结束后该把图表还给谁。
+
+    - 进入时看到**非**本任务品种 → 那是用户的图表，记下来并作为归还目标
+    - 进入时已在**本任务品种**上 → 优先用「待归还」记录修回来（打断棘轮）；
+      没有待归还记录才认为用户真的在看该品种，保持不动
+    """
+    our = str(our_symbol or "").strip().upper()
+    cur_symbol = str(current_symbol or "").strip()
+    cur_timeframe = str(current_timeframe or "").strip()
+    state = load_chart_owner()
+
+    if cur_symbol and cur_symbol.upper() != our:
+        state["user_symbol"] = cur_symbol
+        state["user_timeframe"] = cur_timeframe
+        state["pending_restore"] = {"symbol": cur_symbol, "resolution": cur_timeframe}
+        state["captured_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+        save_chart_owner(state)
+        return {"symbol": cur_symbol, "resolution": cur_timeframe}
+
+    pending = state.get("pending_restore") or {}
+    pending_symbol = str(pending.get("symbol") or "").strip()
+    if pending_symbol and pending_symbol.upper() != our:
+        # 上次没还回去 → 用记录修回来，不要顺着残留继续「恢复」成采集品种
+        state["ratchet_break_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+        state["ratchet_break_from"] = cur_symbol
+        save_chart_owner(state)
+        return {"symbol": pending_symbol,
+                "resolution": str(pending.get("resolution") or "")}
+
+    remembered = str(state.get("user_symbol") or "").strip()
+    if remembered and remembered.upper() != our:
+        # pending 已被成功归还清掉，但图又被留在采集品种上（失败路径/杀进程）。
+        # 记住的用户品种仍在，不能把残留当成「用户真的在看黄金」。
+        state["pending_restore"] = {
+            "symbol": remembered,
+            "resolution": str(state.get("user_timeframe") or ""),
+        }
+        state["ratchet_break_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+        state["ratchet_break_from"] = cur_symbol
+        save_chart_owner(state)
+        return {
+            "symbol": remembered,
+            "resolution": str(state.get("user_timeframe") or ""),
+        }
+
+    # 用户真的在看本任务品种（或首次运行无记录）→ 保持原样
+    return {"symbol": cur_symbol, "resolution": cur_timeframe}
+
+
+def chart_owner_mark_restored() -> None:
+    """归还成功后清掉「待归还」，并记一笔归还时间。"""
+    state = load_chart_owner()
+    if state.pop("pending_restore", None) is not None:
+        state["restored_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+        save_chart_owner(state)
 
 
 def _norm_symbol_for_cache(symbol: str) -> str:
@@ -275,6 +482,11 @@ def read_indicators(symbol=None):
     if not isinstance(studies, list):
         return {}
     for study in studies:
+        if not isinstance(study, dict):
+            continue
+        # 只读主 SVP 研究的 values，跳过副研究免止污染
+        if not _is_main_study(study):
+            continue
         if not isinstance(study, dict) or not isinstance(study.get("values"), dict):
             continue
         for key, val in study["values"].items():
@@ -302,8 +514,23 @@ def read_indicators(symbol=None):
     return indicators
 
 
-def read_dmi_table(symbol=None):
-    """读取行动格/决策表。symbol 给定时 --symbol 直读。"""
+def _is_main_study(study):
+    """Determine if a study is the main SVP indicator (not a sub-study)."""
+    import re as _re
+    name = study.get("name", "")
+    return bool(name and _re.match(
+        r"^SVP(?:$|[+\s])", name, _re.IGNORECASE))
+
+def read_dmi_table(symbol=None, study_role: str = "main"):
+    """读取行动格/决策表。symbol 给定时 --symbol 直读。
+
+    study_role:
+      "main"  - 仅返回主 SVP 研究的行动格（副研究不被合并，免止污染）
+      "sub"   - 仅返回非主研究的行动格（独立供下游）
+    "main" 为默认行为，确保主研究的核心行（结论/方向/路径/风控）不被
+    次研究的同名行覆盖。
+    "sub" 可由需要独立副表的下游模块使用。
+    """
     args = ["data", "tables", "--study-filter", "SVP"]
     if symbol:
         args += ["--symbol", symbol]
@@ -312,12 +539,42 @@ def read_dmi_table(symbol=None):
         return {}
     table = {}
     for study in data.get("studies", []):
+        if not isinstance(study, dict):
+            continue
+        if study_role == "main":
+            # 只读主 SVP 研究，跳过副研究免止污染
+            if not _is_main_study(study):
+                continue
+        elif study_role == "sub":
+            # 只读非主研究（副研究），主研究直接跳过
+            if _is_main_study(study):
+                continue
         for tbl in study.get("tables", []):
             for row in tbl.get("rows", []):
                 if "|" in row:
                     key, val = row.split("|", 1)
                     table[key.strip()] = val.strip()
     return table
+
+
+def risk_row_label(rows: dict) -> str:
+    """Preserve authorization in the row key; mixed snapshots fail closed.
+
+    Uses tv_indicator_contract RISK_ROW_VARIANTS for authoritative label identification.
+    Scans in reverse order (most conservative first): 风控 > 风控·观察 > 风控·未授权 > 禁做·不出价.
+    """
+    from tv_indicator_contract import RISK_ROW_VARIANTS as _RISK_VARIANTS
+    return next(
+        (label for label in reversed(_RISK_VARIANTS) if label in (rows or {})),
+        "",
+)
+
+
+def risk_row_value(rows: dict) -> str:
+    """取最保守的风控行；标签与值必须成对消费。"""
+    label = risk_row_label(rows)
+    return (rows or {}).get(label, "")
+
 
 
 def read_pine_lines(symbol=None):
@@ -335,25 +592,92 @@ def read_pine_lines(symbol=None):
     return levels
 
 
+def read_pine_boxes(symbol=None):
+    """读取Pine绘制区域（FVG/OB等）；空结果必须保留为证据缺失。"""
+    args = ["data", "boxes", "--study-filter", "SVP"]
+    if symbol:
+        args += ["--symbol", symbol]
+    data = _tv_json(*args, timeout=15)
+    if not data:
+        return []
+    rows = []
+    for study in data.get("studies", []):
+        # The CLI calls the normalized Pine box collection ``zones`` while
+        # older adapters used ``boxes``.  Accept both without inventing a
+        # FVG/OB label that the source did not provide.
+        collection = study.get("boxes")
+        if not isinstance(collection, list):
+            collection = study.get("zones", [])
+        for box in collection:
+            if isinstance(box, dict):
+                rows.append(box)
+    return rows
+
+
+def read_pine_labels(symbol=None):
+    """读取Pine文字标签（BOS/MSS/流动性等）。"""
+    args = ["data", "labels", "--study-filter", "SVP"]
+    if symbol:
+        args += ["--symbol", symbol]
+    data = _tv_json(*args, timeout=15)
+    if not data:
+        return []
+    rows = []
+    for study in data.get("studies", []):
+        for label in study.get("labels", []):
+            if isinstance(label, dict):
+                rows.append(label)
+    return rows
+
+
 def read_quote(symbol="BINANCE:BTCUSDT.P"):
-    """读取实时报价。"""
+    """读取实时报价并保持历史标量返回契约。"""
+    payload = read_quote_payload(symbol)
+    if isinstance(payload, dict):
+        value = payload.get("last") or payload.get("close") or payload.get("price")
+        parsed = _num(value)
+        if parsed is not None and parsed > 0:
+            return parsed
+    return None
+
+
+def read_quote_payload(symbol="BINANCE:BTCUSDT.P"):
+    """读取完整报价栏；返回值必须来自同一次CLI响应。"""
     out, ok = _tv("quote", "--symbol", symbol, timeout=10)
     if not ok:
         return None
     try:
         payload = json.loads(out)
         if isinstance(payload, dict):
-            value = payload.get("last") or payload.get("close") or payload.get("price")
-            parsed = _num(value)
-            if parsed is not None and parsed > 0:
-                return parsed
+            return payload
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
-    try:
-        parsed = _num(out.strip().split()[-1])
-        return parsed if parsed and parsed > 0 else None
-    except (IndexError, TypeError, ValueError):
-        return None
+    return None
+
+
+def read_binance_snapshot(symbol="BTCUSDT") -> dict[str, Any]:
+    """Read independent Binance USD-M 24h/mark data for cross-validation."""
+    ticker = fetch_futures("/fapi/v1/ticker/24hr", {"symbol": symbol}, timeout=8)
+    premium = fetch_futures("/fapi/v1/premiumIndex", {"symbol": symbol}, timeout=8)
+    if not isinstance(ticker, dict) or str(ticker.get("symbol", "")).upper() != str(symbol).upper():
+        return {"status": "unavailable", "source": "binance_futures"}
+    def num(value):
+        return _num(value)
+    return {
+        "status": "live",
+        "source": "binance_futures",
+        "symbol": str(ticker.get("symbol")).upper(),
+        "last_price": num(ticker.get("lastPrice")),
+        "open": num(ticker.get("openPrice")),
+        "high": num(ticker.get("highPrice")),
+        "low": num(ticker.get("lowPrice")),
+        "close_time_ms": ticker.get("closeTime"),
+        "price_change_pct": num(ticker.get("priceChangePercent")),
+        "mark_price": num((premium or {}).get("markPrice")),
+        "index_price": num((premium or {}).get("indexPrice")),
+        "funding_rate": num((premium or {}).get("lastFundingRate")),
+        "next_funding_time_ms": (premium or {}).get("nextFundingTime"),
+    }
 
 
 def read_state_symbol():
@@ -368,6 +692,25 @@ def read_state_symbol():
         return None
     sym = data.get("symbol") or data.get("ticker") or ""
     return sym.strip() or None
+
+
+def read_chart_state():
+    """返回完整图表身份，不用请求参数猜测当前图。"""
+    data = _tv_json("state", timeout=10)
+    return data if isinstance(data, dict) else {}
+
+
+def validate_chart_identity(state: dict, expected_symbol: str,
+                            expected_timeframe: str = "") -> tuple[bool, list[str]]:
+    """校验品种/周期；失败时调用方必须停止把数据标成实时。"""
+    errors = []
+    actual_symbol = state.get("symbol") or state.get("ticker")
+    actual_tf = normalize_timeframe(state.get("resolution") or state.get("timeframe"))
+    if not symbol_matches(actual_symbol, expected_symbol):
+        errors.append("symbol_mismatch")
+    if expected_timeframe and actual_tf != normalize_timeframe(expected_timeframe):
+        errors.append("timeframe_mismatch")
+    return not errors, errors
 
 
 def ensure_expected_symbol(expect_symbol: str, attempts: int = 5) -> bool:
@@ -386,14 +729,49 @@ def ensure_expected_symbol(expect_symbol: str, attempts: int = 5) -> bool:
     return False
 
 
-def load_cache():
-    """加载已有缓存。"""
-    if CACHE.exists():
-        try:
-            return json.loads(CACHE.read_text(encoding="utf-8"))
-        except:
-            pass
+def load_cache(symbol=None):
+    """加载已有缓存。非 BTC 只读专属文件，避免失败路径把黄金标到 BTC 主缓存。"""
+    paths = []
+    if symbol and _norm_symbol_for_cache(symbol) != _norm_symbol_for_cache("BINANCE:BTCUSDT.P"):
+        paths.append(_symbol_cache_path(symbol))
+    else:
+        paths.append(CACHE)
+        if symbol:
+            paths.append(_symbol_cache_path(symbol))
+    for path in paths:
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
     return {}
+
+
+def quote_payload_matches_expected(payload, expect_symbol: str) -> bool:
+    """报价身份必须跟采集目标一致；禁止用 BTC swap 合同卡死黄金。"""
+    if not isinstance(payload, dict) or not expect_symbol:
+        return False
+    quote_sym = str(payload.get("symbol") or payload.get("ticker") or "")
+    if not symbol_matches(quote_sym, expect_symbol):
+        return False
+    norm = _norm_symbol_for_cache(expect_symbol)
+    last = _num(payload.get("last") or payload.get("close") or payload.get("price"))
+    if "BTCUSDT" in norm:
+        return (
+            str(payload.get("exchange", "")).upper() == "BINANCE"
+            and str(payload.get("type", "")).lower() == "swap"
+            and last is not None
+            and last > 1000
+        )
+    if "XAU" in norm:
+        qtype = str(payload.get("type", "")).lower()
+        exchange = str(payload.get("exchange", "")).upper()
+        if exchange == "BINANCE" or qtype == "swap":
+            return False
+        return last is not None and 1000 < last < 10000
+    return last is not None and last > 0
 
 
 def _symbol_cache_path(symbol) -> Path:
@@ -428,7 +806,7 @@ def save_cache(data):
     atomic_write_json(CACHE, data)
 
 
-def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
+def _collect_and_cache_locked(alert_mode=False, expect_symbol=None, expected_timeframe=""):
     """
     采集TV数据 → 写缓存。
 
@@ -444,29 +822,130 @@ def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
     # CLI values/data 的 --symbol 在部分TradingView版本中不会切换图表，却会让
     # 下游误以为读到了目标品种。必须先真实切图并校验state，再读当前图。
     if expect_symbol and not ensure_expected_symbol(expect_symbol):
-        old = load_cache()
+        old = load_cache(expect_symbol)
         if old:
             old["fresh"] = False
             old["stale"] = True
             return old
         return None
+    chart_state = read_chart_state()
+    if not chart_state:
+        # Compatibility fallback for older CLI/test doubles.  This proves only
+        # the symbol, never the timeframe or full chart evidence.
+        fallback_symbol = read_state_symbol()
+        if fallback_symbol:
+            chart_state = {"symbol": fallback_symbol}
     if expect_symbol:
+        identity_ok, identity_errors = validate_chart_identity(
+            chart_state, expect_symbol, expected_timeframe)
+        if not identity_ok and "symbol_mismatch" in identity_errors:
+            # Some legacy CLI state responses contain only a transport shell;
+            # retry the narrow symbol read before declaring a mismatch.
+            fallback_symbol = read_state_symbol()
+            if symbol_matches(fallback_symbol, expect_symbol):
+                chart_state = {**chart_state, "symbol": fallback_symbol}
+                identity_ok, identity_errors = validate_chart_identity(
+                    chart_state, expect_symbol, expected_timeframe)
+        if not identity_ok:
+            old = load_cache(expect_symbol)
+            if old:
+                old["fresh"] = False
+                old["stale"] = True
+                old["stale_reason"] = "TV图表身份不匹配:" + ",".join(identity_errors)
+                save_cache(old)
+                return old
+            return None
         # 自定义Pine在切品种后需要时间完成Data Window/行动格重算。
         time.sleep(3)
+        refreshed_state = read_chart_state()
+        refreshed_ok, _ = validate_chart_identity(
+            refreshed_state, expect_symbol, expected_timeframe
+        ) if refreshed_state else (False, [])
+        if refreshed_state and (not expect_symbol or refreshed_ok):
+            chart_state = refreshed_state
     read_sym = None
 
     indicators = read_indicators(read_sym)
     dmi = read_dmi_table(read_sym)
     lines = read_pine_lines(read_sym)
-    quote = read_quote(expect_symbol or "BINANCE:BTCUSDT.P")
+    boxes = read_pine_boxes(read_sym)
+    labels = read_pine_labels(read_sym)
+    # Empty tables/values are commonly a transient recalculation or chart
+    # contention signal. Retry only while the real chart identity remains
+    # correct; never turn another timeframe's data into a BTC cache.
+    for _ in range(3):
+        if dmi and indicators:
+            break
+        time.sleep(5)
+        current_state = read_chart_state()
+        identity_ok, _ = validate_chart_identity(
+            current_state, expect_symbol or "BINANCE:BTCUSDT.P", expected_timeframe
+        )
+        if not identity_ok:
+            break
+        indicators = read_indicators(read_sym)
+        dmi = read_dmi_table(read_sym)
+        lines = read_pine_lines(read_sym)
+        boxes = read_pine_boxes(read_sym)
+        labels = read_pine_labels(read_sym)
+    quote_payload = read_quote_payload(expect_symbol or "BINANCE:BTCUSDT.P")
+    quote = None
+    if isinstance(quote_payload, dict):
+        quote = _num(quote_payload.get("last") or quote_payload.get("close") or quote_payload.get("price"))
+    # Compatibility with legacy test doubles/adapters that only implement the
+    # scalar read_quote contract.  The full payload remains preferred.
+    if quote is None:
+        quote = read_quote(expect_symbol or "BINANCE:BTCUSDT.P")
+    quote_identity_ok = quote_payload_matches_expected(
+        quote_payload, expect_symbol or "BINANCE:BTCUSDT.P"
+    )
+    if expect_symbol and isinstance(quote_payload, dict) and not quote_identity_ok:
+        old = load_cache(expect_symbol)
+        if old:
+            old["fresh"] = False
+            old["stale"] = True
+            old["stale_reason"] = "TradingView报价身份不匹配"
+            save_cache(old)
+            return old
+        return None
+    expected_norm = _norm_symbol_for_cache(expect_symbol or "BINANCE:BTCUSDT.P")
+    if "BTCUSDT" in expected_norm:
+        binance_snapshot = read_binance_snapshot("BTCUSDT")
+    else:
+        binance_snapshot = {
+            "status": "skipped",
+            "source": "not_applicable",
+            "reason": f"{expected_norm}不走加密合约交叉",
+        }
+    if isinstance(binance_snapshot, dict) and binance_snapshot.get("status") == "live":
+        indicators["day_high"] = binance_snapshot.get("high")
+        indicators["day_low"] = binance_snapshot.get("low")
+        tv_price = float(quote or 0.0)
+        bn_price = float(_num(binance_snapshot.get("last_price")) or 0.0)
+        if tv_price and bn_price:
+            delta_pct = (tv_price - bn_price) / bn_price * 100.0
+            binance_snapshot["tv_price_delta_pct"] = delta_pct
+            binance_snapshot["cross_status"] = "aligned" if abs(delta_pct) <= 0.25 else "divergent"
+        else:
+            binance_snapshot["cross_status"] = "unavailable"
+    else:
+        binance_snapshot = binance_snapshot or {"status": "unavailable"}
 
     if expect_symbol:
-        current = read_state_symbol()
-        if not current or _norm_symbol_for_cache(current) != _norm_symbol_for_cache(expect_symbol):
-            old = load_cache()
+        # Final gate: the chart may be stolen while tables/quote are being
+        # read. Revalidate both symbol and timeframe, not symbol alone.
+        final_state = read_chart_state()
+        final_ok, final_errors = validate_chart_identity(
+            final_state or chart_state, expect_symbol, expected_timeframe
+        )
+        current = (final_state or chart_state).get("symbol") or read_state_symbol()
+        if (not final_ok or not current or
+                _norm_symbol_for_cache(current) != _norm_symbol_for_cache(expect_symbol)):
+            old = load_cache(expect_symbol)
             if old:
                 old["fresh"] = False
                 old["stale"] = True
+                old["stale_reason"] = "TV采集结束时图表身份变化:" + ",".join(final_errors)
                 return old
             return None
 
@@ -482,7 +961,7 @@ def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
             return None
 
     grade = dmi.get("等级", dmi.get("grade", "?"))
-    old_cache = load_cache()
+    old_cache = load_cache(expect_symbol)
     old_grade = old_cache.get("grade", "")
 
     # A chart can return generic Volume/Plot values while the required SVP
@@ -501,8 +980,19 @@ def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
             save_cache(old_cache)
             return old_cache
         return None
-    required_action_rows = {"结论", "方向", "路径", "风控"}
-    action_table_complete = required_action_rows.issubset(set(dmi))
+    # 使用契约权威 risk_row_label 识别合法动态行，保留原标签不越权
+    # 既接受明确的 "风控"，也接受带授权后缀的 "风控·未授权" / "风控·观察"
+    from tv_indicator_contract import risk_row_label as _risk_label
+    detected_risk_label = _risk_label(dmi)
+    if not detected_risk_label:
+        # 兜底：仍检查硬编码集合（兼容旧缓存）
+        required_action_rows = {"结论", "方向", "路径", "风控"}
+        action_table_complete = required_action_rows.issubset(set(dmi))
+    else:
+        # 契约驱动：检测到的风控标签及其核心行必须均存在
+        action_table_complete = all(
+            k in dmi for k in ("结论", "方向", "路径", detected_risk_label)
+        )
     if not action_table_complete or quote is None:
         reason = "SVP行动格核心行或真实报价缺失"
         if old_cache:
@@ -542,6 +1032,7 @@ def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
         "stale": False,
         "grade": grade,
         "last_price": quote,
+        "binance_cross_validation": binance_snapshot,
         "decision_table": dmi,
         "indicators": indicators,
         "key_levels": lines,
@@ -552,6 +1043,13 @@ def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
         "action_grid": action_grid,
         "identity_valid": True,
         "action_table_complete": action_table_complete,
+        "timeframe": chart_state.get("resolution") or chart_state.get("timeframe"),
+        "chart_evidence": build_chart_evidence(
+            state=chart_state, quote=quote_payload or quote, indicators=indicators,
+            lines=lines, boxes=boxes, labels=labels,
+            expected_symbol=expect_symbol or "BINANCE:BTCUSDT.P",
+            expected_timeframe=expected_timeframe,
+        ),
         "source_quality": "A",
         "source_quality_reason": "symbol/timeframe gate and core action rows passed",
     }
@@ -569,10 +1067,12 @@ def _collect_and_cache_locked(alert_mode=False, expect_symbol=None):
     return cache
 
 
-def collect_and_cache(alert_mode=False, expect_symbol=None):
+def collect_and_cache(alert_mode=False, expect_symbol=None, expected_timeframe=""):
     """Collect one complete chart read under the shared-chart lease."""
     with tv_collection_lock():
-        return _collect_and_cache_locked(alert_mode=alert_mode, expect_symbol=expect_symbol)
+        return _collect_and_cache_locked(
+            alert_mode=alert_mode, expect_symbol=expect_symbol,
+            expected_timeframe=expected_timeframe)
 
 
 if __name__ == "__main__":

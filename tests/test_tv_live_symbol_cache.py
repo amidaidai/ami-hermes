@@ -23,4 +23,12 @@ def test_tv_live_dump_keeps_generic_and_symbol_specific_cache_paths():
     btc = tv_live_dump.cache_paths_for_symbol("BINANCE:BTCUSDT.P")
     xau = tv_live_dump.cache_paths_for_symbol("OANDA:XAUUSD")
     assert [p.name for p in btc] == ["tv_live.json", "tv_live_BTCUSDT.json"]
-    assert [p.name for p in xau] == ["tv_live.json", "tv_live_XAUUSD.json"]
+    assert [p.name for p in xau] == ["tv_live_XAUUSD.json"]
+    assert "tv_live.json" not in [p.name for p in xau]
+
+
+def test_xau_live_refresh_does_not_write_generic_btc_cache():
+    source = (ROOT / "scripts" / "xau_tv_sync.py").read_text(encoding="utf-8")
+    assert 'ROOT / "data" / "tv_live.json"' not in source
+    assert "tv_live_XAUUSD.json" in source
+    assert 'expected_timeframe="5"' in source or "expected_timeframe='5'" in source

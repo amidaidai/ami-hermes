@@ -104,7 +104,7 @@ DW_SUB = [
 
 # v13 新增、旧消费方完全没接的决策级字段（本轮接入重点）
 NEW_IN_V13 = {
-    "MCP RR Ratio": "R:R 比值；硬闸 rrHardOk = rrRatio >= 2.0，B/C 直通闸 >= 1.5",
+    "MCP RR Ratio": "R:R 比值；A 级硬闸 rrRatio >= 2.0；1.5–1.99 仅保留 B/C 人工观察候选，不授权执行",
     "MCP Entry Valid Code": "入场有效性 -3..3，见 ENTRY_VALID",
     "MCP NoTrade Reason Code": "禁做/降级原因的位掩码，见 NO_TRADE_BITS（最有价值）",
     "MCP Execution Pack": "priceGeom*1e6 + confirmed*1e5 + stopATR*10 + (entryValid+3)",
@@ -262,7 +262,7 @@ HALDRO_STATE = {
     4: "S4降权",
 }
 
-# R:R 硬闸：A 级 >= 2.0；B/C 直通 >= 1.5
+# R:R 分层：A 级执行 >= 2.0；1.5–1.99 仅 B/C 人工观察候选，不授权执行
 RR_HARD_MIN = 2.0
 RR_BC_MIN = 1.5
 
@@ -311,7 +311,7 @@ def rr_gate(rr) -> str:
     if v >= RR_HARD_MIN:
         return f"R:R {v:.1f} 过硬闸"
     if v >= RR_BC_MIN:
-        return f"R:R {v:.1f} 仅B/C直通"
+        return f"R:R {v:.1f} 仅B/C观察候选·不授权"
     return f"R:R {v:.1f} 不足"
 
 
@@ -421,6 +421,81 @@ def decode_trigger_pack(pack):
         "age": (v // 100) % 1000,
         "fresh": (v // 10) % 10 == 1,
         "signalState": v % 10 - 3,      # 域 -2..4；恒非负编码，不再借位
+    }
+
+
+def decode_regime_pack(pack):
+    """拆 Regime Pack：regime*10000 + model*100 + confidence。"""
+    try:
+        v = int(pack)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "regimeCode": v // 10000,
+        "preferredModelCode": (v // 100) % 100,
+        "confidence": v % 100,
+    }
+
+
+def decode_contract_pack(pack):
+    """拆 Contract Pack，并校验 171000 基础合同与市场码。"""
+    try:
+        v = int(pack)
+    except (TypeError, ValueError):
+        return None
+    market_code = (v - 171000 - 1) // 10
+    return {
+        "version": v // 1000,
+        "marketCode": market_code,
+        "valid": v >= 171001 and (v - 171001) % 10 == 0,
+        "raw": v,
+    }
+
+
+def decode_evidence_pack(pack):
+    """拆证据包：日期戳 + 方向/位置/触发/收线四个位。"""
+    try:
+        v = int(pack)
+    except (TypeError, ValueError):
+        return None
+    flags = v % 10000
+    return {
+        "versionDate": v // 10000,
+        "direction": (flags // 1000) - 1,
+        "locationValid": (flags // 100) % 10 == 1,
+        "triggerConfirmed": (flags // 10) % 10 == 1,
+        "barClosed": flags % 10 == 1,
+    }
+
+
+def decode_struct_pack(pack):
+    """拆 StructPack：FVG质量、OB、BOS、流动性状态。"""
+    try:
+        v = int(pack)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "fvgQuality": v // 10000,
+        "obCode": (v // 100) % 100 - 1,
+        "bosCode": (v // 10) % 10 - 2,
+        "liquidityCode": v % 10 - 1,
+    }
+
+
+def decode_quality_code(code):
+    """MCP Quality Code 位掩码。返回可解释的质量问题。"""
+    n = _as_int(code)
+    if n is None:
+        return None
+    return {
+        "raw": n,
+        "htfConflict": bool(n & 1),
+        "cvdLowQuality": bool(n & 2),
+        "lowLiquidity": bool(n & 4),
+        "adrBlocked": bool(n & 8),
+        "htfFvg": bool(n & 16),
+        "mss": bool(n & 32),
+        "emaOrderMissing": bool(n & 64),
     }
 
 

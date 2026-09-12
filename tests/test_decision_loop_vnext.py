@@ -160,6 +160,40 @@ def test_go_a_uses_geometric_rr_instead_of_trusting_claimed_rr():
     assert "rr_ratio" in out.blockers
 
 
+def test_svp_entry_valid_code_cannot_be_bypassed_by_a_grade():
+    for code, expected in ((-3, "NO-GO"), (-2, "WAIT"), (0, "WAIT"), (1, "WAIT"), (2, "WAIT")):
+        out = resolve_final_verdict(
+            "BTCUSDT", _main(mcp_entry_valid_code=code), _dual(),
+            regime=_trend(),
+            risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+            advanced={"gate": {"execute": True}},
+        )
+        assert out.state == expected
+        assert out.executable is False
+        assert out.entry is None and out.stop is None and out.target is None
+
+
+def test_svp_no_trade_reason_is_visible_and_blocks_execution():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(mcp_no_trade_reason_code=16), _dual(),
+        regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "WAIT"
+    assert "svp_no_trade_reason" in out.blockers
+    assert any("R:R不足" in warning for warning in out.warnings)
+
+
+def test_svp_haldro_state_pack_conflict_is_hard_block():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(sub_haldro_state_pack=3), _dual(valid_code=2),
+        regime=_trend(),
+    )
+    assert out.state == "NO-GO"
+    assert "haldro_state_conflict" in out.blockers
+
+
 def test_short_execution_uses_short_geometry_and_geometric_rr():
     out = resolve_final_verdict(
         "BTCUSDT",
@@ -317,3 +351,86 @@ def test_svp_conflict_text_forces_wait_even_when_legacy_grade_is_a():
     assert out.state == "WAIT"
     assert not out.executable
     assert "svp_wait_language" in out.blockers
+
+
+def test_svp_machine_packs_gate_final_verdict():
+    out = resolve_final_verdict(
+        "BTCUSDT",
+        _main(
+            mcp_trigger_pack=1203116,
+            mcp_evidence_pack=202609052111,
+            mcp_regime_pack=10278,
+            mcp_contract_pack=171011,
+            mcp_struct_pack=823221,
+            mcp_quality_code=0,
+            mcp_cvd_method_code=1,
+        ),
+        _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "GO-A"
+
+
+def test_stale_trigger_pack_cannot_execute():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(mcp_trigger_pack=1203106), _dual(),
+        regime=_trend(), risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "WAIT"
+    assert "trigger_pack_stale" in out.blockers
+
+
+def test_invalid_indicator_contract_is_hard_block():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(mcp_contract_pack=171002), _dual(),
+        regime=_trend(), risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "NO-GO"
+    assert "indicator_contract" in out.blockers
+
+
+def test_quality_code_and_cvd_method_are_visible_wait_reasons():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(mcp_quality_code=2, mcp_cvd_method_code=0), _dual(),
+        regime=_trend(), risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "WAIT"
+    assert "svp_quality_code" in out.blockers
+    assert "cvd_not_for_decision" in out.blockers
+
+
+def test_aggregated_coverage_and_oi_quality_are_consumed():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(), _dual(
+            coverage_feed_mode=2,
+            stale_venue_count=1,
+            cvd_quality_code=0,
+            oi_present=True,
+            oi_agreement_pct=40,
+        ), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "WAIT"
+    assert {"coverage_feed_fallback", "stale_venue", "cvd_quality_unavailable", "oi_agreement_low"}.issubset(out.blockers)
+
+
+def test_abnormal_coverage_is_hard_block_but_non_crypto_does_not_use_it():
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(), _dual(coverage_feed_mode=4), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert out.state == "NO-GO"
+    assert "coverage_feed_abnormal" in out.blockers
+
+    metal = resolve_final_verdict(
+        "XAUUSD", _main(), {"asset_is_crypto": False, "coverage_feed_mode": 4},
+        regime=_trend(), risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": True}},
+    )
+    assert metal.state == "GO-A"

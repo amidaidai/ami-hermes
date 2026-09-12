@@ -93,6 +93,26 @@ def _sym_tf(symbol: str):
     return (s, "15", "15m")
 
 
+def _hold_analysis_lease(symbol: str) -> None:
+    """截图是分析链的一部分：持有/续期分析租约。
+
+    20260911：截图 + 之后读行动格/Data Window 是一个连续动作。后台续航若在这两步
+    之间切周期，截图与读数就不同源。这里把租约续到至少 6 分钟，让后台任务让路。
+    只在需要时续期，避免把租约无谓拉长。
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from tv_data_bridge import analysis_lease_status, begin_analysis_lease
+        status = analysis_lease_status()
+        remaining = float(status.get("remaining_seconds") or 0.0) if status.get("active") else 0.0
+        if remaining < 300.0:
+            begin_analysis_lease(
+                max(6.0, remaining / 60.0 + 1.0),
+                note="tv_screenshot", symbol=symbol)
+    except Exception:
+        pass
+
+
 async def _capture(symbol: str, *, reuse_verified: bool = False) -> str | None:
     if not SERVER_SCRIPT.exists():
         print(f"[tv_screenshot] TV MCP server 未找到: {SERVER_SCRIPT}", file=sys.stderr)
@@ -113,6 +133,7 @@ async def _capture(symbol: str, *, reuse_verified: bool = False) -> str | None:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from tv_data_bridge import tv_collection_lock
     with tv_collection_lock(timeout=60):
+      _hold_analysis_lease(symbol)
       async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()

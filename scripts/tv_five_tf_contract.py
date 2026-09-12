@@ -172,6 +172,14 @@ def validate_five_tf_payload(
         for tf, record in timeframes.items()
         if (reason := _record_validation_reason(symbol, tf, record))
     }
+    # Context updated_at is the card save time, not the observation time.
+    # Never rejuvenate compact observations when a full card is saved again.
+    if payload.get("source") == "inherited_context":
+        for tf, record in timeframes.items():
+            observed = _parse_timestamp(record.get("tv_timestamp"))
+            observed_age = None if observed is None else (now_utc - observed).total_seconds()
+            if observed_age is None or not -60.0 <= observed_age <= max_age_minutes * 60.0:
+                invalid_timeframes[tf] = "继承观测时间戳缺失/过期/未来"
     present = [tf for tf in REQUIRED_TIMEFRAMES if tf in timeframes and tf not in invalid_timeframes]
     missing = [tf for tf in REQUIRED_TIMEFRAMES if tf not in timeframes]
     usable = identity_valid and fresh and not missing and not invalid_timeframes

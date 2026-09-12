@@ -103,7 +103,7 @@ def test_execution_pack_cross_validates_own_decoders():
 def test_rr_gate_alignment():
     assert "过硬闸" in C.rr_gate(2.0)
     assert "过硬闸" in C.rr_gate(3.4)
-    assert "仅B/C直通" in C.rr_gate(1.5)
+    assert "仅B/C观察候选·不授权" in C.rr_gate(1.5)
     assert "不足" in C.rr_gate(1.2)
     assert C.rr_gate(None) == "R:R缺失"
     assert C.RR_HARD_MIN == 2.0 and C.RR_BC_MIN == 1.5

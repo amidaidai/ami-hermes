@@ -104,4 +104,5 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    print("已退役·生产权威为 keylevel_guard.py", flush=True)
+    raise SystemExit(0)

@@ -157,7 +157,5 @@ def log(m):
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main_loop())
-    except KeyboardInterrupt:
-        log("Shutdown")
+    print("已退役·生产权威为 keylevel_guard.py", flush=True)
+    raise SystemExit(0)

@@ -505,9 +505,14 @@ def _inject_tv_live_pine(engine_data: dict, cache: dict) -> bool:
             tables.append({"name": "Volume Aggregated", "tables": [{"rows": cache["sub_table_raw"]}]})
     if not studies and not tables:
         return False
-    engine_data["_tv_pine"] = {"studies": studies, "tables": tables}
-    # 防止同一轮前段读取的cron缓存继续覆盖刚验证的tv_live数据。
     from copy import deepcopy
+    engine_data["_tv_pine"] = {"studies": studies, "tables": tables}
+    if isinstance(cache.get("chart_evidence"), dict):
+        engine_data["_chart_evidence"] = deepcopy(cache["chart_evidence"])
+        price_context = cache["chart_evidence"].get("price_context")
+        if isinstance(price_context, dict):
+            engine_data["_chart_price_context"] = deepcopy(price_context)
+    # 防止同一轮前段读取的cron缓存继续覆盖刚验证的tv_live数据。
     from source_health import payload_timestamp
     indicators = cache.get("indicators") or {}
     engine_data["_tv_pine"]["_evidence"] = deepcopy({
@@ -1039,7 +1044,12 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
         "schema_version": 20260905, "symbol": symbol, "main": candidate,
         "dual": dual, "regime": asdict(regime) if regime else None,
         "risk": risk, "advanced": engine_data.get("_advanced"),
+        "chart_evidence": engine_data.get("_chart_evidence") or
+            (engine_data.get("_tv_cache") or {}).get("chart_evidence"),
     })
+    chart_evidence = engine_data.get("_chart_evidence")
+    if chart_evidence is None and isinstance(engine_data.get("_tv_cache"), dict):
+        chart_evidence = engine_data["_tv_cache"].get("chart_evidence")
     final = resolve_final_verdict(
         symbol,
         candidate,
@@ -1047,6 +1057,7 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
         regime=regime,
         risk=risk,
         advanced=engine_data.get("_advanced"),
+        chart_evidence=chart_evidence,
     ).to_dict()
     engine_data["_final_verdict"] = final
     engine_data["_final_verdict_locked"] = True
@@ -1248,10 +1259,10 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
                            ("OI", "oi_state"), ("前位", "prev_level"), ("现位", "now_level")]:
             if dmi_rows.get(_src):
                 main[_dst] = dmi_rows[_src]
-        # v13 把 入场/止损/目标/R:R 折进了「风控」行 → 拆出来喂给下游，
-        # 否则 entry/stop/target 全空，卡片只能写「等待触发」。
+        # 定版把 入场/止损/目标 折进「风控」行给人看；执行三件套只认后面的 MCP DW 导出。
+        # 「风控·观察」的解析价只进 candidate_*，不能当 Entry。
         _risk = TVC.parse_risk_row(main["risk"])
-        if main["risk_label"] == "风控·观察":
+        if main["risk_label"] == TVC.SVP_OBSERVATION_LABEL:
             for key in ("entry", "stop", "target", "rr"):
                 main["candidate_" + key] = _risk.get(key)
             main["candidate_source"] = "SVP风控·观察"
@@ -1259,14 +1270,17 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
             main["stop_atr"] = _risk["stop_atr"]
         if _risk.get("rr") is not None:
             main["rr_ratio"] = _risk["rr"]
-        # 行动格 v2 字段：结论/方向/进场/止损/目标/核对/磁吸↑/磁吸↓。
-        # MCP Side/Grade/Entry/Stop/Target/Quality 只作稳定读取兜底与交叉校验。
+        # 现行行：方向/磁吸/结论。进场/止损/目标/核对只兼容历史缓存，不得覆盖风控解析。
         for src_key, dst_key in [
-            ("方向", "direction_text"), ("进场", "entry"), ("止损", "stop"),
-            ("目标", "target"), ("核对", "check"), ("磁吸↑", "magnet_up"),
+            ("方向", "direction_text"), ("磁吸↑", "magnet_up"),
             ("磁吸↓", "magnet_down"), ("结论", "conclusion"),
         ]:
             if dmi_rows.get(src_key):
+                main[dst_key] = dmi_rows[src_key]
+        for src_key, dst_key in [
+            ("进场", "entry"), ("止损", "stop"), ("目标", "target"), ("核对", "check"),
+        ]:
+            if dmi_rows.get(src_key) and not main.get(dst_key):
                 main[dst_key] = dmi_rows[src_key]
 
     if tv_vals:
@@ -1860,6 +1874,12 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     # v9: TV双指标直出卡（优先：主+副指标数据齐全时使用）
     tv_main = engine_data.get("_tv_main", {})
     tv_main = _project_final_verdict(tv_main, final_verdict)
+    if isinstance(engine_data.get("_chart_evidence"), dict):
+        tv_main["chart_evidence"] = engine_data["_chart_evidence"]
+        price_context = engine_data["_chart_evidence"].get("price_context")
+        if isinstance(price_context, dict):
+            tv_main.setdefault("high", price_context.get("day_high"))
+            tv_main.setdefault("low", price_context.get("day_low"))
     tv_main["_decision_regime"] = engine_data.get("_decision_regime") or {}
     tv_sub = engine_data.get("_tv_sub", {})
     # AggVol is crypto-only. Non-crypto cards must not leak its estimated CVD,
@@ -3090,6 +3110,10 @@ def _merge_tv_five_tf_into_engine(engine_data: dict, snapshot: dict) -> None:
     incoming = snapshot.get("engine_klines") or {}
     if not isinstance(incoming, dict):
         return
+    if snapshot.get("scope") == "inherited_context":
+        # Only the background may be inherited.  The two execution layers must
+        # retain this run's collector data, never a four-hour-old close/bias.
+        incoming = {tf: row for tf, row in incoming.items() if tf in {"D", "4h", "1h"}}
     existing = engine_data.setdefault("klines", {})
     if not isinstance(existing, dict):
         existing = {}
@@ -4013,6 +4037,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         from pipeline_router import route_pipeline
         pipeline_steps = route_pipeline(symbol, effective_mode)
         print(f"📋 管线路由：{len(pipeline_steps)}步 → {' → '.join(pipeline_steps)}")
+    except ValueError:
+        # Invalid contracts are not an unavailable provider: never execute a fallback.
+        raise
     except Exception as e:
         print(f"⚠️ 管线路由不可用({e})·使用默认步骤")
         pipeline_steps = ["tv","binance","card"] if effective_mode != "full" else ["tv","macro","x_sent","card"]

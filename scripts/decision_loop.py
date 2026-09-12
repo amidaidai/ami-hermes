@@ -13,7 +13,19 @@ import math
 from typing import Any
 
 from decision_regime import DecisionRegime
-from tv_indicator_contract import SVP_AUTHORIZATION_LABEL, SVP_FORBIDDEN_LABELS
+from tv_indicator_contract import (
+    SVP_AUTHORIZATION_LABEL,
+    SVP_FORBIDDEN_LABELS,
+    decode_haldro_state,
+    decode_no_trade,
+    decode_trigger_pack,
+    decode_regime_pack,
+    decode_contract_pack,
+    decode_evidence_pack,
+    decode_struct_pack,
+    decode_quality_code,
+    decode_feed_mode,
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +49,7 @@ class FinalVerdict:
     decision_id: str = ""
     watch_stop: float | None = None
     watch_target: float | None = None
+    chart_evidence_status: str = "unavailable"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -151,6 +164,7 @@ def resolve_final_verdict(
     regime: DecisionRegime | None = None,
     risk: dict[str, Any] | None = None,
     advanced: dict[str, Any] | None = None,
+    chart_evidence: dict[str, Any] | None = None,
 ) -> FinalVerdict:
     """把SVP候选、HALDRO、体制和风控合并为唯一可执行裁决。"""
     # Hash the original evidence, before defaults/normalization. JSON key order
@@ -161,6 +175,8 @@ def resolve_final_verdict(
         "regime": asdict(regime) if regime is not None else None,
         "risk": risk, "advanced": advanced,
     }
+    if chart_evidence is not None:
+        identity_payload["chart_evidence"] = chart_evidence
     decision_id = hashlib.sha256(json.dumps(
         identity_payload, ensure_ascii=False, sort_keys=True,
         separators=(",", ":"), allow_nan=False,
@@ -181,6 +197,16 @@ def resolve_final_verdict(
     hard: list[str] = []
     wait: list[str] = []
     warnings: list[str] = []
+
+    chart_status = str((chart_evidence or {}).get("status") or "unavailable")
+    chart_errors = (chart_evidence or {}).get("identity_errors") or []
+    if chart_evidence is not None:
+        if chart_status == "identity_mismatch" or chart_errors:
+            hard.append("chart_identity")
+        elif chart_status != "verified":
+            # A partial/visual-only chart can support observation, never GO-A.
+            wait.append("chart_evidence")
+            warnings.append("chart_evidence:" + chart_status)
 
     data_grade = str(main.get("data_grade") or "A")
     snapshot_age_sec = _number(main.get("snapshot_age_sec"), 0.0)
@@ -216,8 +242,120 @@ def resolve_final_verdict(
     if _svp_requires_wait(main):
         wait.append("svp_wait_language")
 
+    # Consume the Pine machine codes before any legacy text/grade fallback.
+    # These are the indicator's explicit state bus: a numeric A-grade must not
+    # resurrect an entry that SVP marked invalid, pending, or observation-only.
+    entry_valid_raw = main.get("mcp_entry_valid_code")
+    if entry_valid_raw not in (None, ""):
+        entry_valid = int(_number(entry_valid_raw, 0.0))
+        if entry_valid <= -3:
+            hard.append("svp_entry_forbidden")
+        elif entry_valid <= 0:
+            wait.append("svp_entry_invalid")
+        elif entry_valid == 1:
+            wait.append("svp_trigger_pending")
+        elif entry_valid == 2:
+            wait.append("svp_manual_candidate")
+
+    no_trade_raw = main.get("mcp_no_trade_reason_code")
+    no_trade_reasons = decode_no_trade(no_trade_raw)
+    if no_trade_reasons:
+        warnings.extend(f"svp_no_trade:{reason}" for reason in no_trade_reasons)
+        wait.append("svp_no_trade_reason")
+
+    # Consume the remaining SVP evidence buses whenever they are present.  A
+    # legacy payload may omit them, but a supplied malformed/stale bus fails
+    # closed instead of silently becoming decorative card text.
+    trigger = decode_trigger_pack(main.get("mcp_trigger_pack")) if main.get("mcp_trigger_pack") not in (None, "") else None
+    if main.get("mcp_trigger_pack") not in (None, ""):
+        if trigger is None:
+            wait.append("trigger_pack_invalid")
+        else:
+            if not trigger["fresh"]:
+                wait.append("trigger_pack_stale")
+            if trigger["signalState"] == -2:
+                hard.append("trigger_pack_forbidden")
+            elif trigger["signalState"] in (-1, 0, 1, 2, 4):
+                wait.append("trigger_pack_pending")
+            if trigger["triggerCode"] == 0:
+                wait.append("trigger_pack_no_signal")
+
+    evidence = decode_evidence_pack(main.get("mcp_evidence_pack")) if main.get("mcp_evidence_pack") not in (None, "") else None
+    if main.get("mcp_evidence_pack") not in (None, ""):
+        if evidence is None or evidence["versionDate"] < 20260905:
+            wait.append("evidence_pack_invalid")
+        else:
+            if not evidence["locationValid"]:
+                wait.append("evidence_location")
+            if not evidence["triggerConfirmed"]:
+                wait.append("evidence_trigger")
+            if not evidence["barClosed"]:
+                wait.append("evidence_bar_open")
+            if evidence["direction"] == 0:
+                wait.append("evidence_no_direction")
+
+    contract = decode_contract_pack(main.get("mcp_contract_pack")) if main.get("mcp_contract_pack") not in (None, "") else None
+    if main.get("mcp_contract_pack") not in (None, "") and (contract is None or not contract["valid"]):
+        hard.append("indicator_contract")
+
+    regime_pack = decode_regime_pack(main.get("mcp_regime_pack")) if main.get("mcp_regime_pack") not in (None, "") else None
+    if main.get("mcp_regime_pack") not in (None, ""):
+        if regime_pack is None or regime_pack["regimeCode"] not in (1, 2, 3, 4, 5):
+            wait.append("regime_pack_invalid")
+        elif regime_pack["confidence"] < 50:
+            wait.append("regime_pack_low_confidence")
+
+    struct_pack = decode_struct_pack(main.get("mcp_struct_pack")) if main.get("mcp_struct_pack") not in (None, "") else None
+    if main.get("mcp_struct_pack") not in (None, "") and struct_pack is None:
+        wait.append("struct_pack_invalid")
+
+    quality = decode_quality_code(main.get("mcp_quality_code")) if main.get("mcp_quality_code") not in (None, "") else None
+    if quality is not None and quality["raw"]:
+        warnings.append(f"svp_quality_code:{quality['raw']}")
+        wait.append("svp_quality_code")
+
+    cvd_method = _number(main.get("mcp_cvd_method_code"), -1.0)
+    if cvd_method == 0:
+        wait.append("cvd_not_for_decision")
+    elif cvd_method not in (-1, 1, 2):
+        wait.append("cvd_method_unknown")
+
     is_crypto = bool(dual.get("asset_is_crypto", str(symbol).upper().endswith("USDT")))
+    if is_crypto:
+        feed_raw = dual.get("coverage_feed_mode", main.get("sub_coverage_feed_mode"))
+        if feed_raw not in (None, ""):
+            feed = decode_feed_mode(feed_raw)
+            if not feed["usable"]:
+                if feed["abnormal"]:
+                    hard.append("coverage_feed_abnormal")
+                else:
+                    wait.append("coverage_feed_single_source")
+            elif feed["fallback"]:
+                wait.append("coverage_feed_fallback")
+                warnings.append("coverage_feed_fallback")
+        stale_raw = dual.get("stale_venue_count", main.get("sub_stale_venue_count"))
+        if stale_raw not in (None, "") and _number(stale_raw, 0.0) > 0:
+            wait.append("stale_venue")
+            warnings.append(f"stale_venue:{int(_number(stale_raw, 0.0))}")
+        cvd_quality_raw = dual.get("cvd_quality_code", main.get("sub_cvd_quality_code"))
+        if cvd_quality_raw not in (None, "") and _number(cvd_quality_raw, 0.0) <= 0:
+            wait.append("cvd_quality_unavailable")
+        oi_present = dual.get("oi_present", main.get("sub_oi_present"))
+        oi_agreement = dual.get("oi_agreement_pct", main.get("sub_oi_agreement_pct"))
+        if oi_present is True and oi_agreement not in (None, "") and _number(oi_agreement, 0.0) < 50:
+            wait.append("oi_agreement_low")
+
     valid_code = int(_number(dual.get("valid_code"), 0.0))
+    haldro_state_raw = main.get("sub_haldro_state_pack")
+    if is_crypto and haldro_state_raw not in (None, ""):
+        haldro_state = int(_number(haldro_state_raw, 0.0))
+        if haldro_state == 3:
+            hard.append("haldro_state_conflict")
+        elif haldro_state in (0, 4):
+            wait.append("haldro_state_" + ("invalid" if haldro_state == 0 else "degraded"))
+        if haldro_state not in (0, 1, 2, 3, 4):
+            wait.append("haldro_state_unknown")
+            warnings.append("haldro_state_unknown:" + decode_haldro_state(haldro_state))
     conflict = bool(dual.get("conflict"))
     weak_haldro = False
     if is_crypto:
@@ -412,6 +550,14 @@ def resolve_final_verdict(
             else "风控通过",
         ),
     }
+    if chart_evidence is not None:
+        gates["chart_evidence"] = gate(
+            "red" if "chart_identity" in hard
+            else "yellow" if chart_status != "verified" else "green",
+            "图表身份不匹配" if "chart_identity" in hard
+            else "完整图表证据未闭环" if chart_status != "verified"
+            else "图表身份/ICT证据通过",
+        )
     if main.get("tv_five_tf_required"):
         gates["tv_five_tf"] = gate(
             "green" if "tv_five_tf" not in hard else "red",
@@ -442,4 +588,5 @@ def resolve_final_verdict(
         watch_stop=watch_stop,
         watch_target=watch_target,
         decision_id=decision_id,
+        chart_evidence_status=chart_status,
     )

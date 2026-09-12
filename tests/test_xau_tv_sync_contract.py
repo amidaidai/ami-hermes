@@ -107,6 +107,31 @@ def test_xau_pair_rejects_missing_capture_batch_ids():
     assert result["batch"]["usable"] is False
 
 
+def test_xau_main_action_cache_does_not_require_subindicator_操作_row():
+    """主指标行动格没有「操作」行（那是副指标）。周末 X·等开市 也必须能配对发布。"""
+    now = datetime.now(TZ)
+    live = _live(now.isoformat())
+    live["decision_table"] = {
+        "位置": "价在VA内",
+        "结论": "X 低流动 · 等开市",
+        "方向": "观望 · 走弱·收缩",
+        "路径": "失效×→低流动性",
+        "风控": "禁做·不出价",
+    }
+    result = xau_tv_sync.validate_xau_outputs(_state(now.isoformat()), live, now=now)
+    assert result["live"]["action_table_complete"] is True
+    assert result["usable"] is True
+
+
+def test_xau_main_action_cache_rejects_missing_core_rows():
+    now = datetime.now(TZ)
+    live = _live(now.isoformat())
+    live["decision_table"] = {"结论": "观望", "方向": "观望"}
+    result = xau_tv_sync.validate_xau_outputs(_state(now.isoformat()), live, now=now)
+    assert result["live"]["action_table_complete"] is False
+    assert result["usable"] is False
+
+
 def test_xau_pair_rejects_capture_timestamps_that_are_too_far_apart():
     base = datetime.now(TZ)
     state = _state(base.isoformat())
