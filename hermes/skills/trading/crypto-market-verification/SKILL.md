@@ -44,6 +44,16 @@ category: trading
 - 触发消息格式：`↑/↓ BTC到价：现价→请看图。` 后续需要重新拉取Binance价格、TV行动格和截图再判断，不把触价本身写成交易结论。
 - 用户仅手动交易：任何提醒、监控或条件触发都不得调用下单工具。
 
+## 非Binance符号与交易所归属核验（GEUSDT.P类）
+
+TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_set_symbol`输入裸符号，再读回`chart_get_state`确认实际交易所；例如`GEUSDT.P`会自动解析为`BYBIT:GEUSDT.P`，而`BINANCE:GEUSDT.P`可能显示“此商品不存在”。品种归属确认后，才选择对应交易所的价格、K线、Funding、OI和多空数据源。
+
+- 若Binance返回`Invalid symbol`：状态写为`unavailable`，不可把该品种称为Binance已验证；不要继续把Binance衍生品空响应当作数据。
+- 若TradingView已成功解析其他交易所：以该交易所的公开API交叉验证，并在卡片首段标明“实际交易所/来源”。
+- 副指标聚合覆盖为`0/5`、`量源缺`或`回退单图`时，HALDRO只能降权/否决，不得升级方向或生成执行价位。
+- 低流动性合约还要把24h成交额、价差和绝对成交量纳入风险结论；薄量+Entry Valid Code=0时，主推只能WAIT/NO-GO。
+- 现场解析与交叉验证证据见`references/non-binance-perp-symbol-verification.md`。
+
 ## Binance数据状态契约
 
 - `live`：本轮 API 成功返回，时间戳可对应当前更新；

@@ -115,7 +115,28 @@ for r in json.loads(urllib.request.urlopen(u, timeout=30).read()):
 - ⚠️ `openrouter/free` 动态路由本次落到 `inclusionai/ling-3.0-flash-sante:free`——不可控，别放进持久 MoA 预设。
 - 真免费共 21 个（含 2 个 Lyria 音乐、1 个 content-safety，与交易无关）。
 
-**选型建议**: 想要"大且稳"固定用 nemotron-3-super-120b;想要最大Context用 nemotron-3-ultra-550b(1M);接受动态路由用 /free 但需接受可能掉到小模型/踩坑模型(inkling/gemma/glm限速会白等)。
+**2026-09-12 重探（付费额度与会话路由分开看）**
+
+完整清单与可复跑探测形状见 `references/live-channel-inventory-20260912.md`。精华：
+
+- 本会话已路由 `xai-oauth` / `grok-4.6`（工具链通）；`config.yaml` 仍写 `openai-codex` / `gpt-5.6-luna`。**以会话 Model/Provider 为准**，不要把 YAML 默认当成正在跑的主模型。
+- OpenRouter `GET /api/v1/key` 当时 `limit_remaining=0`：付费模型 403，**只有 `:free` 还能打**。DeepSeek 官方 402；b.ai balance=0；Codex 429 冷却；Ollama `.env` 无 key。目录里的旗舰在余额为 0 时是不可用，不是候选。
+- 免费里可钉：`nvidia/nemotron-3-super-120b-a12b:free`（tools=1）、`nvidia/nemotron-3.5-lightning:free`（1M、tools=1）。不要钉 `openrouter/free`（落到 `poolside/laguna-xs-2.1:free`）、`nemotron-3-ultra-550b:free`（tools=0）、MoA 里残留的 `minimax/minimax-m3:free`（已转付费）。
+- `auxiliary.*` 全 `auto` 时不要把主模型切到免费池，压缩/视觉会跟着变差。
+- 交易主模型当时推荐：正在用的 Grok 4.6；Luna 冷却结束后可回驾驶舱。免费只做 fallback/委派，禁出实盘卡。
+- **同日晚 19 时复核（以本条为准）**：路由已到 `custom:b.ai` / `deepseek-v4.1-flash`（工具+视觉双通、会话均值 5.7s / 16 次）；`openai-codex` 当日 15:53 打满 429；OpenRouter 仍只有 `:free` 可打；DeepSeek 直连 402、ollama-cloud 无 key、nous token 失效、copilot 的 `GITHUB_TOKEN` 是 classic PAT（不支持）。辅助槽位耦合与中转身份陷阱见「全通道体检与辅助槽位解耦」，明细见 `references/auxiliary-slot-and-relay-identity-20260912.md`。
+
+**2026-09-13 重探（当前免费池 19 个；以本条为准）**
+
+18 项现场探针（工具 shape + 延迟 + 真图夹具）明细见 `references/free-pool-and-relay-capability-20260913.md`。结论：
+
+- 保留 3 席：`nex-agi/nex-n2.5-pro:free`（1.7s，工具✅，能读图）· `nvidia/nemotron-3.5-lightning:free`（1M，工具✅，已在 MoA AMI 参考位）· `inclusionai/ling-3.0-flash-fin:free`（2.7s，金融专精）。
+- 摘掉：`nvidia/nemotron-3-ultra-550b-a55b:free`（端点坏，见上）。429 组：`poolside/laguna-xs-2.1` · `liquid/lfm-2.5-2.6b` · `google/gemma-4-31b-it`。`thinkingmachines/inkling*` 仍 403。
+- 慢但可用（只当最后兜底／禁出实盘卡）：`nvidia/nemotron-3-super-120b-a12b:free`（需 `max_tokens≥1500`；图 404 不支持图像输入、会话均值 32.6s）· `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`（真读图且准，但 67.6s）· `dots-studio/dots-3-note-preview:free`（真读图准，25s）。
+- 免费读图这条路**能用但不可日常**：最快的真读图免费模型也要 25s，且读回的是价格轴游标值（77,348.7）而非最新收盘，所以视觉槽仍应钉中转/订阅通道，免费只做最后一道。
+- 本机 OpenRouter 仍是 `limit=1 / limit_remaining=0`（key 级限额用满，账户 `credits` 15），付费全 403，只有 `:free` 可打。
+
+**选型建议**: 想要"大且稳"固定用 nemotron-3-super-120b;想要最大Context用 nemotron-3.5-lightning（ultra 当时 tools=0，不当主）;接受动态路由用 /free 但需接受可能掉到小模型/踩坑模型(inkling/gemma/glm限速会白等)。
 
 ## Weak-model档位保真 (prefill注入, 2026-08-29 验证)
 
@@ -309,6 +330,104 @@ When auditing or designing a MoA preset, distinguish “unset” from an explici
 - **Fallback repair:** a configured 401/403 or protocol failure is a broken fallback, even if `hermes auth list` shows a credential. Repair and re-probe before promoting it.
 - **Vision:** keep a separately validated vision route if the primary has not passed the TradingView image fixture.
 
+## 全通道体检与辅助槽位解耦（2026-09-12 晚 实证）
+
+用户问「是什么模型 / 我们有哪些模型 / 谁能当主模型 / 路由怎么排 / 全面检查」时，按这条顺序取证，每步落成表行，别只报配置：
+
+**默认只读。** 用户说「你看一下 / 不要改我的东西」= 只取证 + 只建议：不改 `config.yaml`、不改 `cron/jobs.json`、不写 prefill。报告结尾明确写「一个字都没动」，把要改的项列成「若你同意改」的清单等授权。
+
+**先报 P0，再答被问的题。** 本轮用户问的是「免费池保留哪几个」，但真正更急的发现是配置层主模型（`gpt-6-astra`@b.ai）带工具必 400 —— 每条消息都先失败两轮。这类发现放在答案最前面报，别埋在表格里；只答被问项等于让用户继续在坏的配置上跑。
+
+1. 配置层：`model`、`fallback_providers`、`delegation`、`auxiliary.*`、`moa`、`providers`、`custom_providers` —— 逐项标注「被哪个槽位引用」。
+2. 凭据层 `auth.json` → `credential_pool`：**有条目 ≠ 可用**。看 `last_status` / `failure_reason` / `last_error_reason`（`usage_limit_reached`、`bill*`、`rate_limit`）；`providers.<name>.last_auth_error.relogin_required: true` = 该登录已死。打印时对 key/token 字段截断。
+3. 每通道真实目录：DeepSeek `GET /models`；xAI `GET /v1/models`（OAuth token 取 `auth.json`，先看 `expires_at_ms`）；Codex `~/.codex/models_cache.json`；中转 `GET {base}/v1/models`；OpenRouter `GET /models`。
+4. 会话实际路由 vs YAML 默认**必须分开报**（本机常年不一致：`config.yaml` 写 `openai-codex/gpt-5.6-luna`，会话却在 `custom:b.ai`）。系统提示里的 Model/Provider 才是正在跑的。
+5. 能力三探：工具调用 shape、真实截图读图（带外部真值）、档位记忆注入。
+6. 延迟取 `logs/agent.log` 的 `API Call #n ... provider=... model=... latency=` 按 provider/model 聚合；探针延迟只证可达。
+7. 故障时间线：`logs/errors.log` 按**当天日期**过滤 402/429/403/401/`fallback`/`AuthenticationError` —— 用它判断「今天哪个槽位真的崩了」，比探针更有说服力。
+
+可复跑：`scripts/channel_audit.py`（第 1–4 步 + 凭据与延迟汇总，默认只读）。
+
+### 辅助槽位 auto = 跟随主模型（P0 级耦合）
+
+`auxiliary.vision` / `auxiliary.compression` 的 `provider: auto` 会解析到**主模型 + 主 provider**。后果不是「变差一点」，而是**一起挂**：2026-09-12 15:53 Codex `usage_limit_reached` 时，日志出现 `tools.vision_tools: Error analyzing image: 429 ...` —— 主模型额度打满，截图识别同时全灭。截图首行是这套分析卡的硬要求，所以：
+
+- 视觉槽**显式钉**到一个独立可用通道（`hermes config set auxiliary.vision.provider <p>` + `hermes config set auxiliary.vision.model <m>`），不让 auto 继承主模型配额；
+- 同理，压缩槽留在 auto 就等于烧主模型额度做摘要，主模型贵或额度紧张时必须显式换低成本通道。
+
+**配置后三层验证，缺一不算上线**：
+
+1. 解析层：Hermes venv 内 `from agent.auxiliary_client import resolve_vision_provider_client` → 返回 `(provider, client, model)`，确认与配置一致。（签名别搞混：`resolve_provider_client(p, m)` 是 `(client, resolved)` 二元组，视觉那个是三元组且参数可选。）
+2. 真图：用解析出的 client 直接发一张真实看盘截图，核对品种/周期/最后价/副窗名。
+3. 现场：当前会话调一次 `vision_analyze`，再看 `agent.log` 的 `tools.vision_tools: Image analysis completed (Xs)`：延迟与该通道实测一致、且**无 fallback / 429 告警**才算生效。
+
+### 中转（relay）“model 回显”不是身份
+
+中转端点对**目录外的模型名**常照样返回 200，且响应里的 `model` / `owned_by` 回显请求名（实测 b.ai 对不在其 47 个目录模型里的 `deepseek-v4-flash-vision-exp` 也回 200）。因此：
+
+- 中转里「模型能跑」**不能**证明该模型存在或身份正确；
+- cron / 脚本里钉的中转模型名「不报错」≠ 有效，别据此判定存活；
+- 中转可当主力吞吐，但**结论级判断要保留一条非中转通道（Codex / xAI OAuth）做交叉验证**，并在报告里写明这层信任边界。
+- **价目也拿不到，比身份更难**：这类中转线上节点通常只放行推理路径（`/pricing`、`/v1/pricing`、根路径 403 `HTTP node only allows access to inference API paths`），`GET /v1/models` 无价格字段，`POST /v1/chat/completions` 响应也不回成本（只有 `usage` token），单模型 `GET /v1/models/<id>` 还可能对**能用别名**回 `model_not_found`。所以「哪几个免费/打折」只能向用户要后台价目页，不能靠探测推断，更不许编单价。
+
+### 中转能力矩阵：reasoning_effort × function tools（2026-09-13 实证）
+
+中转「能跑」还要再分一层：**模型存在 ≠ 该模型在 `/v1/chat/completions` 上支持工具**。b.ai 实测：
+
+- `gpt-6-astra` 带 function tools + 非零 `reasoning_effort` **必然 HTTP 400**：
+  `Function tools with reasoning_effort are not supported for gpt-6-astra in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.`
+  危险性在于 `agent.reasoning_effort` 全局是 `medium`，所以把它设成 `model.default` 后**每条带工具的消息都先 400**：日志 `BadRequestError provider=custom:b.ai model=gpt-6-astra` → `Fallback to openai-codex/gpt-6-astra` → codex 429 → 才落到链上后段。用户看到的是「配置写 A、实际在跑 C」，根因是能力矩阵，不是路由写错。
+  **判定法**：同一个模型打两次 —— 带 `tools` 与不带 `tools`。只有带 `tools` 那次 400（报错提到 `reasoning_effort`）= 能力矩阵冲突；两次都 4xx = 模型/凭据问题。别归类成「模型不存在」。
+  **修法**：该槽位单独 `reasoning_effort: none`（工具可用、推理降级），或该 provider 改走 `/v1/responses`（`api_mode`）。**不要**靠 fallback 链兜 —— 那是每轮白付两次失败延迟。
+- b.ai 同目录其他模型无此限制，带 tools 全 200：`deepseek-v4.1-flash`(1.6s) · `deepseek-v4-pro`(2.3s，1M) · `qwen3.8-flash`(3.4s) · `kimi-k3`(4.5s) · `glm-5.3-flash`(6.9s)。`mimo-v2.5` 200 但**不调工具**（回「我无法访问本地文件系统」），只适合当 MoA 文本参考。
+
+### 「200 + 空 content」先查 token 预算，别下「不能读图」结论
+
+`200` + `content: ''` + `finish_reason: length` + `completion_tokens_details.reasoning_tokens` 占掉绝大部分预算 = **reasoning 吃光输出额度**，既不是模型坏，也不是不支持图像。b.ai `deepseek-v4.1-flash` 同一张 TV 截图：`max_tokens=2000` → 空 content；`max_tokens=6000` → 正确答出 `BTCUSDT.P / 15m / 77,348.7 / 1 副图 AggVol`（reasoning_tokens=606）。所以：
+
+- 探针预算起步：纯文本 ≥1500，读图 ≥3000；低于此拿到的是假阴性。
+- 判读顺序：`finish_reason` → `usage.completion_tokens_details.reasoning_tokens` → `content`；b.ai 还会回 `reasoning_content`，里面往往已有正确答案（本轮它把「左上角 BTCUSDT.P · 15 · Binance／开 77,366.8 高 77,383.5 低 77,340.1 收 77,348.7」写在 reasoning 里）。
+- 视觉槽挂在 reasoning 模型上时必须留足输出预算，否则分析卡首行截图识别会拿到空串。
+
+### 坏端点 vs 慢模型（200 也可能是死的）
+
+`HTTP 200 + ret_model=None + usage=null + finish_reason=None + 无 tool_calls`，且加大 `max_tokens` 后依旧如此 = **端点坏**，不是模型慢。实测 `nvidia/nemotron-3-ultra-550b-a55b:free` 连测两次都是这个形状（同 provider 其他模型正常），日志另见 `Upstream error from Nvidia: Service temporarily overloaded`。这类模型留在兜底链上只会白等一轮；报告里按「端点坏」写，别写成「免费大模型就是慢」。
+
+### 兜底链按实测延迟排序
+
+链上第一位是常态落点，最慢的不要排第一（实测：`nemotron-3.5-lightning:free` 探针 7.1s、会话均值 16.3s 却排第一，`nemotron-3-super-120b-a12b:free` 探针 2.1s 排第三）。改完读回 YAML 确认仍是 list 而非字符串（`hermes config set` 的已知陷阱）。
+
+## 「为什么不是 X 模型」问答路径（2026-09-13 实证）
+
+用户问「什么模型 / 为什么不是 GPT / 怎么不用 X」时，**先结论后证据、两段式**：一段配置层，一段可用性层。不要只答配置，也不要把配置意图说成正在跑。
+
+1. `config.yaml` 的 `model.default` + `model.provider` = 当前主模型；会话系统提示里的 Model/Provider 才是现场路由（两者常年不一致，分开报）。
+2. **`fallback_providers` 的语义是「故障转移」，不是「优先级链」**——主模型只要正常返回，链上第一位（哪怕正是用户想要的那个 GPT 型号）一次都不会被用到。这是「为什么不是 GPT」最常见的真正原因，必须先讲清，否则用户会以为配置写错了。
+3. 想要的通道当下能不能用，看 `hermes auth list`：它直接打出 `oauth … rate-limited usage_limit_reached (429) (13m 44s left)` / `api_key manual auth failed token_expired (401) (re-auth may be required)`，带倒计时与需重连提示，比先解析 `auth.json` 快。**凭据有条目 ≠ 可用**。
+4. 顺带交代该模型在系统里的**真实落点**，别让用户以为它被弃用了。本轮实测：GPT 分给 `image_gen: gpt-image-2-low` 与 MoA AMI 的参考位 `gpt-5.6-luna`，主聚合器是 `deepseek-v4.1-flash`。
+5. 结尾给可执行下一步，别停在解释：等 429 倒计时结束 / `hermes auth add <provider>` 修 401 / `hermes chat -m <model> --provider <p>` 临时钉住。
+
+**Pitfall**：429 剩余时间、`token_expired` 都是**取证当时的状态**，报告里要标成现场快照，不得写成长期结论（这类行一周内必然失真）。快照见 `references/model-choice-why-not-x-20260913.md`。
+
+## 成本分层与订阅窗口（用户偏好，2026-09-12）
+
+用户明确过两条方向，做路由推荐时必须带上：
+
+- **「中转要用免费和打折的型号」** —— 日常吞吐走中转里的低价快档；高价档只在深度复核、冲突裁决、关键位事件时用。
+- **「订阅是这个月买的」** —— 订阅通道在订阅期内要留在轮换里（别浪费），但**不当唯一主力**：额度一打满（429）会把整条链连同视觉一起拖垮。
+
+因此推荐要**先给结论 + 排好槽位**，不要罗列选项让用户挑：
+
+| 槽位 | 选谁 | 判据 |
+|---|---|---|
+| 主模型 | 中转里的低价快档（本轮 `deepseek-v4.1-flash`） | 会话实测延迟最低、工具+视觉双通、不吃订阅额度 |
+| 视觉槽 | 显式钉中转强档（本轮 `gpt-5.6-luna`） | 过真实图夹具；**禁 auto**（会跟随主模型配额） |
+| 第一兜底 | 订阅通道（本月 Codex） | 唯一非中转、可做独立交叉验证；额度用完即降级 |
+| 免费池 3 席 | 按现场三探排序 | 只兜文本/工具，不兜视觉 |
+| 高价档 | 仅深度复核 | 单价高、实测 10–60s |
+
+**拿不到价目就别编。** 中转的价目与身份都不能程序化获取（见下一条），所以「哪几个免费/打折」只能**向用户要后台价目页**（截图或粘贴），拿到再按真实单价重排；在拿到之前只给「贵/便宜」分层，并写明这是分层假设而非价目事实。完整模板与探测形状见 `references/cost-tiered-routing-preference.md`。
+
 ## Evidence format
 
 Report a compact table with: role, configured provider/model, credential state, live probe, tool probe, visual probe, actual route, and recommendation. Lead with one direct recommendation and clearly label unverified candidates.
@@ -329,6 +448,10 @@ Report a compact table with: role, configured provider/model, credential state, 
 - **Probe CN/multiline prompts with Python urllib, not curl.** `curl -d` with a multi-line Chinese prefill returns HTTP 400 (shell-escaped quotes/newlines). Use `execute_code` + `urllib` so Python builds the JSON body; read the key from `~/.hermes/.env` (not the workspace `.env`, which may hold a short stub); use `max_tokens>=650` or reasoning-token truncation mangles the reply. Reproducible recipe: `references/free-model-probe-and-cross-model-rules.md`.
 
 See `references/runtime-model-audit.md` for a reusable evidence template and the session-derived anomaly checks.
+See `references/auxiliary-slot-and-relay-identity-20260912.md` for the auxiliary-slot coupling evidence (vision 429 alongside a 429 main model), the pin-then-verify recipe, relay model-echo caveat, and the reusable TV screenshot ground truth. Runner: `scripts/channel_audit.py` (read-only config/credential/catalog/latency audit, `--latency` to add real session latency).
+See `references/live-channel-inventory-20260912.md` for the 2026-09-12 all-channel probe shape (paid vs free, session route vs YAML default, OpenRouter spend limit vs credits).
+See `references/cost-tiered-routing-preference.md` for the cost-tiered routing preference (relay cheap tier as main, subscription channel kept in rotation but never as sole main), the relay price-list blocker, and the tier-ordered recommendation template.
 See `references/model-head-to-head-and-vision-fixtures.md` for the 2026-09-10 head-to-head results, free-pool re-audit, DeepSeek V4.1-Flash facts/pricing, and real-session latency tables.
 Templates/scripts: `templates/model_evidence_fixture_prompt.txt` (same-task fixture prompt) and `scripts/head2head_probe.sh` (batch runner across provider/model pairs).
 See `references/luna-main-model-speed-and-memory-2026-09-02.md` for Luna tool-call validation, persistent-memory boundaries, and speed-tuning evidence.
+See `references/free-pool-and-relay-capability-20260913.md` for the 2026-09-13 free-pool re-scan (19 models), the b.ai per-model tool matrix, the reasoning×tools 400 transcript, and free-vision fixture scores. Runner: `scripts/relay_capability_probe.py` (relay/model capability probe: existence, tool support, reasoning×tools conflict, broken-endpoint detection).

@@ -26,6 +26,8 @@ Hermes 的模型选择可以自动化。社区提供了多种方式来：
 4. **视觉探针必须验证内容，不只验证 HTTP 200**：准备一张已知答案的图表夹具，要求返回品种、一个明确价格和指定窗格名称；只有关键字段都正确才算通过。
 5. **配置后检查运行时解析**：调用 `resolve_vision_provider_client()`，确认最终解析出的 provider/model 与配置一致，再重启 gateway 或开启新会话。
 6. **额度状态与模型能力分开判定**：额度/支付错误只说明当前通道不可用，不代表模型不支持视觉；切换到已有订阅通道或下一视觉后端，不要固化成“该模型不支持视觉”。
+7. **视觉槽不许留 `auto`**：`auxiliary.vision.provider: auto` 会解析到主模型 + 主 provider，主模型额度打满（429）时日志出现 `tools.vision_tools: Error analyzing image: 429 ...`——截图识别与主模型同时全灭（2026-09-12 Codex 实测）。固定做法：读写显式 `hermes config set auxiliary.vision.provider <p>` + `.model <m>`，再按「解析层（`resolve_vision_provider_client()` 返回三元组 `(provider, client, model)`）→ 真图夹具 → 现场 `vision_analyze` 日志无 429」三层验证；压缩槽同理（auto 会拿主模型额度做摘要）。证据与配方见 `model-routing-validation` 的「辅助槽位 auto = 跟随主模型」。
+8. **免费池（OpenRouter）兜不住视觉**：免费大模型发真实图片多半回 `404 No endpoints found that support image input`，所以视觉槽的兜底必须是非免费通道（订阅或中转），不能拿免费池充数。
 
 ### 棠溪推荐路由
 
@@ -69,6 +71,7 @@ Hermes 的模型选择可以自动化。社区提供了多种方式来：
 6. 不要因为某个 provider 认证失败就删除用户的自定义 provider 定义；只有它仍被活动路由引用时才移除活动引用。
 7. **同步写死了模型名的文案与任务记录**：`prefill_messages_file` 指向的 JSON 里可能写着「默认使用当前单模型 GPT-5.6 Luna」这类句子，cron 的 job 记录里也各带一份 `provider`/`model`。换主模型时必须同时扫这两处，否则控制指令与实际路由互相矛盾（2026-09-10 实测到 prefill 文案与 `config.yaml` 主模型不一致）。注意：`no_agent: true` 的 cron job 从不解析 `provider`/`model`，那里的残留值只是卫生问题，不要当死链报。
 8. **比对多个候选后必须做同题横评**：同一个证据包（含裁决陷阱）跑遍候选、统一 `--ignore-rules` 上下文，才能区分「都可用」的模型；仅连通/工具探针无法排序。方法与夹具见 `model-routing-validation` 的「同题横评与真实夹具」章节。
+9. **YAML 默认 ≠ 本会话路由；目录有 ≠ 能打。** 推荐前读系统提示 `Model/Provider`，再分通道探：OpenRouter 把 `GET /api/v1/key` 的 spend limit 与 `credits` 分开；DeepSeek/b.ai 要看余额不是看 `/models`。余额 0 / 402 / spend limit 用尽时，旗舰从候选里拿掉。免费只钉具体 `:free` id（首选 Super 120B），不要钉 `openrouter/free`。`auxiliary` 为 `auto` 时不要把主模型切到免费池。现场配方：`model-routing-validation` 的 `references/live-channel-inventory-20260912.md`。
 
 ## Auxiliary Compression 模型选择
 
@@ -865,6 +868,7 @@ def main():
 
 - **Freerouter 不应改 `model.default`** — 主模型是直连通道，Freerouter 只管理 `auxiliary.vision` 和 `delegation`。如果 patch_config 误改了 model.default，立即 `hermes config set model.default <原值>` 恢复。
 - **双 config.yaml** — Windows 上 `~/.hermes/config.yaml`（残留）和 `~/AppData/Local/hermes/config.yaml`（活跃）可能并存。Freerouter 的 `HERMES_HOME` fallback 必须是 `~/AppData/Local/hermes`。
+- **兜底链顺位按实测延迟排，不按名单直觉** — 链上第一位是常态落点。2026-09-12 实测 `nemotron-3.5-lightning:free` 会话均值 16.3s 却排第一、`nemotron-3-super-120b-a12b:free` 探针 2.1s 反倒排第三。改完必须读回 YAML 确认仍是 list（而非字符串），并确认链上第一个模型过工具探针。
 - **CLI config.yaml 和 Web UI 配置是独立的** — Freerouter 只更新 `config.yaml` 的 CLI 部分。Web UI 的默认模型和模型可见性需要额外通过 Hermes Studio API 设置。
 - **`hermes config set` 会改写 provider** -- 手动 `hermes config set model.default openrouter/xxx` 后，`model.provider` 可能被改写为 `custom:openrouter.ai` 而非 `openrouter`。需要再 `hermes config set model.provider openrouter` 修复。
 - 脚本中的 `restart_gateway()` 在 Windows 上用 `pkill` 会失败（无害，只是 log warning）。

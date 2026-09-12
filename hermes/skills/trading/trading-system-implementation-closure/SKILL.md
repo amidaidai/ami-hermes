@@ -11,7 +11,7 @@ Use this class-level skill when an audit repair must be implemented and proven. 
 
 ## Core workflow
 
-1. Re-check git status, current runtime, cron JSON, caches, TV state, and interpreter before using historical evidence.
+1. Re-check git status, current runtime, cron JSON, caches, TV state, and interpreter before using historical evidence. A pasted “audit complete / P0 fixed” narrative (user or prior agent) is a list of claims, not evidence — do not echo its tables; re-read the live files.
 2. Separate every finding into current, historical, already fixed, not reproduced, or not verified.
 3. Repair the load-bearing chain in order: data identity → freshness/semantic validity → normalized data → FinalVerdict → gate → every renderer/delivery consumer.
 4. For each root cause: add a minimal regression, run RED, patch production code, run GREEN, then run the relevant suite.
@@ -39,10 +39,17 @@ Use this class-level skill when an audit repair must be implemented and proven. 
 - Wrong chart identity, stale/missing timestamps, invalid layer evidence, or an empty candidate pool must fail closed without overwriting the last good cache.
 - Preserve field-level validity: missing POC must not erase valid OI/CVD/HALDRO.
 - Candidate levels are not approved levels. Use `TV candidates → human approval → keylevels_config.json → single guard → price event → quick analysis → FinalVerdict`.
+- `valid_until` auto-renewal of existing approved levels is not a structure refresh. Read each level's `source` and price; if `source` is an old candidate timestamp while `keylevels_candidates.json` is fresh, the pool was collected but not promoted. Do not report “关键位数据已更新” from TTL alone.
 
 ## Runtime and scheduled jobs
 
-Check heartbeat liveness and business health (`active_approved_levels > 0` and unexpired), not heartbeat alone. Pin unattended jobs with supported cron commands; verify model/provider/mode/script/workdir with JSON read-back and a real no-trigger or trigger-path run. Audit enabled `no_agent` jobs and their stored prompts for stale direct-push/direct-decision instructions; a local script defaulting to no push is not proof that the scheduled configuration is safe under a future environment change. Keep Telegram delivery behind a per-run explicit authorization and never let a scheduled helper bypass FinalVerdict.
+Check heartbeat liveness and business health, not heartbeat alone. `active_approved_levels > 0` is **ok**; all configured levels `enabled=false` (user silenced) is **idle**, not DEGRADED — do not auto-enable or auto-renew silenced levels. Zero configured/expired levels remain degraded. Pin unattended jobs with supported cron commands; verify model/provider/mode/script/workdir with JSON read-back and a real no-trigger or trigger-path run. Audit enabled `no_agent` jobs and their stored prompts for stale direct-push/direct-decision instructions; a local script defaulting to no push is not proof that the scheduled configuration is safe under a future environment change. Keep Telegram delivery behind a per-run explicit authorization and never let a scheduled helper bypass FinalVerdict.
+
+An analysis lease with `active=true` is not a lease if the holder PID is dead; background deferral may return 0 only when the published cache is still usable. After an analysis or screenshot run: `python scripts/tv_analysis_lease.py status`. If the holder PID is dead or `expires_at` has passed, `python scripts/tv_analysis_lease.py end` then `status` until the reason is `无分析租约`. Status may still echo the stale blob under `lease` when `active=false` / `租约已过期` — only `end` clears the file.
+
+Do not treat stale `monitor_heartbeat.json` / `.btc_daemon_heartbeat.json` as the current monitoring chain. The live chain is `keylevel_guard` + `btc_keylevel_guard_watchdog` + `keylevel_read_trigger` + `btc_tv_refresh`. Weeks-old daemon heartbeats are historical dead, not a P0 of the current guard.
+
+Historical sentinel scripts still on disk (`btc_keylevel_sentinel` / `rest_guard` / `ws_guard` / `btc_price_arrival_sentinel`) must fail closed at `__main__` (retired banner, exit 0) — they are state ② (present, not running), not deleted.
 
 Run a final live-artifact probe after tests: reload the real JSON files with the same validators used by production, check TTL/identity/completeness, and refresh stale caches before reporting runtime health. A green subprocess exit code or a fresh mtime is insufficient evidence.
 
@@ -56,13 +63,15 @@ Keep `max_pain` (minimum aggregate settlement payout), `max_oi_strike` (largest 
 
 Search and test every renderer. Fixing the quick renderer while `render_v96.py` still consumes raw `dual.direction_verdict` or legacy prices is not closure. Pass the same FinalVerdict to quick and full renderers and test WAIT, NO-GO conflict, and valid GO-A separately.
 
+SVP panel `风控` text (`入/止/标`) is display-only. Executable Entry/Stop/Target come only from MCP Data Window prices when `risk_label==风控`. Observation (`风控·观察`) goes to `candidate_*` / watch tuples. Renderers must never fall back `entry or position` — `位置` is structure, not an order.
+
 Completion audits must consume structured step results/statuses only. Never mark a source complete because its label (for example `CVD`, `黄金`, or `X情绪`) happens to appear in rendered text; card text is an output, not evidence. Include required non-crypto contracts such as XAU five-TF status in the source matrix as well as in the hard gate.
 
 ## Runtime hardening patterns
 
 - Separate semantic freshness from filesystem freshness. A shared health helper should parse explicit payload timestamps, validate identity and usability, and choose among mirrored files by capture timestamp; never use `mtime` as market evidence or let a fresh `usable=false` payload pass.
 - Bind paired artifacts with a per-run batch ID and a bounded timestamp skew. For a multi-stage market snapshot, stage all outputs, validate the pair, then publish with an atomic replace. On failure, preserve only a previously validated pair; otherwise publish an explicit stale/unavailable state.
-- Keep compatibility gates diagnostic-only. `check_gate()` may expose legacy eight-question statuses, but `go`/`execution_authorized` must be derived solely from a valid FinalVerdict. Surface legacy conflicts under diagnostic fields so a report cannot confuse them with execution authority.
+- Keep compatibility gates diagnostic-only. `check_gate()` may expose legacy eight-question statuses, but `go`/`execution_authorized` must be derived solely from a valid FinalVerdict. Surface legacy conflicts under diagnostic fields so a report cannot confuse them with execution authority. A GO/NO-GO row `R:R GREEN` can coexist with FinalVerdict `NO-GO` from `haldro_state_conflict` / `advanced_confluence`. Grep the card artifact for any claimed `rr2=` number; if absent, do not copy it from the narrative. Body text `·R:R不足` is not proof of geometric R:R < 2 when the gate row is green — name the actual hard-gate ids.
 - Use one atomic JSON writer for trigger, heartbeat, watchdog-health, dispatcher-status, and context files: write beside the target, flush/fsync, then `os.replace`. Readers should see either a complete old document or a complete new document.
 - Treat unattended delivery as a two-key capability: a per-run/explicit enable flag plus a separately configured target. Ignore historical call-site targets when the job is automated; lint enabled `no_agent` prompts for direct-push/direct-decision instructions and verify `deliver=local` jobs with a no-trigger smoke run.
 - Version inherited context and store the previous FinalVerdict summary, primary action, source matrix, and approval/config revision. Reject future-dated or stale context, and never let inherited fields become an execution authorization source.
@@ -145,9 +154,10 @@ For source timestamps, `captured_at` must come from the provider/payload and `ob
 
 ## Closure report
 
-Lead with `已完善 / 部分完善 / 未完善`. Enumerate repaired-and-verified items, current runtime state, blockers/degradation with source/timestamp/freshness, every remaining P0/P1/P2 item with acceptance criteria, and the next single active batch. Preserve the manual-decision boundary: no automatic orders unless separately requested.
+Lead with `已完善 / 部分完善 / 未完善`. A self-summary that lists P0/P1 as done is not a closure report — independent live probes first, then those three labels against the probes. Enumerate repaired-and-verified items, current runtime state, blockers/degradation with source/timestamp/freshness, every remaining P0/P1/P2 item with acceptance criteria, and the next single active batch. Preserve the manual-decision boundary: no automatic orders unless separately requested.
 
 ## Reference
 
 See `references/repair-evidence-patterns.md` for compact RED/GREEN/runtime evidence patterns.
 See `references/final-verdict-runtime-contracts.md` for the resolver-invariant, cache-contract, completion-audit, and enabled-cron review patterns learned from live closure work.
+See `references/self-report-closure-verification.md` for verifying a pasted audit-complete narrative against live keylevels, card, lease, and guard state.

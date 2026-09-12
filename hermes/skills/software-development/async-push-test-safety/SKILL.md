@@ -54,7 +54,7 @@ watch.drain_push_queue(timeout=20)   # ← 关键：还原前排空
 - 跑目标推送测试，确认全过。
 - **独立证明 conftest 真生效**（别让测试文件自带的 setdefault 掩盖）：在干净进程里清掉环境变量再跑探针用例：
 ```bash
-printf 'import os\ndef test_probe():\n    assert os.environ.get("HANGQING_NO_SEND")=="1"\n' > tests/_probe.py
+# 使用 write_file 工具创建 tests/_probe.py（导入 os，断言环境变量为 1），不要用 shell 重定向写文件。
 env -u HANGQING_NO_SEND python -m pytest tests/_probe.py -v; rm -f tests/_probe.py
 ```
 通过即证明保护来自 conftest，不靠测试文件兜底。
@@ -72,4 +72,4 @@ search_files(pattern="def _send_one|def push|def drain_push_queue|_PUSH_QUEUE|se
 ```
 
 ## 任务报告排版（此用户偏好）
-纯中文、纵向递进、圈号①②③、冒号对齐、关键值用反引号；**禁止任何机器字段**（setup_id/entry_tag 等）、禁方括号标签、禁 `｜` 分隔、禁装饰 emoji。
+报告以本轮用户要求为准：中文、结论前置、短句；验收可列必要字段与证据路径。行情卡遵循当前交易卡合同，手机优先、窄表不超过三列；不强制圈号或装饰分隔。

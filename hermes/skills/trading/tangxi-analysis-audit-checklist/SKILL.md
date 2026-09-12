@@ -1,6 +1,6 @@
 ---
 name: tangxi-analysis-audit-checklist
-description: 棠溪分析系统审计清单 v1.0 — 分析策略流程、分析档位、API拉取能力、记忆读取、TV MCP集成、守护运行态五维全景扫描与优化建议。触发词：全面盘点、分析策略流程、分析档位、API拉取、记忆读取、全面扫描。
+description: 棠溪分析系统审计清单 v1.2 — 分析策略流程、分析档位、API拉取能力、记忆读取、TV MCP集成、守护运行态、生产者调度与状态冻结七维全景扫描与优化建议。含「先取证后定级」纪律。触发词：全面盘点、审计、全方位、分析策略流程、分析档位、API拉取、记忆读取、全面扫描。
 category: trading
 ---
 
@@ -279,7 +279,13 @@ for j in jobs:
   2. 读 `orphan_integration.py` 第 10-50 行，列出全部孤儿脚本清单
   3. 对每个孤儿脚本 `ls scripts/<name>.py` + `ls scripts/_disabled_*/<name>.py` —— 仅在 `_disabled` 即真孤儿，恢复路径固定为 `cp scripts/_disabled_YYYYMMDD/<name>.py scripts/`
   4. 验证：`python -c "from cvd_analyzer import check_cvd_confluence"` 能 import 才算修复完成
-  已知本次会话真孤儿：`scripts/cvd_analyzer.py`（仅 `scripts/_disabled_20260829/cvd_analyzer.py` 存在），其它 5 个在 `scripts/` 存在。
+  已知本次会话真孤儿：`scripts/cvd_analyzer.py`（2026-08-31 已从归档区恢复到 `scripts/`；归档区副本为历史留档），其它 5 个在 `scripts/` 存在。
+
+**⚠️ 归档目录改名必须同步引用方（2026-09-12 实测）**：`scripts/_disabled_20260829/` 已被整体迁移为 `scripts/_disabled/`（82 个脚本）。归档动作本身不算 P0，但必须同步三处引用：
+1. `scripts/maintenance/repo_audit_20260911.py` 的 `SKIP_DIRS` 必须同时含 `_disabled` 与 `_disabled_20260829`，否则审计工具把 82 个归档脚本当活跃脚本扫描（脚本计数虚高、误报重复/孤岛）。已修（2026-09-12）：加 `_disabled` 后 `py_files()` 实测 142 个活跃脚本、归档零泄漏。
+2. 恢复路径由固定 `scripts/_disabled_YYYYMMDD/<name>.py` 变为 `scripts/_disabled/<name>.py`。
+3. 代码注释引用（`auto_card.py` tv_live_dump 缺失分支）同步更新。
+**审计检查**：`ls -d scripts/_disabled*` + `grep -rn "_disabled" scripts/maintenance/*.py`（SKIP_DIRS 是否覆盖全部归档目录）+ `grep -rn "_disabled_20260829" scripts/ tools/` 残留引用数。
 
 **⚠️ 脚本归档后 cron 引用悬空（P1 · 2026-08-31 实测）**：`tv_keepalive.py` 被 8/29 迁移移入 `scripts/_disabled_20260829/`，但 cron `TV Desktop保活` 仍引用 `scripts/tv_keepalive.py` → `Script not found`。审计 `Script not found` 错误时：先查 `scripts/_disabled_*/` 归档目录，确认脚本是被有意禁用（cron 应同步 pause）还是误删（需恢复）。
 
@@ -314,6 +320,7 @@ for name in ["行情守望.py","btc_daemon.py","keylevel_guard.py","btc_watchdog
 | 5 | BTC ref_levels.json 过期（>24h） | `ls -lt data/btc_ref_levels.json` | `python scripts/btc_ref_levels_sync.py` |
 | 6 | cron 关键任务全部暂停 | `hermes cron list` | `hermes cron resume <id>` |
 | 6b | keylevels_config 内 level 全过期（心跳新鲜但守卫空转） | `cat data/keylevels_config.json` 查 valid_until | `python scripts/keylevels_collect.py` 重采集→重写 config |
+| 6c | **管线步骤的生产者全数停摆**（缓存全陈旧 = 该步永不 live） | 「生产者调度存在性核验」三步：步→缓存→cron | 恢复生产者 cron，或把该步从管线降级/移除 |
 
 ### P1（严重 — 影响质量）
 
@@ -514,6 +521,81 @@ print(render_tv_card(main, {'signal':'偏空'}, 'BTCUSDT', 62880, 'push'))
 
 档位主链正确（分析/全面/深度=full 硬开关）✓ · inherit 无上下文自动升 full（auto_card.py:3200-3213）✓ · XAU 直调 xau_tv_sync 跳 tv_live_dump ✓ · 主副冲突裁决（valid_code/conflict/hard_conflict）✓ · A级 R:R<2 降级闸门 ✓（但被 P0-3 B级门槛绕过）· GO/NO-GO 七门接完整卡尾 ✓ · 管线审计表存在 ✓。
 
+## ⚠️ 第四类误判：未取证即定级 P0（2026-09-12 实测）
+
+前三类误判讲「证据读错」。第四类更贵：**根本没取证就定级**。本会话第一轮审计报了 3 条 P0（关键位全过期 / 双解释器缺包 / monitor_levels 退役未清），当场一条都跑不出来：关键位实为 **8/8 有效且 valid_until 在未来**；双解释器依赖在本会话前已被补齐；monitor_levels 是本技能「设计性退役」表里明确列过的留观项。第二轮改成**先取证后定级**，才挖出真 P0。
+
+**铁律**：
+1. 每条 P0 必须在同一轮里跑出验证命令并贴出原始输出；跑不出 = 降级「未验证」或直接删。
+2. 定级前先读本技能两张表：`设计性退役的判断标准`、`审计因果错配三大类`。命中即留观，不得报 P0。
+3. 陈旧 ≠ 故障。判定顺序永远是：① 有没有新代码读它 ② 有没有 cron 驱动 ③ 有没有用户偏好导致失活。
+
+### 步数声明 ≠ 步骤活着：生产者调度存在性核验（本轮真 P0）
+
+管线每一步都靠**生产者产出的缓存文件**，生产者是 cron。步骤照跑、卡片照出，缓存却可以在两个月前就死了：
+
+> 实测：加密 Full 第⑥步 `cron_read` 五源中 4 个停在 2026-07-15、1 个停在 09-02，`stablecoin_flows`/`cot_report` 文件都不存在。管线仍报「完成 11/15」并把该步标 ⚠️stale —— 即『该步永久不可能 live』。
+
+核验三步（缺一不可）：
+1. **步 → 缓存映射**：读 `pipeline_router.py` 的 `cron_read` 资产映射（crypto 五源：dune_cache / deribit_options / x_sentiment / qlif_factors / liquidation_pressure）。
+2. **缓存新鲜度**：逐个 `stat -c '%y %n' data/<cache>.json`；文件不存在也要列出来。
+3. **生产者是否还被调度**（关键，前两轮都漏）：
+   ```bash
+   cd /c/Users/Administrator/AppData/Local/hermes/cron
+   for s in dune_collector stablecoin_collector x_sentiment_collector cot_collector; do
+     echo "$s: 历史备份命中 $(grep -l "$s" jobs.json.bak* 2>/dev/null | wc -l) · 当前命中 $(grep -c "$s" jobs.json)"
+   done
+   ```
+   **在历史 jobs.json 备份里出现、当前 jobs.json 里消失 = 被有意摘掉调度**，该源永远不会再 live。只有两条路：恢复生产者 cron，或把该步从管线降级/移除——**不允许继续把死源列在「已完成」步骤里**。
+
+**`hermes cron list` 只列 enabled 作业**。实测 jobs.json 14 个、`cron list` 只显示 9 个、`audit_preflight` 报 `total=14 enabled=9`。三者不一致不代表任务丢失；禁用项必须直接读 `cron/jobs.json`：
+```bash
+python -c "
+import json
+jobs=json.load(open(r'C:/Users/Administrator/AppData/Local/hermes/cron/jobs.json',encoding='utf-8'))['jobs']
+for j in jobs:
+    if not j.get('enabled'): print('paused:', j.get('name'), '|', j.get('script'))
+"
+```
+
+### 状态新鲜度扫描（心跳之外的第二层）
+
+心跳只能证明进程活着。本轮新增三类「状态冻结」，都比心跳更早暴露问题：
+
+| 对象 | 冻结症状 | 本轮实测 |
+|:--|:--|:--|
+| 影子校准闭环 | 信号在长、结果标注停 | `shadow/decision_signals.jsonl` 1MB 每轮写 / `decision_outcomes.jsonl` 停在 2026-07-11；根因 = `影子结果标注` cron（*/15）被禁用 → **只进不出，无法校准** |
+| 风控状态 | `risk_state.json` 的 `date` 字段不推进 | 停在 `2026-07-15`，`daily_starting_balance 67.52`、日/周盈亏与连亏全冻结 |
+| 复盘/治理 | 日志与治理文件 mtime 同时冻结 | `trade_events.jsonl`/`trade_reviews.jsonl`/`strategy_governance.json`/`strategy_model_stats.json` 全停 07-10~15，而 `trade_plans.jsonl` 已 928 行、每轮都写 → 计划噪声 + 复盘缺位 |
+
+**成对检查原则**：凡「生产者 + 消费者」型状态，必须成对看 mtime；单看一侧永远发现不了闭环断裂。
+
+### 卡面「数据A」不是整体源健康度
+
+`data_grade` 取自 `source_snapshot_<SYM>.json` 的 `quality`，那是**价格共识等级**（多源报价一致度）。实测 4 个源 `not_run` + cron_read 全 stale 时卡尾仍印「数据A」。**源可用度只看来源矩阵，不能读「数据A」**；建议改卡为「价格A · 源 11/15」这类双指标写法。
+
+### 档位差异要用字节证明，不能凭文档
+
+```bash
+wc -c data/auto_card_BTCUSDT.md data/auto_card_BTCUSDT_full.md   # 本轮 quick 3383B / full 5641B
+```
+本轮 quick 只是少了源矩阵的 `not_run` 行，仍是 4 段 6 表，与「轻量=行动格+现价+截图+衍生品」承诺不符 → P1。
+
+### 跑脚本的 shell 引号与后台坑（本轮踩 4 次）
+
+仓库路径含空格，命令必须整体加引号：
+- ✗ `cd /d/Hermes agent/scripts && python x.py` → `bash: cd: too many arguments`
+- ✓ `cd "/d/Hermes agent/scripts" && python x.py`
+- 后台跑脚本别用 `cd path && cmd`（会被后台化规则挡掉），改用 terminal 的 `workdir` 参数：`workdir="D:/Hermes agent/scripts"`。
+- 需要 hermes 依赖的解释器用绝对路径显式调用：`"C:/Users/Administrator/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"`。
+- 当前工作目录会被 `terminal` 会话保留，`cd` 一次后后续调用可直接跑相对路径；但 `background=true` 不保留 cwd。
+
+### 并发写入方检测（审计基线纪律）
+
+审计开工先记基线：`date` + `git status --short` + 关键文件 mtime。本轮出现源码与记忆在**本轮进行中**被外部程序改写（`scripts/auto_card.py`、`scripts/maintenance/repo_audit_20260911.py` 于 23:46:58 相隔 9ms 批量写入；memory 的「双 Python」条目同步被改写）。**铁律：不要把外部改动写进自己的修复清单**；发现即显式披露「写入方未明」，否则下一轮审计会对不上账。
+
+完整证据链（两轮对比 + 全部命令与原始输出）见 `references/audit-producer-death-and-freeze-sweep-20260912.md`。
+
 ## 快速验证命令（可复制执行）
 
 ```bash
@@ -572,7 +654,13 @@ for n,f in [('行情守望','data/monitor_heartbeat.json'),('BTC守护','data/.b
 3. 对每个孤儿脚本 `ls scripts/<name>.py` + `ls scripts/_disabled_*/<name>.py` —— 仅在 `_disabled` 即真孤儿，恢复路径固定为 `cp scripts/_disabled_YYYYMMDD/<name>.py scripts/`
 4. 验证：`python -c "from cvd_analyzer import check_cvd_confluence"` 能 import 才算修复完成
 
-已知本次会话真孤儿：`scripts/cvd_analyzer.py`（仅 `scripts/_disabled_20260829/cvd_analyzer.py` 存在），其它 5 个在 `scripts/` 存在。
+已知本次会话真孤儿：`scripts/cvd_analyzer.py`（2026-08-31 已从归档区恢复到 `scripts/`；归档区副本为历史留档），其它 5 个在 `scripts/` 存在。
+
+**⚠️ 归档目录改名必须同步引用方（2026-09-12 实测）**：`scripts/_disabled_20260829/` 已被整体迁移为 `scripts/_disabled/`（82 个脚本）。归档动作本身不算 P0，但必须同步三处引用：
+1. `scripts/maintenance/repo_audit_20260911.py` 的 `SKIP_DIRS` 必须同时含 `_disabled` 与 `_disabled_20260829`，否则审计工具把 82 个归档脚本当活跃脚本扫描（脚本计数虚高、误报重复/孤岛）。已修（2026-09-12）：加 `_disabled` 后 `py_files()` 实测 142 个活跃脚本、归档零泄漏。
+2. 恢复路径由固定 `scripts/_disabled_YYYYMMDD/<name>.py` 变为 `scripts/_disabled/<name>.py`。
+3. 代码注释引用（`auto_card.py` tv_live_dump 缺失分支）同步更新。
+**审计检查**：`ls -d scripts/_disabled*` + `grep -rn "_disabled" scripts/maintenance/*.py`（SKIP_DIRS 是否覆盖全部归档目录）+ `grep -rn "_disabled_20260829" scripts/ tools/` 残留引用数。
 
 ## ⚠️ 脚本归档后 cron 引用悬空（P1 · 2026-08-31 实测）
 
@@ -651,6 +739,20 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 
 共享TradingView图表存在并发风险：多个资产任务切图前必须取得跨进程锁，切换后和读取后各做一次symbol/timeframe校验；不完整、错品种、错周期或空候选池必须fail closed且不得覆盖旧缓存。缓存至少记录`identity_valid`、`action_table_complete`、`source_quality`和时间戳。
 
+## ⚠️ 2026-09-12 新增两类 P0（已修 + 已补回归测试）
+
+1. **R:R 门 fail-open（风控闸门静默借用反侧）** — `go_nogo_gate.py` 门3 旧写法 `primary_rr = rr_a or rr_b or 0`：rr_a（主推侧，`auto_card.py:1735-1744` 按 bias 侧写入 `st_a.rr`）为 0/缺失时**静默改用反侧 rr_b** 点 🟢，实测 C等待卡同时出现「🟢 R:R底线 GREEN 主线R:R 1:3.3·≥1:2」与「⚠禁做 — 主线无优势或R:R不足」（`data/trade_plans.jsonl` 实测 rr_a=0.547 / rr_b=3.404）。
+   - **审计检查**：`check_gate(sym, engine, {"rr_a": 0, "rr_b": 3.404, ...})` 若 rr_ratio=green 即 fail-open。
+   - **已修**：主侧缺失/为 0 → 红灯「主推方向R:R缺失·禁止以反侧兜底」；`render_v96.py` 结论文案按真实约束（仅 rr<2 才写「R:R不足」）。
+2. **结构位跨周期混标（价值区倒挂伪结构）** — `render_v96._level_kind()` 只按名字字符串猜 VAL/VAH，且**丢掉名字里本来就有的周期前缀**（"D VAL" / "15m VAH"）→ 日级价值区与执行层价值区被压成同层，卡面出「🔴VAL 上 77,388 / 🟢VAH 下 77,334」（VAL 在 VAH 上方，结构上不可能）。溯源：77,388.5 = `keylevels_candidates.json` 的 `VAL_PRICE`（高周期 pack，同 pack `VAH_PRICE 79,660.1`）；77,334 = `tv_live_<SYM>.json` 的 15m VAH。
+   - **审计检查**：卡面出现**裸**「VAL 上 / VAH 下」且两者倒挂 = 命中；对照 `tv_live_<SYM>.json` 真值核对。
+   - **已修**：标签与用法都带 TF 前缀（`D·VAL`、`15m·VAH`）+ 同 TF `VAL>VAH` 降级断言（降为「位」）。
+   - **下游核查**：`grep -rn "_level_kind\|\['kind'\]" scripts/` 只有 renderer 自身消费，改动不外溢。
+
+回归测试：`python scripts/test_audit_fixes_20260912.py`（9 例，含真实 23:39 样例与 GO-A 不误伤回归）。
+
+**报告核验铁律（同轮次实测）**：用户/子代理交来的审计报告，其「系统健康度 ✅」必须对着**卡面管线完成度表**逐项核 —— 实测当日卡面写「15步 · 完成 11/15」，CoinGecko Pro / 宏观 / X情绪 / Cron缓存 4 项 ⚠️，而报告summary却写「数据采集✅正常」。**跑了 15 步 ≠ 采到了数据**；提交前必查 `data/auto_card_<SYM>_full.md` 的管线完成度审计表。
+
 ## 参考文件
 
 - 技能主文档：`trading/tangxi-system-audit/SKILL.md`（完整审计Step 0-12）
@@ -661,4 +763,5 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 - **分析逻辑代码级审计证据链（2026-08-31 · 3 个 P0：B等待→GO-B带价 / 观望改A兜底链 / R:R B级1.5 + 单元级复现法）**：`trading/tangxi-analysis-audit-checklist/references/analysis-logic-code-audit-2026-08-31.md`
 - TV缓存污染：`trading/tangxi-system-audit/references/2026-07-08-tv-cache-pollution-recurrence.md`
 - **完整图表证据（价格栏/ICT/截图与结构化读取一致性）**：本技能 `4.3`；审计时优先按该节执行
+- **生产者调度死亡 + 状态冻结扫描（2026-09-12 实测 · cron_read 五源四死 + 影子/风控/复盘三类冻结 + 两轮误判对比）**：`trading/tangxi-analysis-audit-checklist/references/audit-producer-death-and-freeze-sweep-20260912.md`
 - 预检脚本：`D:/Hermes agent/scripts/audit_preflight.py`

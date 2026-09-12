@@ -67,6 +67,7 @@ indicator_set_inputs(
 
 - `quote_get` 即使传入目标 symbol，也必须检查返回对象的 `symbol`、`description`、`exchange`、`type`。
 - 例如目标是 BTC，但返回 `description: Gold`、`exchange: OANDA` 或 `type: commodity`，应丢弃该报价并重新切图/重取，不能使用。
+- **采集器报价身份必须跟 `expect_symbol` 走**（2026-09-12）：不能写死 `BINANCE:BTCUSDT.P` + `exchange=BINANCE` + `type=swap`。写死后黄金报价被拒、BTC 报价反而能给黄金授权。XAU 要 OANDA/cfd 量级，禁止拉 Binance 合约交叉；XAU 只写 `tv_live_XAUUSD.json`，不得覆盖通用 `tv_live.json`。
 - TV与Binance属于不同来源、不同时间戳，正常小幅价差不否决；品种错配、资产类型不符或数量级明显不符则硬否决。
 - Pine action grid 的结论只能在 symbol/timeframe 已确认后使用；共享图表被其他任务切换时，旧表格可能格式正确但属于另一品种。
 
@@ -139,7 +140,8 @@ return False
 |---|---|
 | 非采集目标品种 | 这是用户的图 → 更新 `user_*`，并记 `pending_restore` |
 | 采集目标品种，且 `pending_restore` 存在且不是采集目标 | **上次没还 → 用记录修回来**（打断棘轮） |
-| 采集目标品种，无待归还记录 | 用户真的在看它 → 不动 |
+| 采集目标品种，`pending_restore` 已清，但记住的 `user_symbol` 仍不是采集目标 | **图被留在采集品种上**（失败路径/杀进程）→ 用 `user_symbol` 修回，不能当成「用户真的在看 XAU」（2026-09-12） |
+| 采集目标品种，无待归还记录且无记住的用户品种 | 用户真的在看它 → 不动 |
 
 成功归还后清掉 `pending_restore`。这样**一次失败最多多留一个采集周期**，
 下一轮自动修回。若进程在 `finally` 之前被杀，`pending_restore` 仍在 → 下次修回。

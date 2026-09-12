@@ -22,6 +22,7 @@ tags: [hermes, custom-provider, cloudflare, waf, configuration, troubleshooting]
 - User asks whether Ollama Cloud can be used as a Hermes/Ollama/OpenAI-compatible provider, what its Free/Pro/Max limits are, or which cloud models are available
 - User says "configure Nous Portal" / "hermes setup --portal" / wants to use Nous Portal free models (tencent/hy3:free, stepfun/step-3.7-flash:free)
 - User is stuck because `hermes setup --portal` login succeeded but no model works / default unchanged
+- User says "配置 b.ai / 白B.AI API" or wants `https://api.b.ai/v1` as a Hermes custom provider — see `references/b-ai-provider-notes.md`
 
 ## Nous Portal (NousResearch hosted service)
 
@@ -559,6 +560,8 @@ tool_call(name="mcp_hermes_studio_use_provider_add", arguments={
 
 **Implementation note**: This tool also updates `model.default` and `model.provider` in config.yaml to point to the newly-added provider. After calling it, verify with `hermes status` or by checking config.yaml.
 
+**Do not use this tool when the user only asked to add a provider.** Example: “配置 b.ai 的 api” + “只加入供应商，不改当前主模型”. Write `custom_providers` with Python `open()` and leave `model.default` / `model.provider` untouched.
+
 **Alternative workarounds** (when MCP tools are unavailable):
 - `execute_code()` (Python sandbox) can read/write config.yaml using `open()` — not subject to the `patch` security guard
 - `terminal` + `sed` for targeted line replacements, but be careful with YAML indentation
@@ -813,6 +816,7 @@ When a custom provider doesn't work, identify the error code:
 | **401** after manual config edit (key was correct before) | Terminal display redaction truncated `sk-` key during `content.replace()` edit | Base64 encode the real key → Python script writes decoded key → verify via hex length/hex dump → see §6d |
 | **400** / `bad response status code` | Model sent to wrong provider (Web UI doesn't pass provider) | Fix `model.provider` to match custom provider name |
 | **400** / `model not found` | Model name wrong or no available channel | List available models via `/v1/models` endpoint |
+| **400** / `insufficient_user_quota` / `credit insufficient balance: balance=0` | Key is valid (often `GET /v1/models` is already 200) but Credits are empty | Top up at the provider console; do not rotate the key or change `api_mode` |
 | Silent fallback to different provider | Primary provider failed at startup, or credential pool marked it `exhausted`; fallback_providers kicked in | Check `hermes logs` for actual provider; test API directly; reset credential pool |
 | 503 / `No available channel` | Provider has no capacity for that model | Try a different model or wait |
 | 200 OK but no response in Web UI | Bridge worker connection refused / timed out | Restart Hermes Studio completely |
@@ -873,6 +877,7 @@ hermes doctor
 |----------|---------------------|-------|
 | ccapi.us | `https://api-direct.ccapi.us/v1` | For long tasks; regular `ccapi.us/v1` also works |
 | ccapi.us (images) | `https://api-direct.ccapi.us/v1/images/generations` | Separate image endpoint |
+| B.AI (白B.AI) | `https://api.b.ai/v1` | Official; Hermes `api_mode: chat_completions`; live DeepSeek id is `deepseek-v4.1-flash` — see `references/b-ai-provider-notes.md` |
 | Generic OpenAI proxy | `https://<host>/v1` | Must support `/v1/chat/completions` |
 
 ## Architecture Note
@@ -900,3 +905,4 @@ This works for both CLI/TUI sessions and the Web UI bridge (≥ Hermes 0.17.0 bu
 - `references/aijws-provider-notes.md` — Provider-specific notes for api.aijws.com: available models, known Cloudflare 502 origin_bad_gateway pattern, client setup instructions (Cherry, OpenClaw, Codex, GPT Image), and supports_websockets = false config.
 - `references/state-db-prompt-cache-diagnosis.md` — Diagnosing "system_prompt is null" in state.db via SQLite: detection script, healthy baseline stats, and fix for `base_url` path + `models:` config issues on custom providers.
 - `references/nous-portal-setup.md` — Nous Portal endpoint, OAuth vs custom-provider paths, TTY/stdin pitfall, `hermes config` subcommands, decision guide.
+- `references/b-ai-provider-notes.md` — B.AI (`api.b.ai/v1`): live model IDs, add-without-switching-default, `insufficient_user_quota` vs bad key.

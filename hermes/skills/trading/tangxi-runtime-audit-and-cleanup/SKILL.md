@@ -434,6 +434,30 @@ return False
 配套验收（必须两例都有，只测正常路径不算）：**慢图能恢复**（前两次读到旧状态、第三次到位）
 与 **一直不就位时有界退出**（不能无限等）。
 
+### ⚠️ 通用审计项：死进程分析租约 + 让路退出码0 会把 17h 过期记成 cron ok（2026-09-12 实测）
+
+现场：`data/tv_analysis_lease.json` 仍 `active=true`（TTL 30 分未到），但 `pid` 已经没了。XAU cron 每 15 分让路并 `return 0` → `last_status=ok`，`xau_tv_state.json` 停在 17 小时前。
+
+**判据**：
+1. `analysis_lease_status()` 必须检持有进程是否存活；死 pid = 无租约。只查 `expires_at` 不够。
+2. 后台让路 **仅当已发布缓存仍 usable** 才 `return 0`；缓存已过期必须 `return 1`，否则调度器把业务停摆记成成功。
+3. 用户把批准位全部 `enabled=false`（静默价值区提醒）是 **idle**，不是 DEGRADED，也不要自动重启 `enabled`。
+4. `_collect_and_cache_locked` 的报价身份必须跟 `expect_symbol` 走，不能写死 `BINANCE:BTCUSDT.P`+swap。写死后黄金报价被拒、BTC 报价反而能给黄金授权。XAU 也不得写 `tv_live.json`。
+5. 主指标行动格没有「操作」行（那是副指标）。XAU 配对契约要 结论/方向/路径 + 风控标签，不能因为缺「操作」把周末 X·等开市 的完整格丢掉。
+6. `chart_owner_resolve_restore`：pending 清掉后若 `user_symbol` 仍不是采集品种，残留在黄金图上必须修回，不能当成「用户真的在看 XAU」。
+7. 面板「风控」行的 `入/止/标` **不是**执行导出。可执行三件套只认 MCP Entry/Stop/Target 且 `risk_label==风控`。渲染器禁止 `entry or position`。
+8. 历史哨兵文件仍在 `scripts/`（态②）。`__main__` 打「已退役·权威 keylevel_guard」exit 0，不要写成已删除。
+9. 用户上传 pine 当权威时：上传 ↔ 仓内定版逐字比 ↔ 图上 13+6 行行动格，三处不一致才谈漂移。
+
+验证：`python -c "from tv_data_bridge import analysis_lease_status; print(analysis_lease_status())"` 加 `psutil.pid_exists(holder_pid)`；看门狗 `status=idle` 时 exit 0。
+取证：`references/lease-quote-idle-and-panel-export-20260912.md`。
+
+取证与验收句：`references/lease-quote-idle-and-panel-export-20260912.md`。
+
+7. 面板「风控」行的 `入/止/标` **不是**执行导出。可执行三件套只认 MCP Entry/Stop/Target 且 `risk_label==风控`。渲染器禁止 `entry or position`。
+8. 历史哨兵文件仍在 `scripts/`（态②）。`__main__` 打「已退役·权威 keylevel_guard」exit 0，不要写成已删除。
+9. 用户上传 pine 当权威时：上传 ↔ 仓内定版逐字比 ↔ 图上 13+6 行行动格，三处不一致才谈漂移。
+
 ### ⚠️ 通用审计项：不要自己重算守护的健康，读它自己的健康文件（2026-09-11 实测假 P0）
 
 本次审计我犯了一个错：自己读 `keylevels_config.json` 的 `levels[]`、发现没有 `active` 字段，
@@ -677,6 +701,7 @@ assert old in s, 'old block not found'  # 先断言再替换，防静默不匹�
 s = s.replace(old, new)
 open(p, 'w', encoding='utf-8', newline='\r\n').write(s)
 ```
+- **curl 单次 000 ≠ API 挂**（2026-09-12 实测）— 同一毫秒内 fapi/spot ping 都回 `000`，改用 python requests 立即 200。网络栈瞬时抖动会让 curl 直接失败而不给 HTTP 码。**判据：报「API 不可达」前必须换第二通道/重测一次**，单次 000 写进审计结论就是假 P0。
 - **data_gatherer.py 改造陷阱（2026-08-29 实测）** — 直接 `#` 整行注释会报 `IndentationError: unexpected indent`，因为下一行是 `headers={...}` 延续。正确做法：**找括号配平的整段赋值，替换为 `<var> = None` 单行**，保留缩进不变。
 
 ## cron auto-disabled 自相矛盾修复模式（2026-08-31 实测 P0 隐藏根因）
@@ -739,17 +764,28 @@ python -c "import sys; sys.path.insert(0,'scripts'); from cvd_analyzer import ch
 
 **恢复铁律**：从 `_disabled_20260829/<name>.py` 直接 `cp` 到 `scripts/<name>.py` → `py_compile` 验证 → 改引用方 jobs.json / auto_card 路径。**不动 live 已工作的逻辑**，恢复后跑一次 quick 模式 auto_card 验证链路全通。
 
+#### 归档目录搬迁/改名后的三查（2026-09-12 实测，`_disabled_20260829/` → `_disabled/` 迁移）
+
+脚本「搬家」不是移动目录就完事，搬迁后要按序查三件事：
+
+1. **`.gitignore` 同步** —— 忽略规则常写的是**旧路径**（本例 `.gitignore:103 scripts/_disabled_20260829/`），新目录没补条目 → 81 个退役脚本处于「未跟踪且不忽略」悬空态，将来任何一次 `git add -A` 会整体扫进仓库。验收：`git check-ignore -v scripts/_disabled/<某文件>` 必须命中；`git status --porcelain` 不得出现 `?? scripts/_disabled/`。
+2. **import 命中要去重再判风险** —— 直接 `grep import` 归档模块名会大量误报（本例初扫命中 15 个模块，如 `tv_data_bridge`/`credential_store`，其实是 scripts/ 根有 live 同名副本、归档区只是旧拷贝）。**真风险 = 归档区有 ∧ scripts/ 根没有 ∧ 被 live import** 三条同时成立才报。先建 `live = {根目录模块名集合}` 再过滤。
+3. **cron `script` 字段的存在性检查要按相对 `scripts/` 解析** —— cron 里可以是 `maintenance/skills_snapshot.py` 这种相对子目录路径。只查 `scripts/<basename>` 或仓根会虚报 MISSING（本例扫描器假报后自纠）。正确：join `scripts/<sp>`、仓根 `<sp>`、绝对路径三种都试，全 miss 才报。
+
+**元教训（同「假 P0」节）**：审计脚本自己也是被测系统 —— 它报的每条 MISSING/风险，上报前先用自己的第二通道复核一遍。
+
 ## 用户报告交叉验证（2026-08-31 防错信铁律）
 
 **当用户提交审计报告/事件总结时，必须用 `grep/sed/ls` 三件套验证每条结论再写进审计卡**。错信/编造字段会让修复方案走错方向。
 
-**三类典型错信**：
+**四类典型错信**（第四类 2026-09-12 新增）：
 
 | 类型 | 案例 | 验证命令 |
 |------|------|---------|
 | **行号巧合** | 用户报"auto_card.py:4806 引用 cvd_analyzer" → 实际是该行 `_mode` 路由逻辑 | `sed -n '4800,4815p' scripts/auto_card.py` |
 | **编造字段** | 用户报"`text_push_status: failed_or_missing`" → 三个日志位置全空 | `ls data/keylevel_triggers/ data/keylevel_analysis/ cron/output/keylevel_read_trigger.md` |
 | **过时口径** | 用户说"6 孤儿其余 5 个在 scripts/" → 已对；但 6 概念本身可能是老图谱 | `ls scripts/{meta_labeler,orderflow_absorption,fvg_detector,order_block,correlation_matrix,cvd_analyzer}.py` |
+| **引用数字无磁盘出处**（2026-09-12） | 用户报告引用"rr2=0.566 < 2.0"，但全库 data/*.json 与卡面产物检索均无此字段——卡面实际写的是「主线R:R 1:3.3 GREEN + 评分2.0/14 X禁做」 | `grep -rn "<数字>" data/ && python 检索字段名`。判定要**把裁决与引用数字分开**：禁做裁决本身成立 ≠ 每个中间量都有落盘出处。报「转述不精确」而非「结论错误」 |
 
 **3 步验证流程**：
 1. **找原文位置**：`grep -n "<claim-string>" scripts/<file>` 看真实匹配
@@ -968,4 +1004,51 @@ assert mod.REPO != Path("D:/Hermes agent"), "测试绝不能指向真仓库"
 - `references/chart-switch-reduction-and-ohlcv-offload-20260911.md` — **共享图表被频繁切走**：量化谁在切/频率/条件短路、切换计数器、逐周期循环「读指标还是只读K线」的判据、把 OHLCV 采集移出图表的完整 recipe（选源顺序、密钥占位符、跨源 K 线口径陷阱、旁路-对账-阈值-回退、429 熔断、实测记录）、「第二标签页隔离」落地前必须先验能力、以及「还原正确但错偏好被永久传承」这个变体
 - `references/doc-and-skill-drift-cleanup-20260911.md` — **文档/技能漂移清理 + 根目录收口**：脚本三态分类（已归档/仍在但停用/现行）与实测命令、子代理事实性结论的复核规则、根目录分类算法（`.gitignore` 与技能点名要先查、引用计数要排除 `.gitignore`、归档 README 三要素）、漂移扫描器的三级+三类抑制设计、行数类正则的误报教训、模块遮蔽（仓根同名副本盖掉真模块）排查、维护工具不能放 gitignore 目录，以及「技能目录不在仓库内=无备份」这个结构缺口
 - `references/skills-backup-mechanism-20260911.md` — **技能目录的唯一备份路径**：单向镜像机制、四条必知、日常 `--status` 用法、fail-closed 阈值、备份洞自检命令
+- `references/lease-quote-idle-and-panel-export-20260912.md` — 死进程租约/让路假绿/idle/报价身份/风控文字≠执行导出/哨兵退役壳/上传指标三处对账
 - `references/repo-hygiene-and-guarded-push-20260911.md` — **仓库卫生与受护栏自动化**：自动推送护栏完整实现、fail-closed 快照阈值、内容级密钥扫描 vs 文件名级屏蔽、argparse 重复选项守卫、脚本化批改的自证与回读、测试沙箱隔离、git 坑、静默/出声约定
+- `references/2026-09-02-comprehensive-audit-closure.md` — 9/2 全面审计定稿（5 P0 全清零）
+- `references/2026-09-02-analysis-tiers-v2.md` — 分析档位 v2 定稿
+- `references/dual-python-interpreter-trap-2026-09-02.md` — 双解释器冲突 P0-5
+- `references/multi-asset-analysis-contract-20260902.md` — 多资产分析契约
+
+## 多渠道与模板审计（2026-09-12 新增维度）
+
+### 模板审计子阶段
+- **模板数据新鲜度**：`keylevels_config.json` 有效批准位 + valid_until 未过期
+- **模板-渲染一致性**：`render_v96.py` 字段与 `tv_indicator_contract.py` 行名一致
+- **档位-模板匹配**：quick 应出手机三表速读版，full 出完整 8 表卡
+- **配置源统一**：`keylevels_config.json` 是唯一批准源
+
+### API 端点级验证子阶段
+- **Binance 逐端点验证**：`topLongShortAccountRatio` 404 标记
+- **TV MCP 逐功能验证**：行动格行名完整性
+- **X 情绪链路**：x_search 失败时降级到 web_search
+
+### 分析策略冗余检测
+- **`ALL_MODELS` vs `FIXED_MODELS`**：检查未使用模型
+- **quick 模式字段残留**：`cg_sentiment` 被引用但步骤已排除
+
+### Pitfalls（新增）
+- **全渠道审计不能遗漏**：API 验证≠只查连通性；必须逐端点+逐通道验证
+- **模板退役≠删除**：`monitor_levels.json` 标注"设计性退役"
+- **模型数量≠分析能力**：30 个定义但只有 6 个实际参与评分
+
+## 修复优先级排序（2026-09-12 更新）
+
+P0（立即，2小时）：
+1. **keylevels_config 过期**：`python scripts/keylevels_collect.py` 重采集
+2. **双解释器修复**：`uv pip install -p $(uv python find) requests pydantic aiohttp numpy pandas websockets`
+3. **TV CDP 验证**：关则 `tv_keepalive.py` 拉起
+4. **心跳成对确认**
+
+P1（2-4小时）：
+5. **Binance 端点标注**
+6. **档位切换实现**
+7. **cg_pro 字段清理**
+8. **monitor_levels.json 文档标注**
+
+P2（1天）：
+9. **ALL_MODELS 清理**
+10. **X 情绪降级**
+11. **TV 品种防污染**
+12. **cron 精简**

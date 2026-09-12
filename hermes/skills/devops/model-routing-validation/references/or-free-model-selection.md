@@ -48,3 +48,41 @@ hermes config set model.default nvidia/nemotron-3-super-120b-a12b:free
 ## 验证已落地
 
 固定模型 + prefill 后在独立新会话 `hermes chat -q` 实测：模型自报 `nvidia/nemotron-3-super-120b-a12b:free`，且正确回答「看下XAU」= 轻量。说明**档位规则（prefill 注入 + 120B 自身记忆）双保险生效**。
+
+## 图像能力先预筛，再探（2026-09-12）
+
+`GET /models` 的三组字段可以先筛掉不可能用的候选，比盲探省事：
+
+```python
+free    = [m for m in d['data'] if float(m['pricing']['prompt'])==0 and float(m['pricing']['completion'])==0]
+tool_ok = 'tools' in (m.get('supported_parameters') or [])
+img_ok  = 'image' in ((m.get('architecture') or {}).get('input_modalities') or [])
+```
+
+但这只是**声明**：声明支持图像 ≠ 真能读图。必须发一张带外部真值的真实截图才算数（见 `model-routing-validation` 的「视觉夹具必须带外部真值」）。
+
+## 免费池基本兜不住视觉（2026-09-12 实测签名）
+
+对免费池发真实 base64 图片请求，文本强模型多半直接回：
+
+`HTTP 404 {"error":{"message":"No endpoints found that support image input"}}`
+
+命中 `nvidia/nemotron-3-super-120b-a12b:free`、`cohere/north-mini-code:free`、`inclusionai/ling-3.0-flash-fin:free`（另有 400 provider error / 429）。结论：
+
+- **免费池只适合兜文本与工具调用，不能兜视觉**；视觉槽的兜底必须另找非免费通道（订阅或中转），且视觉槽要显式钉住、不留 `auto`。
+- 免费池里偶有能读图的（`dots-studio/dots-3-note-preview:free` 在 2026-09-12 正确读出 BTCUSDT.P / 15m / 最后价，但耗时 13–20s）——延迟量级已不适合当兜底，仅作最后手段。
+- `thinkingmachines/inkling*:free` → `HTTP 403 ... only available on agentic harnesses`；`poolside/laguna-s-2.1:free` → 上游 429 `temporarily rate-limited upstream`。这类是**服务端准入/限流**，不是本地配置问题，别写进记忆当永久结论。
+
+## 2026-09-12 三探复跑（用当前池子，勿沿用旧表）
+
+| 模型 | 延迟 | 工具 | 档位 | 读图 |
+|---|---|---|---|---|
+| `nvidia/nemotron-3-super-120b-a12b:free` | 1.2–3.5s | COMPLETE | 轻量 ✅ | 404 无图像端点 |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 4.4s | COMPLETE（与 2026-08-29「JSON 字符串」记录冲突，按现场为准） | — | ✗ |
+| `inclusionai/ling-3.0-flash-fin:free` | 1.3–2.1s | COMPLETE | 轻量 ✅ | 404 |
+| `cohere/north-mini-code:free` | 1.0–2.7s | COMPLETE | 轻量 ✅ | 404 |
+| `nex-agi/nex-n2.5-mini:free` | 1.2–2.2s | COMPLETE | 轻量 ✅ | 400 provider error |
+| `poolside/laguna-s-2.1:free` | 2.5–3.1s | COMPLETE | 上游 429 | — |
+| `thinkingmachines/inkling-small:free` | 0.8s | ✗ | ✗ | 403 agentic harness only |
+
+兜底三席建议（只做文本/工具兜底，按实测延迟排序）：`nemotron-3-super-120b-a12b:free` → `nemotron-3-ultra-550b-a55b:free`（1M ctx）→ `ling-3.0-flash-fin:free`（金融语料、档位正确）。把会话实测最慢的 `nemotron-3.5-lightning:free`（探针 7.1s / 会话均值 16.3s）从第一位挪走。
