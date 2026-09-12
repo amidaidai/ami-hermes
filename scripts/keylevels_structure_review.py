@@ -113,6 +113,14 @@ def review(config: dict | None = None, snapshot: dict | None = None,
                 "method": "cache"}
 
     checked, valid, invalid = 0, 0, []
+    enabled_total = 0
+    for symbol, block in (config.get("symbols", {}) or {}).items():
+        if not isinstance(block, dict):
+            continue
+        for level in block.get("levels", []) or []:
+            if isinstance(level, dict) and level.get("enabled", True) is not False:
+                enabled_total += 1
+
     for symbol, block in (config.get("symbols", {}) or {}).items():
         if not isinstance(block, dict):
             continue
@@ -148,14 +156,21 @@ def review(config: dict | None = None, snapshot: dict | None = None,
 
     # 价格带作为兜底：现价必须落在批准位的整体区间附近
     reasons = []
+    # 样本门槛必须与「实际启用了几个位」匹配。
+    # 历史事故：MIN_VALID 硬编码 6，而复核只统计 enabled=True 的位 —— 一旦用户
+    # 为了降噪把启用位裁到 5 个以下，checked 永远 < 6 → 永不盖章 → 24h 结构闸
+    # 落下 → 监控全停。这正是 P0「到价监控 0 位」的死锁成因。
+    # 现在取 floor = min(MIN_VALID, enabled_total)：启用 8 位时仍要求 ≥6 个样本，
+    # 启用少于 6 位时要求「全部启用位都通过」（valid == checked 依然强制）。
+    sample_floor = min(MIN_VALID, enabled_total) if enabled_total > 0 else MIN_VALID
     # 严格口径：**任一**批准位失效就不盖章。
     # 理由：盖章会让看门狗把这批位整体续期（含已失效那个）→ 监控一个假价 → 发假警报。
     # 宁可让闸落下、要求人工重新批准，也不放行一个已知失效的位。
-    ok = checked >= MIN_VALID and valid == checked
+    ok = checked >= sample_floor and valid == checked
     if checked == 0:
         reasons.append("配置里没有启用的批准位")
-    elif checked < MIN_VALID:
-        reasons.append(f"只复核到 {checked} 个位，少于 {MIN_VALID} 个，样本不足")
+    elif checked < sample_floor:
+        reasons.append(f"只复核到 {checked} 个位，少于 {sample_floor} 个，样本不足")
     elif valid != checked:
         reasons.append(f"{checked - valid}/{checked} 个位已失效 —— 需要人工重新批准后再续期")
     if not ok:

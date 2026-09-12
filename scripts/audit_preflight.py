@@ -203,22 +203,38 @@ def main() -> int:
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         from keylevel_guard import config_health
-        kl_health = config_health()
+        # 走 read_json 读配置再交给 config_health：既不重复解析，也让本检查
+        # 可被测试注入（历史测试 monkeypatch audit.read_json 却打不到这里，
+        # 因为旧实现是 config_health() 直读文件）。
+        kl_config = read_json(DATA / "keylevels_config.json")
+        kl_health = config_health(kl_config if isinstance(kl_config, dict) else {})
     except Exception as exc:
         kl_health = {
             "status": "degraded",
             "active_approved_levels": 0,
             "configured_levels": 0,
             "enabled_levels": 0,
+            "push_enabled_levels": 0,
+            "monitoring_intent": "undeclared",
             "reason": f"{type(exc).__name__}: {exc}",
         }
     kl_status = str(kl_health.get("status") or "degraded")
+    kl_intent = str(kl_health.get("monitoring_intent") or "undeclared")
     kl_label = {"ok": "OK", "idle": "IDLE", "degraded": "DEGRADED"}.get(kl_status, kl_status.upper())
     print(
         f"批准关键位: {kl_label} "
         f"active={kl_health.get('active_approved_levels')} "
         f"configured={kl_health.get('configured_levels')} "
-        f"enabled={kl_health.get('enabled_levels')}"
+        f"enabled={kl_health.get('enabled_levels')} "
+        f"pushable={kl_health.get('push_enabled_levels')} "
+        f"intent={kl_intent}"
+    )
+    # 「idle」只说明当前没有位在监控，**不等于健康**。
+    # 它混了两种语义：用户主动静默（合法）与监控意外失效（事故）。
+    # 历史教训：批准位全失效、到价监控停摆时，旧判定 `kl_status in {"ok","idle"}`
+    # 仍返回绿灯，没人发现。现在只有显式声明静默/退役才放过，其余一律 fail closed。
+    kl_ok = kl_status == "ok" or (
+        kl_status == "idle" and kl_intent in {"user_silenced", "retired"}
     )
     keylevel_runtime = keylevel_runtime_report()
     print(
@@ -260,13 +276,15 @@ def main() -> int:
     core_ok = bool(
         cdp_ok
         and all(result.get("fresh") for result in cache_results)
-        and kl_status in {"ok", "idle"}
+        and kl_ok
         and keylevel_runtime.get("usable")
         and btc_contract.get("usable")
         and xau_contract.get("usable")
         and not cron_issues
         and not missing
     )
+    if not kl_ok:
+        print(f"批准关键位判定: FAIL ({kl_status}/{kl_intent}) —— 监控不可用或静默未声明")
     return 0 if core_ok else 1
 
 

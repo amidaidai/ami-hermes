@@ -231,6 +231,31 @@ def _consecutive_losses() -> tuple[int, bool]:
         return 0, False
 
 
+def _risk_account_connected(engine_data: dict) -> bool:
+    """卡面风控额度是否基于**真实账户余额**。
+
+    历史缺陷：没有真实余额时 `_adaptive_risk` 用 `or 100.0` 兜底算出一个数，
+    卡面照样写「风控1.00U」——看起来像真实额度，实际是凭空默认值。用户按它下单
+    会误判单笔风险。现在显式区分：没接账户就在卡面写「未接账户」，不报假数。
+    """
+    if not isinstance(engine_data, dict):
+        return False
+    for key in ("account_balance", "balance"):
+        try:
+            if float(engine_data.get(key) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    tmpl = engine_data.get("template")
+    if isinstance(tmpl, dict):
+        try:
+            if float(tmpl.get("account_balance") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
 def _adaptive_risk(engine_data: dict) -> float:
     """按 ATR 波动率自适应单笔风险金额 v7.3。
     
@@ -1706,6 +1731,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
 
     # ── 止损止盈 ──
     risk_amt = _adaptive_risk(engine_data)
+    risk_backed = _risk_account_connected(engine_data)
     leverage_text = _leverage_text(symbol)
     prot_status = meta.get("protections_status", "未检测")
     bearish = (cvd_dir == "卖" or direction == "short")
@@ -1859,7 +1885,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         levels=all_levels_list,
         bearish=bearish, st_a=st_a, st_b=st_b,
         rr_a=rr_a, rr_b=rr_b, rr_a_note=rr_a_note, rr_b_note=rr_b_note,
-        risk_amt=risk_amt, leverage_text=leverage_text,
+        risk_amt=risk_amt, risk_backed=risk_backed, leverage_text=leverage_text,
         inv_line=inv_line, prot_status=prot_status,
         data_grade=data_grade, sweep_state=sweep_state,
         displacement=displacement, one_reason=one_reason,

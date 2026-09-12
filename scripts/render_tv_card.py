@@ -514,7 +514,7 @@ def _render_full(symbol, price, grade, direction, treatment, signal, conclusion,
         f"| 主推 | {_dir_icon(direction)}{direction} · {_clean_text(treatment or operation or conclusion, 34)} |",
         f"| 裁决 | {_dir_icon(direction)}{direction} · 主副指标已纳入 · 不再只看单行信号 |",
         "",
-        "① 多周期定位（5m→15m→1h→4h→D）",
+        "① 多周期定位（D→4h→1h→15m→5m）",
         _tf_mini(main, symbol),
 
         "② 双指标",

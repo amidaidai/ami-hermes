@@ -260,7 +260,11 @@ def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> li
             continue
         if not lvl:
             continue
-        bucket = round(lvl, 2)
+        # 去重桶必须与**显示精度**一致。
+        # 历史缺陷：桶用 round(lvl,2)，而卡面 _num() 对 ≥1000 的值显示 0 位小数 →
+        # 77258.57 与 77258.58 是两个桶、都显示 77,258，卡面出现两行一模一样的 VWAP。
+        # 现在按显示精度归并：≥1000 取整数桶，否则保留 2 位。
+        bucket = round(lvl) if abs(lvl) >= 1000 else round(lvl, 2)
         if bucket in seen:
             continue
         seen.add(bucket)
@@ -368,6 +372,7 @@ def render_v96_card(
     model_id: str,
     n5,
     eng_conf,
+    risk_backed: bool = True,
     klines: dict = None,
     tv_dmi: dict = None,
     dual_indicator: dict | None = None,
@@ -563,7 +568,12 @@ def render_v96_card(
     lines.append("| ⚠️禁止 | 追单/数据过期/主副冲突 | 夹击+去杠杆+R:R不足 | — |")
     lines.append("")
 
-    lines.append(f"【裁决】{action_summary} · 风控{_num(risk_amt, 2)}U · {leverage_text or ''}")
+    # 风控额度必须标出来源：没接真实账户时不能把兜底默认值写成看似的真实额度。
+    if risk_backed:
+        _risk_txt = f"风控{_num(risk_amt, 2)}U"
+    else:
+        _risk_txt = "风控 —（未接账户余额·非真实额度）"
+    lines.append(f"【裁决】{action_summary} · {_risk_txt} · {leverage_text or ''}")
     # 未授权裁决不得展示计划失效价：失效价=止损价，与 Entry/Stop/Target 同一道闸。
     inv_display = _price(inv_line) if (inv_line and final_executable) else '`—`'
     lines.append(f"失效 {inv_display} · 数据{data_grade} · 主副指标已纳入")
