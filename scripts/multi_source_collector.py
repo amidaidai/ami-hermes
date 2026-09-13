@@ -218,6 +218,11 @@ def cmc_quote(symbol: str = "BTC") -> dict:
             "rank": coin["cmc_rank"],
             "dominance": q.get("market_cap_dominance", 0),
             "last_updated": coin["last_updated"],
+            # 2026-09-13 修复：契约的时间戳键是 updated_epoch/updated_at/timestamp/ts/time/updated，
+            # 而 CMC 只给 last_updated —— 键名对不上导致 payload_timestamp() 返回 None，
+            # 于是一份**实时且完整**的行情被判成 unavailable(missing_timestamp)，
+            # 多源验证表里 CMC 常年显红。把同一个时间同时挂到契约认得的键上即可。
+            "updated_at": coin["last_updated"],
         }
     return _cached(f"cmc_{symbol}", fetch, ttl=120)
 
@@ -238,6 +243,8 @@ def cmc_global() -> dict:
             "eth_dominance": m["eth_dominance"],
             "active_cryptos": m["active_cryptocurrencies"],
             "mc_change_24h": q.get("total_market_cap_yesterday_percentage_change", 0),
+            # 同 cmc_quote：契约的时间戳键名与 CMC 的 last_updated 不一致 → 活数据被判 unavailable
+            "updated_at": m["last_updated"],
         }
     return _cached("cmc_global", fetch)
 

@@ -57,11 +57,18 @@ class TestConfigLayer:
 
 class TestRuntimeLayer:
     def test_live_process_without_proxy_is_flagged(self):
+        """意图不变：无代理实例必须被抓出来。
+
+        2026-09-13 更新：code 由 live_process_without_proxy 改为
+        live_processes_without_proxy（改为按实例聚合），修复指引也从「发 /reload-mcp」
+        改为「POST /api/hermes/mcp/reload + reaper」——后者才是可复现的施修路径。
+        """
         procs = [{"server": "financekit", "pid": 1, "env": {}}]
         problems = m.check_runtime_env(procs, NEEDS)
         assert len(problems) == 1
-        assert problems[0]["code"] == "live_process_without_proxy"
-        assert "/reload-mcp" in problems[0]["detail"]
+        assert problems[0]["code"] == "live_processes_without_proxy"
+        assert "/mcp/reload" in problems[0]["detail"]
+        assert "mcp_stale_proxy_reaper" in problems[0]["detail"]
 
     def test_live_process_with_proxy_passes(self):
         procs = [{"server": "financekit", "pid": 1, "env": {"HTTP_PROXY": PROXY}}]
@@ -72,10 +79,18 @@ class TestRuntimeLayer:
         assert m.check_runtime_env([], NEEDS) == []
 
     def test_multiple_processes_all_checked(self):
+        """意图不变：混有代理/无代理时不能漏判。
+
+        2026-09-13 更新：同一 server 的多个实例现在聚合成**一条**结论，
+        并显式给出带代理/无代理的计数与无代理 pid 列表（避免一屏刷十几条）。
+        """
         procs = [{"server": "financekit", "pid": 1, "env": {"HTTP_PROXY": PROXY}},
                  {"server": "financekit", "pid": 2, "env": {}}]
         problems = m.check_runtime_env(procs, NEEDS)
-        assert len(problems) == 1 and "pid=2" in problems[0]["detail"]
+        assert len(problems) == 1
+        assert problems[0]["without_proxy_count"] == 1
+        assert problems[0]["with_proxy_count"] == 1
+        assert problems[0]["proxyless_pids"] == [2]
 
 
 class TestMain:
@@ -121,7 +136,8 @@ mcp_servers:
         assert rc == 2
         assert "missing_proxy_env" not in out  # 输出的是 detail 文本，不是 code
         assert "hermes config set" in out
-        assert "/reload-mcp" in out
+        # 2026-09-13：施修指引改为可复现的 API + reaper（见上）
+        assert "/mcp/reload" in out
         assert not (tmp_path / "data").exists()
 
     def test_missing_config_exit_2(self, tmp_path, monkeypatch, capsys):

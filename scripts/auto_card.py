@@ -4375,7 +4375,13 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             engine_data["fear_greed"] = fg
             # 2026-09-13：没采到就直说，「✅ ? (?)」会被当成采到了。
             if fg.get("value") in (None, "", "?"):
-                print(f"  ⚠️ 恐慌贪婪: 本轮未采到有效字段（来源未路由或失败）")
+                # 2026-09-13：区分「档位设计跳过」与「真采集失败」——把两者写成同一句
+                # 「来源未路由或失败」会让正常降级看起来像故障，违反显式降级契约。
+                if "macro" not in pipeline_steps:
+                    print(f"  ⏭️ 恐慌贪婪: 当前档位跳过（需 macro 步）")
+                else:
+                    _fg_status = fg.get("_source_status") or "unavailable"
+                    print(f"  ⚠️ 恐慌贪婪: 采集失败（状态{_fg_status}），需查源")
             else:
                 print(f"  ✅ 恐慌贪婪: {fg.get('value')} ({fg.get('classification') or '—'})")
             
@@ -4390,9 +4396,14 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 # —— 那是 .get(...,0) 的默认值伪装成读数。
                 _btc_chg = top.get("btc_change_24h") if isinstance(top, dict) else None
                 _alt_chg = top.get("avg_alt_change_24h") if isinstance(top, dict) else None
-                _icon = "✅" if cg_status in ("live", "cache") else "⚠️"
+                # not_run = 档位设计跳过，不是故障；别用 ⚠️ 让正常降级看起来像坏了
+                _icon = "✅" if cg_status in ("live", "cache") else (
+                    "⏭️" if cg_status == "not_run" else "⚠️")
                 if _btc_chg is None and _alt_chg is None:
-                    print(f"  {_icon} CoinGecko Top10: 状态{cg_status}·本轮未采到有效字段")
+                    if cg_status == "not_run":
+                        print(f"  {_icon} CoinGecko Top10: 当前档位跳过（需 cg_pro 步）")
+                    else:
+                        print(f"  {_icon} CoinGecko Top10: 状态{cg_status}·本轮未采到有效字段")
                 else:
                     _btc_txt = f"{float(_btc_chg):+.1f}%" if _btc_chg is not None else "—"
                     _alt_txt = f"{float(_alt_chg):+.1f}%" if _alt_chg is not None else "—"
@@ -4405,7 +4416,12 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 engine_data["cg_trending"] = trend
                 hot = ", ".join(c["symbol"] for c in trend.get("trending", [])[:3]) or "无"
                 trend_status = trend.get("_source_status", "not_run") if isinstance(trend, dict) else "unavailable"
-                print(f"  🔥 Trending: {hot} | 状态{trend_status}")
+                # not_run = 档位设计跳过（同 CoinGecko Top10 的处理，别让正常降级像故障）
+                if trend_status == "not_run":
+                    print(f"  ⏭️ Trending: 当前档位跳过（需 cg_pro 步）")
+                else:
+                    _t_icon = "✅" if trend_status in ("live", "cache") else "⚠️"
+                    print(f"  {_t_icon} Trending: {hot} | 状态{trend_status}")
             except Exception:
                 pass
             
@@ -4418,7 +4434,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 # 采不到就直说：不再用默认值打印出一个看起来正常的「中性 | VIX 20」。
                 _m_status = str(macro.get("_source_status") or ("not_run" if not macro else "unavailable"))
                 if macro.get("vix_level") is None and not macro.get("spx"):
-                    print(f"  📊 宏观[{_m_status}]: 本轮未采到有效字段")
+                    if _m_status == "not_run":
+                        print(f"  ⏭️ 宏观: 当前档位跳过（需 macro 步）")
+                    else:
+                        print(f"  ⚠️ 宏观[{_m_status}]: 本轮未采到有效字段，需查源")
                 else:
                     _vix = macro.get("vix_level")
                     _spx = (macro.get("spx") or {}).get("change_pct")
