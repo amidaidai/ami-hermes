@@ -165,6 +165,41 @@ def label_outcome(
     return result
 
 
+def shadow_sample_stats(path: str | Path) -> dict[str, int]:
+    """影子样本真实统计：总量 / 成熟 / 可评估。
+
+    2026-09-13 审计修复：门6「样本0」是恒0假值（`_reviews_count` 从无生产赋值），
+    本函数为该门提供真实数据源。`evaluable`（filled=True）在订单模型接入前恒为
+    小值——展示层必须如实呈现「缺订单模型」，不得把 mature 冒充可评估样本。
+    """
+    p = Path(path)
+    total = mature = evaluable = 0
+    if not p.exists():
+        return {"total": 0, "mature": 0, "evaluable": 0}
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        total += 1
+        outcome = row.get("outcome") if isinstance(row.get("outcome"), dict) else {}
+        horizons = []
+        for hkey in ("h4", "h8", "h16"):
+            hv = outcome.get(hkey)
+            if isinstance(hv, dict):
+                horizons.append(hv)
+        if any(h.get("mature") is True for h in horizons):
+            mature += 1
+        if any(h.get("filled") is True for h in horizons):
+            evaluable += 1
+    return {"total": total, "mature": mature, "evaluable": evaluable}
+
+
 def calibrate_groups(
     rows: Iterable[dict[str, Any]],
     *,

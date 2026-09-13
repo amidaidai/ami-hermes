@@ -216,8 +216,18 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
 
     # ── 门5: Protections ──
     prot_status = meta.get("protections_status", "未检测")
+    prot_stale = bool(meta.get("protections_snapshot_stale"))
     if "通过" in str(prot_status):
-        gates["protections"] = {"status": "green", "reason": "Protections全部通过"}
+        if prot_stale:
+            # 2026-09-13 审计修复：快照陈旧时不得显示「全部通过」——
+            # 可见降级（黄灯，不进硬拦截），快照日期如实标注。
+            gates["protections"] = {
+                "status": "yellow",
+                "reason": f"无拦截记录·快照{meta.get('protections_snapshot', '?')}陈旧·未验证当前风控",
+            }
+            yellow_gates.append("protections")
+        else:
+            gates["protections"] = {"status": "green", "reason": "Protections全部通过"}
     elif "拦截" in str(prot_status):
         gates["protections"] = {"status": "red", "reason": prot_status}
         red_gates.append("protections")
@@ -227,9 +237,25 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         yellow_gates.append("protections")
 
     # ── 门6: 样本/WFO ──
-    reviews_count = engine_data.get("_reviews_count", 0)
-    wfo_efficiency = engine_data.get("_wfo_efficiency", 0)
-    if reviews_count >= 20 and wfo_efficiency >= 0.5:
+    # 2026-09-13 审计修复：旧实现恒读默认值 0 → 卡面「样本仅0」是假值。
+    # 真源 = shadow_calibration.shadow_sample_stats（auto_card 注入 engine_data）。
+    reviews_count = engine_data.get("_reviews_count")
+    wfo_efficiency = engine_data.get("_wfo_efficiency")
+    shadow = engine_data.get("_shadow_stats") if isinstance(engine_data.get("_shadow_stats"), dict) else {}
+    if reviews_count is None:
+        gates["wfo_samples"] = {"status": "yellow", "reason": "影子样本未接入·本轮无法评估"}
+        yellow_gates.append("wfo_samples")
+    elif wfo_efficiency is None:
+        if shadow:
+            _stats_txt = (f"影子{shadow.get('total', '?')}·成熟{shadow.get('mature', '?')}"
+                          f"·可评估{shadow.get('evaluable', '?')}")
+            if int(shadow.get("evaluable", 0) or 0) <= 0:
+                _stats_txt += "·缺订单模型"
+        else:
+            _stats_txt = f"样本{reviews_count}"
+        gates["wfo_samples"] = {"status": "yellow", "reason": f"{_stats_txt}·WFO未计算"}
+        yellow_gates.append("wfo_samples")
+    elif reviews_count >= 20 and wfo_efficiency >= 0.5:
         gates["wfo_samples"] = {"status": "green", "reason": f"样本{reviews_count}·WFO效率{wfo_efficiency:.2f}"}
     elif reviews_count >= 20:
         gates["wfo_samples"] = {"status": "yellow", "reason": f"样本{reviews_count}但WFO效率{wfo_efficiency:.2f}<0.5"}
@@ -245,7 +271,10 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     hard_conflict = dual.get("hard_conflict") if "hard_conflict" in dual else dual.get("conflict")
     valid_code = dual.get("valid_code", 2 if dual.get("usable") else 0)
     if hard_conflict:
-        gates["dual_indicator"] = {"status": "red", "reason": GATE_RULES["dual_indicator"]["red_light"]}
+        # 2026-09-13 审计修复：红灯理由优先取双指标裁决原文
+        # （S3 场景给出「副S3冲突·CVD/OI背离」，比通稿更精确）。
+        _red_reason = str(dual.get("direction_verdict") or "").strip()
+        gates["dual_indicator"] = {"status": "red", "reason": _red_reason or GATE_RULES["dual_indicator"]["red_light"]}
         red_gates.append("dual_indicator")
         go = False
     elif dual.get("conflict") and valid_code == 1:
@@ -253,16 +282,36 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         yellow_gates.append("dual_indicator")
     elif dual.get("usable") or not dual.get("asset_is_crypto", True):
         reason = dual.get("direction_verdict") or "主副指标已读"
-        gates["dual_indicator"] = {"status": "green", "reason": reason}
+        # 2026-09-13 审计修复：副指标有数据但未共振（不足/拥挤降级）时
+        # 不得显示「共振 GREEN」——降为可见黄灯，不阻断执行授权链。
+        _weak = str(reason)
+        if _weak.startswith("副指标不足") or _weak.startswith("同向但拥挤"):
+            gates["dual_indicator"] = {"status": "yellow", "reason": f"{reason}·未共振"}
+            yellow_gates.append("dual_indicator")
+        else:
+            gates["dual_indicator"] = {"status": "green", "reason": reason}
     else:
         gates["dual_indicator"] = {"status": "yellow", "reason": "HALDRO副指标未读·降级确认型计划"}
         yellow_gates.append("dual_indicator")
 
     # ── 门8: 组合暴露 ──
+    # 2026-09-13 审计修复：未接持仓数据时旧实现默认 0 → 显示「暴露0.0%」绿灯。
+    # 无数据 → 黄灯「未评估」，不得把缺失显示为安全。
     corr_high = engine_data.get("_corr_high", False)
-    total_exposure = engine_data.get("_total_exposure_pct", 0)
-    if not corr_high and total_exposure <= 15:
-        gates["portfolio_exposure"] = {"status": "green", "reason": f"相关≤0.7·暴露{total_exposure:.1f}%"}
+    _corr_known = "_corr_high" in engine_data and engine_data.get("_corr_high") is not None
+    _exposure_raw = engine_data.get("_total_exposure_pct")
+    total_exposure = None
+    if _exposure_raw is not None:
+        try:
+            total_exposure = float(_exposure_raw)
+        except (TypeError, ValueError):
+            total_exposure = None
+    if total_exposure is None:
+        gates["portfolio_exposure"] = {"status": "yellow", "reason": "未接持仓·暴露未评估"}
+        yellow_gates.append("portfolio_exposure")
+    elif not corr_high and total_exposure <= 15:
+        _corr_txt = "相关≤0.7·" if _corr_known else "相关未评估·"
+        gates["portfolio_exposure"] = {"status": "green", "reason": f"{_corr_txt}暴露{total_exposure:.1f}%"}
     elif not corr_high:
         gates["portfolio_exposure"] = {"status": "yellow", "reason": f"暴露{total_exposure:.1f}%偏高"}
         yellow_gates.append("portfolio_exposure")

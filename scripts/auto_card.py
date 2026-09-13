@@ -759,7 +759,17 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     raw_conflict = (svp_long and sub_short) or (svp_short and sub_long)
     aligned = (svp_long and sub_long) or (svp_short and sub_short)
     conflict = raw_conflict if valid_code >= 1 else False
-    hard_conflict = raw_conflict and valid_code >= 2
+    # 2026-09-13 审计修复：副指标 S3（CVD/OI 背离）必须与 decision_loop 的
+    # haldro_state_conflict 硬阻断同源 —— 旧实现只看方向字符串，S3 会让
+    # 门7「双指标共振」带着 usable=True 显示 GREEN，与硬闸门自相矛盾。
+    haldro_s3 = False
+    _s3_raw = tv_main.get("sub_haldro_state_pack")
+    if _s3_raw not in (None, ""):
+        try:
+            haldro_s3 = int(float(str(_s3_raw).replace("−", "-"))) == 3
+        except (TypeError, ValueError):
+            haldro_s3 = False
+    hard_conflict = (raw_conflict and valid_code >= 2) or haldro_s3
     crowding_risk = bool(risk_code & 64)
     flow_risk = bool(risk_code & (4 | 8 | 16))
     executable_grade = status.startswith(("A", "B", "C反"))
@@ -778,13 +788,14 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
         "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'} · 风险 {risk_text}" + feed_tail,
         "haldro_confirm": f"Confirm {confirm or '待判'}",
-        "direction_verdict": "副单源，不参与协同" if valid_code <= 0 and feed.get("single") else "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if hard_conflict else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
+        "direction_verdict": "副单源，不参与协同" if valid_code <= 0 and feed.get("single") else "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if (raw_conflict and valid_code >= 2) else "副S3冲突·CVD/OI背离" if haldro_s3 else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
         "structure_verdict": "结构顺向" if aligned else "结构需确认",
         "flow_verdict": "订单流冲突，不追" if conflict else f"订单流风险：{risk_text}" if flow_risk or crowding_risk else "订单流支持" if aligned else "等CVD/OI确认",
         "quality_verdict": f"副指标降级：{risk_text}" if risk_labels else "质量已读",
         "state": downgraded_state,
         "conflict": conflict,
         "hard_conflict": hard_conflict,
+        "s3_conflict": haldro_s3,
         "aligned": aligned and valid_code >= 1,
         "valid_code": valid_code,
         "risk_code": risk_code,
@@ -5044,6 +5055,13 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     _corr_value = (adv.get("factors") or {}).get("correlation") if isinstance(adv, dict) else None
     _corr_requested = effective_mode == "full" and "corr" in pipeline_steps
     _corr_ok = isinstance(_corr_value, dict) and _corr_value.get("status") == "ok"
+    # 2026-09-13 审计修复：_corr_high 旧实现无生产赋值 → 门8 恒「相关≤0.7」。
+    # 从真实相关性输出接线；不可解析时置 None（门8 不引用虚假相关结论）。
+    try:
+        _corr_r = float(str((_corr_value or {}).get("correlation_full")))
+        engine_data["_corr_high"] = abs(_corr_r) >= 0.7 if _corr_ok else None
+    except (TypeError, ValueError):
+        engine_data["_corr_high"] = None
     _register_source_record(
         engine_data,
         "correlation",
@@ -5266,8 +5284,22 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         meta["protections_active"] = True
         meta["protections_passed"] = prot_check["passed"]
         meta["protections_status"] = "通过" if prot_check["passed"] else "拦截: " + "; ".join(prot_check["violations"])
+        # 2026-09-13 审计修复：快照陈旧必须可见降级（门5 黄灯），不得显示「全部通过」。
+        try:
+            _prot_file = ROOT / "data" / "protections_state.json"
+            if _prot_file.exists():
+                _prot_mtime = _prot_file.stat().st_mtime
+                meta["protections_snapshot"] = _dt.fromtimestamp(_prot_mtime).strftime("%Y-%m-%d")
+                meta["protections_snapshot_stale"] = (_dt.now().timestamp() - _prot_mtime) > 48 * 3600
+            else:
+                meta["protections_snapshot"] = "缺失"
+                meta["protections_snapshot_stale"] = True
+        except Exception:
+            meta["protections_snapshot_stale"] = True
         if not prot_check["passed"]:
             print(f"  ⚠️ Protections拦截: {meta['protections_status']}")
+        elif meta.get("protections_snapshot_stale"):
+            print(f"  🛡️ Protections无拦截·快照{meta.get('protections_snapshot', '?')}陈旧")
         else:
             print(f"  🛡️ Protections通过")
     except Exception as e:
@@ -5336,6 +5368,16 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         import sys as _gate_sys
         _gate_sys.path.insert(0, str(ROOT / "scripts"))
         from go_nogo_gate import check_gate, gate_report_card
+        # 2026-09-13 审计修复：门6「样本0」是恒0假值 —— 接线真实影子统计。
+        # mature=成熟样本数；WFO 效率无生产计算源 → 显式 None（门6 显示「WFO未计算」）。
+        try:
+            from shadow_calibration import shadow_sample_stats
+            _shadow_stats = shadow_sample_stats(ROOT / "data" / "shadow" / "decision_outcomes.jsonl")
+            engine_data["_shadow_stats"] = _shadow_stats
+            engine_data["_reviews_count"] = int(_shadow_stats.get("mature", 0))
+            engine_data.setdefault("_wfo_efficiency", None)
+        except Exception as _ss_e:
+            print(f"  ⚠ 影子统计注入失败: {_ss_e}")
         gate_result = check_gate(symbol, engine_data, meta)
         engine_data["_gate_result"] = gate_result
         gate_section = gate_report_card(gate_result, symbol)

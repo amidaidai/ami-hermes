@@ -373,7 +373,9 @@ def _final_dual_verdict(dual: dict | None, final: dict | None) -> str:
     final = final if isinstance(final, dict) else {}
     reason = str(final.get("reason") or "")
     if dual.get("hard_conflict") or "dual_indicator" in reason:
-        return "主副强冲突"
+        # 2026-09-13 审计修复：S3 场景优先用精确文案（副S3冲突·CVD/OI背离）。
+        _dv = str(dual.get("direction_verdict") or "")
+        return _dv if _dv.startswith("副S3") else "主副强冲突"
     if dual.get("conflict"):
         return "主副冲突·等待"
     return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "待裁决")
@@ -577,7 +579,14 @@ def render_v96_card(
     lines.append("")
     lines.append("| 维度 | 内容 |")
     lines.append("|:---|:---|")
-    lines.append(f"| 做法 | 只执行{rec_name_clean} · {recommend_trigger} · {recommend_rr} |")
+    # 2026-09-13 审计修复：NO-GO/等待场景不得套「只执行」执行措辞。
+    if "禁做" in rec_name_clean:
+        _action_txt = "不做单"
+    elif rec_name_clean.startswith("等"):
+        _action_txt = rec_name_clean
+    else:
+        _action_txt = f"只执行{rec_name_clean}"
+    lines.append(f"| 做法 | {_action_txt} · {recommend_trigger} · {recommend_rr} |")
     lines.append(f"| 依据 | SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict} |")
     lines.append("")
 

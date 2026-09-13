@@ -257,7 +257,9 @@ def _dual_verdict_for_final(main: dict, dual: dict) -> str:
     state = str(final.get("state") or "").upper()
     reason = str(final.get("reason") or "")
     if bool(dual.get("hard_conflict")) or "dual_indicator" in reason:
-        return "主副强冲突"
+        # 2026-09-13 审计修复：S3 场景优先用精确文案（副S3冲突·CVD/OI背离）。
+        _dv = str(dual.get("direction_verdict") or "")
+        return _dv if _dv.startswith("副S3") else "主副强冲突"
     if bool(dual.get("conflict")):
         return "主副冲突·等待"
     if state in {"WAIT", "NO-GO"} and not bool(final.get("executable")):

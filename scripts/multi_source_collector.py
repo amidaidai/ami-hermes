@@ -259,7 +259,10 @@ CG_BASE = "https://api.coingecko.com/api/v3"
 def cg_top_coins(n: int = 10) -> dict:
     """Top N 加密排名 + BTC/ETH 市占率变化 → 板块轮动检测"""
     def fetch():
-        d = _fetch(f"{CG_BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page={n}&page=1&sparkline=false&price_change_percentage=1h,24h,7d",
+        # 2026-09-13 审计修复：CG 服务端已拒绝 price_change_percentage=1h,24h,7d（HTTP 400），
+        # 该参数组合导致本源静默死亡 60+ 天（此前一直靠 stale_cache 兜底、卡面报未采到）。
+        # 改为默认字段（含 price_change_percentage_24h）；1h/7d 缺失时如实给 None。
+        d = _fetch(f"{CG_BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page={n}&page=1&sparkline=false",
             headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None)
         coins = []
         btc_dom_shift = 0
@@ -269,9 +272,9 @@ def cg_top_coins(n: int = 10) -> dict:
                 "name": c["name"],
                 "price": c["current_price"],
                 "mc_rank": c.get("market_cap_rank"),
-                "change_1h": c.get("price_change_percentage_1h_in_currency", 0),
+                "change_1h": c.get("price_change_percentage_1h_in_currency"),
                 "change_24h": c.get("price_change_percentage_24h", 0),
-                "change_7d": c.get("price_change_percentage_7d_in_currency", 0),
+                "change_7d": c.get("price_change_percentage_7d_in_currency"),
                 "mc": c.get("market_cap", 0),
             })
             if c["symbol"].upper() == "BTC":
@@ -287,6 +290,9 @@ def cg_top_coins(n: int = 10) -> dict:
             "avg_alt_change_24h": round(avg_alt, 2),
             "rotation": rotation,
             "coin_count": len(coins),
+            # 2026-09-13 审计修复：payload_timestamp() 需要时间戳键，缺失会让
+            # 成功抓取也被标 unavailable（步骤永不完成）。抓取时间如实上报。
+            "updated_epoch": time.time(),
         }
     return _cached("cg_top", fetch, ttl=300)
 
@@ -306,7 +312,7 @@ def cg_trending() -> dict:
                 "mc_rank": item.get("market_cap_rank"),
                 "score": item.get("score", 0),
             })
-        return {"trending": items, "count": len(items)}
+        return {"trending": items, "count": len(items), "updated_epoch": time.time()}
     return _cached("cg_trend", fetch, ttl=600)
 
 

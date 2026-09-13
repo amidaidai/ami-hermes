@@ -8,7 +8,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import pytest
+
 import xau_tv_sync
+
+
+@pytest.fixture(autouse=True)
+def _no_active_analysis_lease(monkeypatch):
+    """隔离活跃分析租约：长跑分析（如 auto_card）持租约期间，
+    xau_tv_sync 会走「让路」分支并跳过主逻辑，导致本文件断言在并发下假红
+    （2026-09-13 实测 3 例）。测试固定为「无租约」环境；让路路径由
+    xau_tv_sync 自身逻辑与运维观察覆盖。"""
+    monkeypatch.setattr(xau_tv_sync, "analysis_lease_defer_exit", lambda: None)
 
 
 def test_main_degrades_nonzero_sync_result_to_stale_cache(monkeypatch, tmp_path):
