@@ -1,9 +1,26 @@
 import importlib.util
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT / "scripts"))
+import tv_data_bridge as _bridge  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_active_analysis_lease(monkeypatch):
+    """续航测试不该被真实的交互式分析租约影响。
+
+    btc_tv_refresh.main() 在租约活跃时会「让路」提前 return 0，
+    于是「只跑 stale 的那条契约」用例的 called 断言会假红（实测踩到）。
+    """
+    monkeypatch.setattr(_bridge, "analysis_lease_status",
+                        lambda *args, **kwargs: {"active": False})
 
 
 def load(name):

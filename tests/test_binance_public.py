@@ -3,10 +3,30 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import binance_public as bp
+
+
+@pytest.fixture(autouse=True)
+def _isolate_module_state(monkeypatch):
+    """模块级缓存/冷却表是进程级全局，会跨用例泄漏。
+
+    实测：同一进程里别的用例真实请求过 Binance 并把 api.binance.com 标成 down，
+    本文件的 fallback 用例就会跳过第一个 base，断言「两个 URL 都被试过」而假红。
+    """
+    monkeypatch.setattr(bp, "_HOST_DOWN_UNTIL", {})
+    monkeypatch.setattr(bp, "_ORION_CACHE", {})
+    monkeypatch.setattr(bp, "_ORION_CACHE_AT", 0.0)
+    monkeypatch.setattr(bp, "_FAPI_HEALTH", None)
+
+
+def test_module_host_cooldown_state_starts_clean():
+    """canary：没有这条，host 冷却泄漏会以「别的用例偶发红」的形式出现。"""
+    assert bp._HOST_DOWN_UNTIL == {}, "host 冷却表未隔离"
 
 
 class _Response:
