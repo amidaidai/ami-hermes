@@ -5267,9 +5267,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             # 2026-09-13：XAU 只读专属缓存——通用 tv_live.json / tv_dmi_cache.json 是
             # BTC 写入的，XAU 读它们只会产生「品种不匹配」噪声并污染门2原因串。
             live_paths = [symbol_live_path] if _is_gold_asset else [symbol_live_path, generic_live_path]
-            # 新鲜度阈值与 xau_tv_sync（13min）对齐：旧实现读取侧 10min 默认与前置
-            # 13min 判定互相矛盾（前置说新鲜跳过、读取说过期拒用——同卡自相矛盾，实测）。
-            _live_max_age = 13 if _is_gold_asset else 10
+            # 2026-09-13 用户批准：复用窗口统一收紧到 5 分钟。
+            # 语义 = 「卡内 TV 结构最多滞后一根 5m K 线」；超出窗口的出卡前自动现场刷新。
+            # （历史值：XAU 13 / BTC 10——用户担忧「缓存太久不实时」，实测后统一收紧。）
+            _live_max_age = 5
             c2 = None
             skipped_tv_caches = []
             live_indicator_injected = False
