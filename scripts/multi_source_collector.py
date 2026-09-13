@@ -13,7 +13,7 @@
   金十 MCP             → 快讯/日历/XAU
 """
 
-import json, time, os, re, urllib.request
+import json, time, os, re, urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -63,7 +63,14 @@ def _fetch(url: str, headers: dict[str, str] | None = None, timeout: int = 10) -
         return json.loads(r.read())
 
 
-def _cached(key: str, fetcher, ttl: int = CACHE_TTL):
+def _cached(key: str, fetcher, ttl: int = CACHE_TTL, cache_when=None):
+    """带缓存的抓取。
+
+    `cache_when(payload) -> bool` 决定这次的 payload 值不值得入缓存。
+    默认「非空即可」，但对「取到部分字段才叫成功」的源（如 macro），
+    调用方应传入只认带显式时间戳的判定，否则全失败也会被缓存成 cache。
+    """
+    should_cache = cache_when or (lambda payload: bool(payload))
     cache = {}
     if CACHE.exists():
         try:
@@ -71,9 +78,13 @@ def _cached(key: str, fetcher, ttl: int = CACHE_TTL):
         except Exception:
             pass
     entry = cache.get(key, {})
-    if entry and time.time() - entry.get("ts", 0) < ttl:
+    # 2026-09-13 实测缺陷：空结果也会被当成「成功抓取」写进缓存，随后 5 分钟内
+    # 以 status="cache"（属于 LIVE_STATES）返回 —— 宏观整步就是被这样洗成「live」的，
+    # 而管线审计同时写着「本轮未采到有效字段」。空 payload 既不该入缓存，也不该算 live。
+    cached_data = entry.get("data") if isinstance(entry, dict) else None
+    if cached_data and time.time() - entry.get("ts", 0) < ttl:
         return _source_status(
-            entry.get("data", {}),
+            cached_data,
             "cache",
             cached=True,
             source_id=key,
@@ -82,12 +93,12 @@ def _cached(key: str, fetcher, ttl: int = CACHE_TTL):
     circuit = _read_source_state().get(key, {})
     if circuit.get("blocked_until", 0) > time.time():
         return _source_status(
-            entry.get("data", {}) if entry else {},
+            cached_data or {},
             "quota_cooldown",
-            cached=bool(entry),
+            cached=bool(cached_data),
             error=RuntimeError("quota cooldown"),
             source_id=key,
-            captured_at=entry.get("captured_at") if entry else None,
+            captured_at=entry.get("captured_at") if cached_data else None,
         )
     try:
         data = fetcher()
@@ -103,7 +114,8 @@ def _cached(key: str, fetcher, ttl: int = CACHE_TTL):
             }
             return merged
 
-        atomic_update_json(CACHE, merge_cache, default={})
+        if should_cache(data):  # 空结果不入缓存：否则失败会被洗成「5 分钟内的 cache」
+            atomic_update_json(CACHE, merge_cache, default={})
         return _source_status(
             data,
             "live" if captured_at is not None else "unavailable",
@@ -114,9 +126,9 @@ def _cached(key: str, fetcher, ttl: int = CACHE_TTL):
     except Exception as e:
         if _classify_source_error(e) == "quota_or_rate_limited":
             _write_source_state(key, time.time() + SOURCE_COOLDOWN_SECONDS)
-        if entry:
+        if cached_data:
             return _source_status(
-                entry.get("data", {}),
+                cached_data,
                 "stale_cache",
                 cached=True,
                 error=e,
@@ -397,26 +409,50 @@ def cg_exchange_volumes(coin_id: str = "bitcoin") -> dict:
 
 # ═══════════════════ 市场概览 (SPX/VIX · FMP) ═══════════════════
 
+def _fmp_change_pct(quote: dict) -> Any:
+    """FMP 涨跌幅字段名在迁移前后不一致，必须两个都认。
+
+    /api/v3 返回 `changesPercentage`；现行 /stable 返回 `changePercentage`（无 s）。
+    只读旧名的代码会静默拿到 0 —— 实测 ^VIX 真实 -11.21%、^GSPC +0.86% 全被写成 0.0%。
+    """
+    for key in ("changePercentage", "changesPercentage"):
+        if quote.get(key) is not None:
+            return quote[key]
+    return 0
+
+
 def macro_overview() -> dict:
-    """SPX + VIX + US10Y + DXY + Gold — 宏观快照"""
+    """SPX + VIX + US10Y + DXY + Gold — 宏观快照
+
+    2026-09-13 实测：FMP 已下线 `/api/v3/quote/{sym}`（403 Forbidden），
+    同仓库的 `fmp_quote` / `fmp_forex` 早已迁到 `/stable/quote?symbol=`，
+    只有这里漏迁 —— 结果是宏观整步恒 unavailable（0 字段）。
+    现在改用 stable 端点，并**逐符号**记录可用性：本套餐下 ^VIX / ^GSPC 可用，
+    ^TNX / DX-Y.NYB / GC=F 返回 402 Payment Required，如实标注而不补默认值。
+    """
     def fetch():
         result = {}
-        symbols = ["^GSPC", "^VIX", "^TNX", "DX-Y.NYB", "GC=F"]
-        labels = {"^GSPC": "spx", "^VIX": "vix", "^TNX": "us10y", "DX-Y.NYB": "dxy", "GC=F": "gold_fut"}
-        for sym in symbols:
+        unavailable = {}
+        symbols = [("^GSPC", "spx"), ("^VIX", "vix"), ("^TNX", "us10y"),
+                   ("DX-Y.NYB", "dxy"), ("GC=F", "gold_fut")]
+        for sym, label in symbols:
             try:
                 d = _fetch(
-                    f"https://financialmodelingprep.com/api/v3/quote/{sym}?apikey={FMP_KEY}"
+                    "https://financialmodelingprep.com/stable/quote"
+                    f"?symbol={urllib.parse.quote(sym)}&apikey={FMP_KEY}"
                 )
-                if isinstance(d, list) and d:
-                    q = d[0]
-                    result[labels[sym]] = {
-                        "price": float(q.get("price", 0)),
-                        "change_pct": q.get("changesPercentage", 0),
-                        "change": float(q.get("change", 0)),
-                    }
-            except Exception:
-                pass
+            except Exception as exc:  # 402/403/超时：单符号失败不拖垮整步
+                unavailable[label] = type(exc).__name__
+                continue
+            if isinstance(d, list) and d:
+                q = d[0]
+                result[label] = {
+                    "price": float(q.get("price", 0)),
+                    "change_pct": _fmp_change_pct(q),
+                    "change": float(q.get("change", 0)),
+                }
+            else:
+                unavailable[label] = "empty"
         # 宏观情绪分类：只允许用**真实取到**的字段判定。
         # 历史缺陷（2026-09-13 实测）：VIX 取数失败时用默认 20、SPX 用默认 0，
         # 于是失败场景固定输出「中性 | VIX 20 | SPX +0.0%」——看起来像采到了。
@@ -445,12 +481,17 @@ def macro_overview() -> dict:
             result["sentiment"] = sentiment
         if vix_val is not None:
             result["vix_level"] = vix_val
-        if result:
+        if unavailable:
+            # 哪几个字段取不到必须可见（本套餐 ^TNX/DX-Y.NYB/GC=F 是 402）
+            result["unavailable_fields"] = unavailable
+        if any(k in result for k in ("spx", "vix", "us10y", "dxy", "gold_fut")):
             # 只在这一轮真的取到东西时才盖时间戳：否则 _cached 只能报 unavailable，
-            # 不允许拿旧快照冒充实时。
+            # 不允许拿旧快照冒充实时；也绝不让「全失败」被缓存成 cache。
             result["timestamp"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
         return result
-    return _cached("macro", fetch, ttl=300)
+    # 只有带显式时间戳（= 真的取到至少一个字段）的结果才值得缓存。
+    return _cached("macro", fetch, ttl=300,
+                   cache_when=lambda payload: bool(payload.get("timestamp")))
 
 
 # ═══════════════════ Alpha Vantage ═══════════════════
@@ -570,7 +611,7 @@ def fmp_quote(symbol: str = "AAPL") -> dict:
             return {
                 "price": float(q.get("price", 0)),
                 "change": float(q.get("change", 0)),
-                "change_pct": q.get("changesPercentage", 0),
+                "change_pct": _fmp_change_pct(q),
                 "volume": int(q.get("volume", 0)),
                 "high": float(q.get("dayHigh", 0)),
                 "low": float(q.get("dayLow", 0)),
@@ -594,7 +635,7 @@ def fmp_forex(pair: str = "EURUSD") -> dict:
             return {
                 "price": float(q.get("price", 0)),
                 "change": float(q.get("change", 0)),
-                "change_pct": q.get("changesPercentage", 0),
+                "change_pct": _fmp_change_pct(q),
                 "high": float(q.get("dayHigh", 0)),
                 "low": float(q.get("dayLow", 0)),
             }

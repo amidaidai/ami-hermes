@@ -14,6 +14,10 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "SOURCE_STATE", tmp_path / "source_circuit_state.json")
 
 
+def _quote(price, chg):
+    return [{"price": price, "changePercentage": chg, "change": 0}]
+
+
 def test_failed_fetch_does_not_invent_vix_or_sentiment(monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("network down")
@@ -26,10 +30,8 @@ def test_failed_fetch_does_not_invent_vix_or_sentiment(monkeypatch):
 
 
 def test_live_fetch_keeps_real_values_and_stamps_time(monkeypatch):
-    payloads = {
-        "^VIX": [{"price": 31.5, "changesPercentage": 4.0, "change": 1.2}],
-        "^GSPC": [{"price": 5000.0, "changesPercentage": -1.5, "change": -75.0}],
-    }
+    # ^VIX / ^GSPC 经 urllib.parse.quote 后是 %5EVIX / %5EGSPC
+    payloads = {"%5EVIX": _quote(31.5, 4.0), "%5EGSPC": _quote(5000.0, -1.5)}
     def fake_fetch(url, *args, **kwargs):
         for key, value in payloads.items():
             if key in url:
@@ -46,8 +48,8 @@ def test_live_fetch_keeps_real_values_and_stamps_time(monkeypatch):
 
 def test_missing_vix_is_not_reported_as_neutral(monkeypatch):
     def only_spx(url, *args, **kwargs):
-        if "^GSPC" in url:
-            return [{"price": 5000.0, "changesPercentage": 0.0, "change": 0.0}]
+        if "%5EGSPC" in url:
+            return _quote(5000.0, 0.0)
         raise RuntimeError("no data")
     monkeypatch.setattr(M, "_fetch", only_spx)
     out = M.macro_overview()
