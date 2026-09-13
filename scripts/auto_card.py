@@ -1577,8 +1577,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     oi_trend = _oi_trend(oi_data)
     taker_dir = taker_data.get("direction") or "N/A"
     taker_ratio = taker_data.get("ratio") or "N/A"
-    cvd_dir = cvd_data.get("direction") or "N/A"
-    cvd_quality_raw = cvd_data.get("quality") or "C"
+    # 2026-09-13：非加密 XAU 回退黄金合约 CVD（独立键 gold_contract_cvd；来源已标注）
+    _gold_cvd_data = engine_data.get("gold_contract_cvd") if isinstance(engine_data.get("gold_contract_cvd"), dict) else {}
+    cvd_dir = cvd_data.get("direction") or _gold_cvd_data.get("direction") or "N/A"
+    cvd_quality_raw = cvd_data.get("quality") or _gold_cvd_data.get("quality") or "C"
     cvd_quality = cvd_quality_raw.replace("级", "") if isinstance(cvd_quality_raw, str) else str(cvd_quality_raw)
     # 数据等级降级：木桶原理——最弱一环决定
     data_grade = _effective_grade(data_grade, taker_data, engine_data)
@@ -1895,6 +1897,9 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     status = final_verdict.get("state") or final_verdict.get("grade") or status
     direction = final_verdict.get("side") or direction
     bearish = direction == "short"
+    # 2026-09-13：XAU 黄金合约 CVD（Binance XAUUSDT）显式标记 → 渲染层保留显示
+    if engine_data.get("_gold_contract_cvd"):
+        dual_indicator["gold_contract_cvd"] = True
     dual_indicator["final_state"] = final_verdict.get("state")
     dual_indicator["state"] = final_verdict.get("grade") or dual_indicator.get("state")
     if dual_indicator.get("asset_is_crypto") and dual_indicator.get("usable"):
@@ -1906,6 +1911,15 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                 k.setdefault("sub_indicator", sub_line)
                 k.setdefault("sub_composite", comp_line)
 
+    # 2026-09-13：卡面时段标注（亚洲/伦敦/纽约/盘外；空值不显示）
+    try:
+        from session_strategy import get_session as _get_session
+        _sess = engine_data.get("_session") if isinstance(engine_data.get("_session"), dict) else {}
+        _sess_name = str(_sess.get("name") or _get_session().get("name") or "")
+    except Exception:
+        _sess_name = ""
+    if _sess_name == "低波动":
+        _sess_name = "盘外"
     full = render_v96_card(
         symbol=symbol, status=status, direction=direction, price=price,
         high=high, low=low, chg=chg, tf_lines=tf_lines,
@@ -1926,6 +1940,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         dual_indicator=dual_indicator,
         final_verdict=final_verdict,
         source_matrix=engine_data.get("_cross_validation_matrix") or [],
+        session_name=_sess_name,
     )
     
     # v9: TV双指标直出卡（优先：主+副指标数据齐全时使用）
@@ -3698,7 +3713,8 @@ def _load_xau_tv_contract() -> dict:
 
 def _pipeline_tv_step_status(engine_data: dict) -> dict:
     """Audit the routed TV step without treating Binance K-lines as TV evidence."""
-    live = engine_data.get("_tv_cache_status") or engine_data.get("_tv_live_status") or {}
+    # 2026-09-13 口径统一：live_status=TV注入最终结论，cache_status 仅输入管道之一。
+    live = engine_data.get("_tv_live_status") or engine_data.get("_tv_cache_status") or {}
     live = live if isinstance(live, dict) else {}
     override = engine_data.get("_tv_override") or {}
     override = override if isinstance(override, dict) else {}
@@ -3719,7 +3735,8 @@ def _pipeline_tv_step_status(engine_data: dict) -> dict:
 
 def _freshness_line(engine_data: dict) -> str:
     """Human-readable freshness line for the cockpit card."""
-    tvs = engine_data.get("_tv_cache_status") or {}
+    # 2026-09-13 口径统一：与门2/步骤审计一致，live_status 优先。
+    tvs = engine_data.get("_tv_live_status") or engine_data.get("_tv_cache_status") or {}
     if tvs:
         age = tvs.get("age_minutes")
         if tvs.get("usable"):
@@ -4983,6 +5000,36 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         funding_rate = ""
         for _crypto_key in ("cvd", "taker", "funding", "oi"):
             engine_data.pop(_crypto_key, None)
+        # 2026-09-13（用户批准）：XAU 单独接 Binance 黄金合约逐笔 CVD 作辅助源。
+        # 来源明标「Binance XAUUSDT 黄金合约」——不冒充 OANDA 现货；数据存独立键
+        # （gold_contract_cvd，不进任何加密评分链），仅展示/审计可见；失败不阻断。
+        if "XAU" in str(symbol).upper() and "cvd" in pipeline_steps:
+            try:
+                from cvd_aggtrades import get_cvd_aggtrades
+                _gold_cvd = get_cvd_aggtrades("XAUUSDT")
+                _g_dir = str(_gold_cvd.get("direction") or "")
+                if _g_dir in ("买", "卖", "中性"):
+                    engine_data["gold_contract_cvd"] = {
+                        "direction": _g_dir,
+                        "quality": _gold_cvd.get("quality", "A级"),
+                        "cvd": _gold_cvd.get("cvd"),
+                        "source": "binance_xauusdt_contract",
+                    }
+                    engine_data["_gold_contract_cvd"] = True
+                    cvd_dir = _g_dir
+                    _register_source_record(
+                        engine_data, "cvd", engine_data["gold_contract_cvd"],
+                        status="live", captured_at=datetime.now(TZ), symbol="XAUUSDT",
+                    )
+                    print(f"  ✅ 黄金合约CVD(Binance XAUUSDT·非OANDA): {_g_dir} {_gold_cvd.get('quality', '?')}")
+                else:
+                    _register_source_record(engine_data, "cvd", None, status="unavailable",
+                                            error="empty_aggtrades", symbol="XAUUSDT")
+                    print("  ⚠️ 黄金合约CVD: 本轮未采到")
+            except Exception as _ge:
+                _register_source_record(engine_data, "cvd", None, status="unavailable",
+                                        error=_ge, symbol="XAUUSDT")
+                print(f"  ⚠️ 黄金合约CVD: {_ge}")
 
     # ═══ 深度数据采集（仅加密品种）═══
     try:
@@ -5079,7 +5126,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     tv_dmi_data = {}
     try:
         tv_raw = engine_data.get("_tv_pine")
-        if not tv_raw:
+        # 2026-09-13：tv_dmi_cache.json 是 BTC cron 专属缓存。XAU 读它必然
+        # 品种不匹配，只会制造误导性的失败状态（实测「品种不匹配 BINANCE:BTCUSDT.P」）；
+        # XAU 的正路是下方 tv_live_XAUUSD/xau_tv_state 注入。
+        if not tv_raw and _asset_class(symbol) != "gold":
             # 回退：读 cron agent 维护的本地缓存
             import json as _j
             cache_path = ROOT / "data" / "tv_dmi_cache.json"

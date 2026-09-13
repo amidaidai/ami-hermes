@@ -121,7 +121,10 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     tv_override = engine_data.get("_tv_override") or {}
     if not isinstance(tv_override, dict):
         tv_override = {}
-    tv_status = engine_data.get("_tv_cache_status") or engine_data.get("_tv_live_status") or {}
+    tv_status = engine_data.get("_tv_live_status") or engine_data.get("_tv_cache_status") or {}
+    # 2026-09-13 审计修复：口径统一 —— _tv_live_status 是 TV 注入的最终结论，
+    # _tv_cache_status 仅是其输入管道之一（如 dmi 缓存校验）。旧实现 cache 优先，
+    # 会在 live 注入成功、历史管道失败时误报红灯（XAU 实测「品种不匹配」实例）。
     if not isinstance(tv_status, dict):
         tv_status = {}
     tv_status_known = isinstance(tv_status, dict) and "usable" in tv_status

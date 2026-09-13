@@ -261,6 +261,18 @@ def _generic_matrix(engine: dict[str, Any], steps: set[str], symbol: str = "") -
             requested=source_id in steps,
             source_value=source_value,
         ))
+    # 2026-09-13：XAU 黄金合约逐笔 CVD（Binance XAUUSDT）——独立辅助行，
+    # 明标来源，不冒充 OANDA 现货；只展示不改裁决。
+    gold_cvd = _as_dict(engine.get("gold_contract_cvd"))
+    if is_gold and gold_cvd.get("direction"):
+        rec = _as_dict(_as_dict(engine.get("_source_records")).get("cvd"))
+        rows.append(_row(
+            "gold_contract_cvd", "Binance黄金合约CVD", _status(rec) if rec else "live",
+            "observational", False, "辅助展示·不越权改FinalVerdict（非OANDA现货数据）",
+            evidence=f"{gold_cvd.get('direction', '?')}·{gold_cvd.get('quality', '?')}",
+            requested="cvd" in steps,
+            source_value=rec or gold_cvd,
+        ))
     return rows
 
 

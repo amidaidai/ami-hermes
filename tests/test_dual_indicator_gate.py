@@ -175,6 +175,35 @@ def test_final_verdict_no_go_overrides_legacy_green_gates():
     assert result["verdict"].startswith("✗ NO-GO")
 
 
+def test_tv_live_status_takes_precedence_over_failed_cache_pipeline():
+    """口径统一（2026-09-13）：live 注入成功 + 历史管道失败 ≠ 红灯（XAU 实测场景）。"""
+    engine = _base_engine()
+    engine["_tv_live_status"] = {"usable": True, "reason": "XAU现场注入成功", "age_minutes": 4}
+    engine["_tv_cache_status"] = {"usable": False, "reason": "品种不匹配 BINANCE:BTCUSDT.P"}
+    result = check_gate("BTCUSDT", engine, _base_meta())
+    assert result["gates"]["tv_live"]["status"] == "green", result["gates"]["tv_live"]
+
+
+def test_failed_live_injection_warns_even_if_old_pipeline_usable():
+    """live 未采用=最终结论，即使旧管道可用也须警示（不能拿历史管道盖结论）。"""
+    engine = _base_engine()
+    engine["_tv_live_status"] = {"usable": False, "reason": "本轮未采用"}
+    engine["_tv_cache_status"] = {"usable": True, "reason": "旧管道可用"}
+    result = check_gate("BTCUSDT", engine, _base_meta())
+    assert result["gates"]["tv_live"]["status"] == "red"
+
+
+def test_tv_status_single_precedence_rule():
+    """防回退：门2/步骤审计/新鲜度行统一 live_status 优先。"""
+    for name, fragment in (
+        ("go_nogo_gate.py", 'tv_status = engine_data.get("_tv_live_status")'),
+        ("auto_card.py", 'live = engine_data.get("_tv_live_status")'),
+        ("auto_card.py", 'tvs = engine_data.get("_tv_live_status")'),
+    ):
+        src = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        assert fragment in src, (name, fragment)
+
+
 def test_tv_cache_indicator_mapping_keeps_lsr():
     studies = auto_card._tv_cache_indicators_to_studies({"indicators": {"lsr": 1.42, "composite": 31, "confirm_score": 4}})
     vals = auto_card._parse_tv_study_values(studies)

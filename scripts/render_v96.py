@@ -316,6 +316,32 @@ def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> li
     return clean[:7]
 
 
+def _nearest_trigger_names(levels_prepared: list[dict], price: float | None) -> tuple[str | None, str | None]:
+    """取现价上方/下方最近的结构位名称（等待条件具名化；只给名不给价）。"""
+    try:
+        px = float(price or 0)
+    except (TypeError, ValueError):
+        return None, None
+    if px <= 0 or not levels_prepared:
+        return None, None
+    up = down = None
+    for lv in levels_prepared:
+        try:
+            v = float(lv.get("level") or 0)
+        except (TypeError, ValueError):
+            continue
+        nm = str(lv.get("kind") or lv.get("name") or "").strip()
+        if not nm:
+            continue
+        if v > px and up is None:
+            up = nm
+        elif 0 < v < px and down is None:
+            down = nm
+        if up and down:
+            break
+    return up, down
+
+
 def _demote_inconsistent_value_area(rows: list[dict]) -> list[dict]:
     """同周期价值区一致性断言：同 TF 内 VAL 价位高于 VAH = 数据自相矛盾。
 
@@ -381,11 +407,20 @@ def _final_dual_verdict(dual: dict | None, final: dict | None) -> str:
     return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "待裁决")
 
 
+def _header_line(display, now, session_name, s_emoji, status, bias) -> str:
+    """卡片首行（2026-09-13：支持时段标注；空值不显示）。"""
+    _sess_seg = f" · {session_name}时段" if session_name else ""
+    return f"📊 {display} · {now}{_sess_seg} · {s_emoji}{status} · {bias}"
+
+
 def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual: dict | None) -> str:
     parts = []
     if cvd_dir:
         cvd_emoji = "🟢" if cvd_dir in ("买", "buy", "多", "long") else "🔴" if cvd_dir in ("卖", "sell", "空", "short") else "🔵"
-        parts.append(f"CVD{cvd_emoji}{cvd_dir}")
+        # 2026-09-13：XAU 非加密场景必须标明数据来源（Binance XAUUSDT 黄金合约，
+        # 非 OANDA 现货）——不冒充身份。
+        _gold_note = "·Binance黄金合约" if isinstance(dual, dict) and dual.get("gold_contract_cvd") else ""
+        parts.append(f"CVD{cvd_emoji}{cvd_dir}{_gold_note}")
     if taker_dir:
         parts.append(f"主动{taker_dir}")
     if funding_rate:
@@ -437,6 +472,7 @@ def render_v96_card(
     dual_indicator: dict | None = None,
     final_verdict: dict | None = None,
     source_matrix: list[dict] | None = None,
+    session_name: str = "",
 ) -> str:
     klines = klines or {}
     st_a = st_a or {"stop": None, "target": None}
@@ -503,6 +539,9 @@ def render_v96_card(
     # 旧实现直接比较 execution_rr < 2，遇到 None/字符串会抛异常，或把缺失写成「R:R不足」。
     _rr_num = _finite_rr(execution_rr)
     _rr_b_num = _finite_rr(rr_b)
+    # 2026-09-13：等待条件具名化 —— 引用最近上下结构位（只给名不给价）
+    _up_name, _down_name = _nearest_trigger_names(levels_prepared, price)
+    _wait_ref = " / ".join([n for n in (_up_name, _down_name) if n]) or "结构位"
     if final_state == "NO-GO" or str(status).startswith("X") or (_rr_num is not None and _rr_num < 2):
         # 2026-09-12：结论文案必须与真实约束一致。旧实现无论 NO-GO 的真实原因
         # 是副指标冲突还是高级门控否决，一律写「R:R不足」，与 R:R 闸门自身
@@ -514,11 +553,16 @@ def render_v96_card(
         else:
             action_summary = "⚠禁做 — 结构禁做"
         recommend_name = "⚠️主推 禁做"
-        recommend_trigger = "等确认后重算；现价无优势"
+        recommend_trigger = f"等 {_wait_ref} 方向确认后重算；现价无优势"
         recommend_exec = "不下单；等R:R≥1:2且主副指标重新共振"
         recommend_rr = "—"
         backup_name = f"🔁备选/观察 {dir_a}"
-        backup_trigger = "重新站回/跌破结构位后再算"
+        if dir_a == "多" and _up_name:
+            backup_trigger = f"重新站回 {_up_name} 后再算"
+        elif dir_a == "空" and _down_name:
+            backup_trigger = f"跌破 {_down_name} 后再算"
+        else:
+            backup_trigger = "重新站回/跌破结构位后再算"
         backup_exec = "仅观察条件；确认后重新计算，不显示候选价"
         backup_rr = "重算"
     elif final_state == "GO-A" and final_executable:
@@ -543,9 +587,11 @@ def render_v96_card(
                 cand = _candidate_view(final_verdict or {})
             except Exception:  # pragma: no cover - 独立调用时退回「无候选」
                 cand = {}
-        action_summary = f"🔵 {bias}等确认 — 先等结构位触发"
+        _wait_ref2 = _up_name if dir_a == "多" else _down_name
+        action_summary = (f"🔵 {bias}等确认 — 先等 {_wait_ref2} 触发" if _wait_ref2
+                          else f"🔵 {bias}等确认 — 先等结构位触发")
         recommend_name = "🔵主推 等确认"
-        recommend_trigger = "未到最优触发"
+        recommend_trigger = f"待 {_wait_ref2} 确认" if _wait_ref2 else "未到最优触发"
         if cand.get("entry"):
             recommend_exec = (f"人工候选（未授权）入{_price(cand['entry'])} "
                               f"止{_price(cand['stop'])} 标{_price(cand['target'])}")
@@ -566,11 +612,16 @@ def render_v96_card(
         tf_emojis.append(f"{tf}{_tf_emoji(klines.get(tf, {}))}")
     mtf_summary = " · ".join(tf_emojis)
     if isinstance(dual_indicator, dict) and dual_indicator.get("asset_is_crypto") is False:
-        cvd_dir = taker_dir = taker_ratio = funding_rate = fg_v = ""
+        if dual_indicator.get("gold_contract_cvd"):
+            # 2026-09-13：XAU 黄金合约 CVD（Binance XAUUSDT·用户批准的辅助源）
+            # 保留 CVD 方向显示；其余加密流字段（主动/费率/恐贪）仍清空。
+            taker_dir = taker_ratio = funding_rate = fg_v = ""
+        else:
+            cvd_dir = taker_dir = taker_ratio = funding_rate = fg_v = ""
     multi_src_line = _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual_indicator)
 
     lines: list[str] = []
-    lines.append(f"📊 {display} · {now} · {s_emoji}{status} · {bias}")
+    lines.append(_header_line(display, now, session_name, s_emoji, status, bias))
     lines.append("【现在】结构位")
     lines.append("")
     lines.append(_structure_table(levels_prepared, price))
