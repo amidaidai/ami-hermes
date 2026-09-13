@@ -3,6 +3,15 @@ name: official-ppt-generation
 description: "Generate professional government/official training PPTs using pptxgenjs on Windows — writing style rules, QA pipeline, and common pitfalls."
 ---
 
+> **同族导航** — 演示/PPT 组 8 个技能，先按**产出物**选路，别加载错（同族入口：`gov-presentation-creation`）
+> · **本技能 `official-ppt-generation`** = 政府/官方培训 PPT 生成器 + QA
+> · 政府/公文类：`gov-presentation-creation`（政府/官方中文演示 · 公文语态与政策核查（用户首选路线））、`official-ppt-generation`（政府/官方培训 PPT 生成器 + QA）⭐
+> · 通用 PPTX 管线：`pptx-production-pipeline`（通用 PPTX 全流程（读源文档→pptxgenjs 生成→Windows 转换/QA））、`powerpoint`（python-pptx 读写编辑 .pptx（非生成管线））
+> · 网页 HTML 演示：`html-ppt`（网页 PPT（多风格/动画，HTML 交付））、`guizang-ppt-skill`（横向翻页网页 PPT（单 HTML + WebGL））
+> · 图像优先：`ppt-image-first`（图像优先：先定视觉方向再做页）、`gpt-image2-ppt`（图像优先：gpt-image-2 出高分辨率页再拼 PPTX）
+> · 组内成员互斥度低，同时加载会互相抢触发词；改一个就同步其余。
+
+
 # Official PPT Generation
 
 Create professional Chinese government/official training presentations using pptxgenjs, with proper bureaucratic writing style and visual QA.

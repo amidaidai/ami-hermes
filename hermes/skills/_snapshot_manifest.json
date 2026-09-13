@@ -955,7 +955,7 @@
   "productivity/google-workspace/scripts/google_api.py": "d3822ef5cbdfad1d",
   "productivity/google-workspace/scripts/gws_bridge.py": "a7ccbac610f504c3",
   "productivity/google-workspace/scripts/setup.py": "ace45d12de9bbc40",
-  "productivity/gov-presentation-creation/SKILL.md": "68617e6ed98ffd18",
+  "productivity/gov-presentation-creation/SKILL.md": "e2fab85d109b768c",
   "productivity/gov-presentation-creation/references/耕地保护政策文件清单.md": "24c60b1681105f9b",
   "productivity/maps/SKILL.md": "775ef9f79be9cd14",
   "productivity/maps/scripts/maps_client.py": "94960e451d549766",
@@ -968,7 +968,7 @@
   "productivity/ocr-and-documents/references/docx-question-answer-annotation.md": "e016f47c1bc10e7e",
   "productivity/ocr-and-documents/scripts/extract_marker.py": "7e4b66050b61fd50",
   "productivity/ocr-and-documents/scripts/extract_pymupdf.py": "8476bafbf0becc09",
-  "productivity/official-ppt-generation/SKILL.md": "e9daf20353777d2d",
+  "productivity/official-ppt-generation/SKILL.md": "ff2f8a023f1f9dd1",
   "productivity/official-ppt-generation/references/windows-pptx-qa.md": "6820e56a34fc5f7e",
   "productivity/pdf/LICENSE.txt": "6f8bd7f4d8ec5cb5",
   "productivity/pdf/SKILL.md": "8365dc08c827763a",
@@ -991,7 +991,7 @@
   "productivity/powerpoint/scripts/pptx_read.py": "b2a6e246e40a6728",
   "productivity/powerpoint/scripts/pptx_render.py": "49ebe77fa453b5fb",
   "productivity/powerpoint/tests/test_powerpoint_skill.py": "da3262b8daa31ba2",
-  "productivity/pptx-production-pipeline/SKILL.md": "5df4d90eea3490e6",
+  "productivity/pptx-production-pipeline/SKILL.md": "b6f3ad5244559280",
   "productivity/pptx-production-pipeline/references/doc-file-reading.md": "10a691588585b226",
   "productivity/pptx-production-pipeline/references/government-ppt-writing-style.md": "3b3a81bd6fd227d0",
   "productivity/pptx-production-pipeline/references/windows-pdf-conversion.md": "789c7b369ce00d9a",
@@ -1383,7 +1383,7 @@
   "trading/realtime-trading-pipeline/references/cockpit-v96-runtime-hardening.md": "ceeb3f2d19df97f1",
   "trading/realtime-trading-pipeline/references/community-research-2026-06-22.md": "fa77ab21f6f8771b",
   "trading/realtime-trading-pipeline/references/cron-notification-routing.md": "777821606c455b87",
-  "trading/realtime-trading-pipeline/references/dead-script-index.md": "e8dc66406b089852",
+  "trading/realtime-trading-pipeline/references/dead-script-index.md": "338836e6cd470289",
   "trading/realtime-trading-pipeline/references/keylevel-monitor-contract-202608.md": "f592d836677c0a50",
   "trading/realtime-trading-pipeline/references/no-agent-tv-cache-cron-recovery.md": "267c7d572bbc2db3",
   "trading/realtime-trading-pipeline/references/push-notification-format.md": "b27bbc64aaa8bba6",
@@ -1959,8 +1959,8 @@
   "web/DESCRIPTION.md": "1cee33fe7aaddc9d",
   "yuanbao/SKILL.md": "239e4875f511124f"
  },
- "generated_at": "2026-09-13T18:53:18+0800",
+ "generated_at": "2026-09-13T19:00:57+0800",
  "oversized": {},
  "source": "C:/Users/Administrator/AppData/Local/hermes/skills",
- "total_bytes": 16007167
+ "total_bytes": 16010979
 }

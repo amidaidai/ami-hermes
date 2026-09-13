@@ -1,6 +1,6 @@
 # 已废止 / 已停用脚本 → 现行替代（唯一对照表）
 
-> 建立：2026年9月11日。**读到任何技能里出现左列脚本名，先查这里再动手**。
+> 建立：2026年9月11日（2026年9月13日 补登 `x_sentiment_collector.py`）。**读到任何技能里出现左列脚本名，先查这里再动手**。
 > 状态均已在 2026-09-11 用 `ls scripts/` + `Find` + `git grep` + 进程/cron 实测核实。
 > 扫描工具：`python scripts/maintenance/skill_drift_scan.py`（仓内，可反复跑）。
 
@@ -32,6 +32,7 @@
 | `btc_keylevel_ws_guard.py` | WebSocket 版；WS 域名在代理/DNS 下不稳，已被 REST 版取代 |
 | `btc_keylevel_sentinel.py` | 两位零 token cron 哨兵；已被 `keylevel_guard.py` 取代 |
 | `btc_price_arrival_sentinel.py` | 到价提醒哨兵；cron 任务 `BTC价格到位提醒` 已 `enabled=false` |
+| `x_sentiment_collector.py` | **已停用**（2026-09-13 审计确认）：无 cron（原任务 `X情绪数据刷新` 已于 2026-09-10 归档）、**零消费者**——输出 `data/x_sentiment.json` 全仓只有它自己的写入方，该文件已归档到 `data/_archive/`。现行替代 = `x_sentiment_refresh.py` → `data/x_sentiment_context.json`（`auto_card.py` X情绪步骤实际读的那份）。脚本头部已加停用注记 |
 
 > 不要删它们（cron 配置与历史审计文档仍在引用），但**不要拿它们当现行链路**。
 

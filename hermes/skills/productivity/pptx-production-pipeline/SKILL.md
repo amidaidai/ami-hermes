@@ -3,6 +3,15 @@ name: pptx-production-pipeline
 description: "Full Windows pipeline for generating professional PPTX decks: read source docs (.doc/.docx/.pptx), generate with pptxgenjs, convert to PDF via comtypes, visual QA with PyMuPDF + vision. Complements the bundled 'powerpoint' skill with Windows-specific tooling and legacy file handling."
 ---
 
+> **同族导航** — 演示/PPT 组 8 个技能，先按**产出物**选路，别加载错（同族入口：`gov-presentation-creation`）
+> · **本技能 `pptx-production-pipeline`** = 通用 PPTX 全流程（读源文档→pptxgenjs 生成→Windows 转换/QA）
+> · 政府/公文类：`gov-presentation-creation`（政府/官方中文演示 · 公文语态与政策核查（用户首选路线））、`official-ppt-generation`（政府/官方培训 PPT 生成器 + QA）
+> · 通用 PPTX 管线：`pptx-production-pipeline`（通用 PPTX 全流程（读源文档→pptxgenjs 生成→Windows 转换/QA））⭐、`powerpoint`（python-pptx 读写编辑 .pptx（非生成管线））
+> · 网页 HTML 演示：`html-ppt`（网页 PPT（多风格/动画，HTML 交付））、`guizang-ppt-skill`（横向翻页网页 PPT（单 HTML + WebGL））
+> · 图像优先：`ppt-image-first`（图像优先：先定视觉方向再做页）、`gpt-image2-ppt`（图像优先：gpt-image-2 出高分辨率页再拼 PPTX）
+> · 组内成员互斥度低，同时加载会互相抢触发词；改一个就同步其余。
+
+
 # PPTX Production Pipeline (Windows)
 
 End-to-end workflow for producing polished, data-rich presentation decks on Windows when you have real content (government docs, data tables, policy research) and need visual QA before delivery.
