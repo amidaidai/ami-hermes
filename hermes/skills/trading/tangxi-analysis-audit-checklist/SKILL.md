@@ -4,6 +4,12 @@ description: 棠溪分析系统审计清单 v1.3 — 分析策略流程、分析
 category: trading
 ---
 
+> **同族导航** — 审计组 6 个技能各司其职，别加载错 （本技能 = 入口）
+> · **本技能 `tangxi-analysis-audit-checklist`** = 入口 · 七维全景扫描 + 资产面三查（记忆/技能/MCP），先取证后定级
+> · 同族其余：`trading-system-audit`（全栈审计，P0/P1/P2 深挖与修复）、`tangxi-runtime-audit-and-cleanup`（运行态（心跳/PID/cron/数据新鲜度）+ 脚本生存性评估与归档）、`tangxi-system-audit`（大版本更新后的全面审计 + git 收口）、`trading-analysis-system-audit-methodology`（审计方法论与定级口径（过程文档））、`trading-system-implementation-closure`（修复后的验收收口（改完才用））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # 棠溪分析系统全景扫描清单
 
 > 触发词（任一即执行）：全面盘点、分析策略流程、分析档位、API拉取、记忆读取、全面扫描  

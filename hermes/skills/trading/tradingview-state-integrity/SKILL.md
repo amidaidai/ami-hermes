@@ -4,6 +4,12 @@ description: Use when verifying shared TradingView chart state.
 category: trading
 ---
 
+> **同族导航** — TV证据组 5 个技能各司其职，别加载错 （同族入口：`tradingview-consumer-evidence`）
+> · **本技能 `tradingview-state-integrity`** = 共享图表状态一致性（身份/周期/指标/同轮一致）
+> · 同族其余：`tradingview-consumer-evidence`（入口 · 消费 TV 证据的总口径（什么算已验证））、`tv-raw-plot-evidence`（packed 值丢精度时读原始 plot）、`tv-raw-study-evidence`（读原始 study 数值证据）、`pine-indicator-audit`（Pine 源码审计（正确性/配额/面板/合同/消费方核验））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # TradingView 共享状态完整性
 
 用于 TradingView Desktop/CDP 单实例被人工分析、后台采集器、定时任务共同使用的场景。核心目标是防止跨品种污染、陈旧指标和后台任务覆盖用户最终看盘位置。

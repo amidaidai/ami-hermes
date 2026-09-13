@@ -5,6 +5,12 @@ category: trading
 tags: [trading, audit, tdd, runtime, verification]
 ---
 
+> **同族导航** — 审计组 6 个技能各司其职，别加载错 （同族入口：`tangxi-analysis-audit-checklist`）
+> · **本技能 `trading-system-implementation-closure`** = 修复后的验收收口（改完才用）
+> · 同族其余：`tangxi-analysis-audit-checklist`（入口 · 七维全景扫描 + 资产面三查（记忆/技能/MCP），先取证后定级）、`trading-system-audit`（全栈审计，P0/P1/P2 深挖与修复）、`tangxi-runtime-audit-and-cleanup`（运行态（心跳/PID/cron/数据新鲜度）+ 脚本生存性评估与归档）、`tangxi-system-audit`（大版本更新后的全面审计 + git 收口）、`trading-analysis-system-audit-methodology`（审计方法论与定级口径（过程文档））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # Trading System Implementation Closure
 
 Use this class-level skill when an audit repair must be implemented and proven. The deliverable is a working, exercised change plus an explicit unresolved register, not a plan or optimistic report.

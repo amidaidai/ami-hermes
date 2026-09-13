@@ -26,6 +26,12 @@ tools_required:
   - x_search
 ---
 
+> **同族导航** — 审计组 6 个技能各司其职，别加载错 （同族入口：`tangxi-analysis-audit-checklist`）
+> · **本技能 `trading-system-audit`** = 全栈审计，P0/P1/P2 深挖与修复
+> · 同族其余：`tangxi-analysis-audit-checklist`（入口 · 七维全景扫描 + 资产面三查（记忆/技能/MCP），先取证后定级）、`tangxi-runtime-audit-and-cleanup`（运行态（心跳/PID/cron/数据新鲜度）+ 脚本生存性评估与归档）、`tangxi-system-audit`（大版本更新后的全面审计 + git 收口）、`trading-analysis-system-audit-methodology`（审计方法论与定级口径（过程文档））、`trading-system-implementation-closure`（修复后的验收收口（改完才用））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 ## Quick system audits
 
 For “快速过一下系统”, use a bounded read-only audit, not a full market refresh. Check actual cards as well as tests: available ≠ supportive, missing exposure ≠ zero, safe FinalVerdict ≠ accurate diagnostics. Re-evaluate saved health at audit time. Respect declined/retired features. Give concise Chinese conclusions, priorities and verification limits. See `references/quick-audit-card-consistency.md`.

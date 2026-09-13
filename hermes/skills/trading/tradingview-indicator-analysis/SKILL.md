@@ -3,6 +3,12 @@ name: tradingview-indicator-analysis
 description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。统一模板5段(结构→关键位→量价→方案→评分)·无分隔线·R1/R2/S1/S2/S3·TV DMI实时注入·预案A/B双轨。引擎v2.1+VWAP/EMA/CVD三合一本地。cron用no-agent静默。警报渲染v7.5:display_name优先·禁止双重前缀·中文方向。
 ---
 
+> **同族导航** — 卡片组 4 个技能各司其职，别加载错 （本技能 = 入口）
+> · **本技能 `tradingview-indicator-analysis`** = 入口 · 分析卡主流程（多品种多周期、叙事驱动、5 段模板）
+> · 同族其余：`tradingview-execution-card`（低周期执行卡（加密 15m / 黄金 5m，高周期限时继承））、`xau-analysis-format`（卡片格式细则（裁决措辞/周期标签/移动端布局））、`trading-card-generation`（卡片生成脚本（compact + full 双输出））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # TradingView 多品种分析 (v5.1 核心 + 扩展层)
 
 > ⚠ 2026-09-11 校正（**已实测核实**）：本文件部分段落把下列脚本当现行工具，实际状态是——

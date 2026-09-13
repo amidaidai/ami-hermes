@@ -3,6 +3,12 @@ name: xau-analysis-format
 description: "Use when formatting BTC/XAU analysis cards. Follow the canonical verdict, timeframe labels and mobile-first layout."
 ---
 
+> **同族导航** — 卡片组 4 个技能各司其职，别加载错 （同族入口：`tradingview-indicator-analysis`）
+> · **本技能 `xau-analysis-format`** = 卡片格式细则（裁决措辞/周期标签/移动端布局）
+> · 同族其余：`tradingview-indicator-analysis`（入口 · 分析卡主流程（多品种多周期、叙事驱动、5 段模板））、`tradingview-execution-card`（低周期执行卡（加密 15m / 黄金 5m，高周期限时继承））、`trading-card-generation`（卡片生成脚本（compact + full 双输出））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # 棠溪分析卡格式合同
 
 ## 权威入口

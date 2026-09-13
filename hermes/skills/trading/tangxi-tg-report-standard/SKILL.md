@@ -14,6 +14,12 @@ triggers:
   - 改造/新建任何 scripts/*_collector.py 或 cron 报告脚本
 ---
 
+> **同族导航** — TG投递组 5 个技能各司其职，别加载错 （同族入口：`tangxi-tg-delivery-format`）
+> · **本技能 `tangxi-tg-report-standard`** = 报告质量铁律（总体结论、置信降序、决策厚度）
+> · 同族其余：`tangxi-tg-delivery-format`（入口 · 投递格式铁律（纯 Markdown 管道表 / RichMarkdown 真表格 / 禁图片表））、`tangxi-tg-reports`（4 个 topic 架构 + 脚本改造通用规范（最短版））、`tangxi-tg-rich-reporting`（RichMarkdown 通道与「静默 collector」改造模板、做厚方法）、`telegram-delivery-reliability`（投递可靠性加固（重试/格式化守卫））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # 棠溪推 TG 报告格式与质量铁律
 
 棠溪系统有 19 个 cron 任务、4 个 TG topic（846 情报/提醒、416 auto_card 交易卡、386 BTC分析卡、其余看门狗）。本技能管"数据表型情报报告"的统一标准——所有推 TG 的 collector / 报告脚本都必须遵守。

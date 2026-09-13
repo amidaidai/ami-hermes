@@ -3,6 +3,12 @@ name: trading-card-generation
 description: Generate BTC/XAU trading analysis cards (compact + full dual output) for 棠溪's manual decision cockpit. Covers ATR-based stop/target, symmetric AB plans, honest R:R, TradingView indicator integration, Telegram delivery. Load when user asks for card generation, analysis output, or trading plan formatting.
 ---
 
+> **同族导航** — 卡片组 4 个技能各司其职，别加载错 （同族入口：`tradingview-indicator-analysis`）
+> · **本技能 `trading-card-generation`** = 卡片生成脚本（compact + full 双输出）
+> · 同族其余：`tradingview-indicator-analysis`（入口 · 分析卡主流程（多品种多周期、叙事驱动、5 段模板））、`tradingview-execution-card`（低周期执行卡（加密 15m / 黄金 5m，高周期限时继承））、`xau-analysis-format`（卡片格式细则（裁决措辞/周期标签/移动端布局））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # 棠溪交易分析卡生成 v8.0（叙事驱动·TV集成·无分隔线）
 
 ## 触发条件

@@ -3,6 +3,12 @@ name: pine-indicator-audit
 description: "Audit/optimize Pine main/sub indicators: correctness, quotas, panels, contracts, client verification."
 ---
 
+> **同族导航** — TV证据组 5 个技能各司其职，别加载错 （同族入口：`tradingview-consumer-evidence`）
+> · **本技能 `pine-indicator-audit`** = Pine 源码审计（正确性/配额/面板/合同/消费方核验）
+> · 同族其余：`tradingview-consumer-evidence`（入口 · 消费 TV 证据的总口径（什么算已验证））、`tradingview-state-integrity`（共享图表状态一致性（身份/周期/指标/同轮一致））、`tv-raw-plot-evidence`（packed 值丢精度时读原始 plot）、`tv-raw-study-evidence`（读原始 study 数值证据）
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 ## 核心参考
 
 - 人工决策：`references/pine-manual-decision-dashboard-contract.md`

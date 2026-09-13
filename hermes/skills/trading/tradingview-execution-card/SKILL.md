@@ -3,6 +3,12 @@ name: tradingview-execution-card
 description: TradingView 交易执行卡分析 — 默认低周期执行卡，高周期限时继承；仅在用户要求或关键位失效时刷新全周期。加密15m/黄金5m主执行。
 ---
 
+> **同族导航** — 卡片组 4 个技能各司其职，别加载错 （同族入口：`tradingview-indicator-analysis`）
+> · **本技能 `tradingview-execution-card`** = 低周期执行卡（加密 15m / 黄金 5m，高周期限时继承）
+> · 同族其余：`tradingview-indicator-analysis`（入口 · 分析卡主流程（多品种多周期、叙事驱动、5 段模板））、`xau-analysis-format`（卡片格式细则（裁决措辞/周期标签/移动端布局））、`trading-card-generation`（卡片生成脚本（compact + full 双输出））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # TradingView 交易执行卡分析
 
 对单一品种输出简洁交易执行卡。默认不每次全周期重扫：高周期继承最近上下文，重点刷新低周期执行/触发。适用于用户发送"分析 BTC"、"卡呀 BTC"等指令。

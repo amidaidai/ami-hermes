@@ -3,6 +3,12 @@ name: tangxi-tg-reports
 description: 棠溪交易系统所有推Telegram电报报告的通用规范——报告质量(做厚决策维度/总体结论/置信前置)、4个topic架构、统一RichMarkdown真表格通道、常见坑。改/建任何推TG的cron脚本前加载。
 ---
 
+> **同族导航** — TG投递组 5 个技能各司其职，别加载错 （同族入口：`tangxi-tg-delivery-format`）
+> · **本技能 `tangxi-tg-reports`** = 4 个 topic 架构 + 脚本改造通用规范（最短版）
+> · 同族其余：`tangxi-tg-delivery-format`（入口 · 投递格式铁律（纯 Markdown 管道表 / RichMarkdown 真表格 / 禁图片表））、`tangxi-tg-report-standard`（报告质量铁律（总体结论、置信降序、决策厚度））、`tangxi-tg-rich-reporting`（RichMarkdown 通道与「静默 collector」改造模板、做厚方法）、`telegram-delivery-reliability`（投递可靠性加固（重试/格式化守卫））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # 棠溪电报情报报告规范 (tangxi-tg-reports)
 
 ## 何时用

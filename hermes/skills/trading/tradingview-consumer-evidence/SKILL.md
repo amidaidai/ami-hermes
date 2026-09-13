@@ -4,6 +4,12 @@ description: Use when consuming TradingView evidence.
 category: trading
 ---
 
+> **同族导航** — TV证据组 5 个技能各司其职，别加载错 （本技能 = 入口）
+> · **本技能 `tradingview-consumer-evidence`** = 入口 · 消费 TV 证据的总口径（什么算已验证）
+> · 同族其余：`tradingview-state-integrity`（共享图表状态一致性（身份/周期/指标/同轮一致））、`tv-raw-plot-evidence`（packed 值丢精度时读原始 plot）、`tv-raw-study-evidence`（读原始 study 数值证据）、`pine-indicator-audit`（Pine 源码审计（正确性/配额/面板/合同/消费方核验））
+> · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+
+
 # TradingView消费层证据
 
 用于TradingView Desktop/CDP与后台采集器共用图表的加密分析消费层。目标是让“看完整张图”真正进入缓存、决策和分析卡，同时保持fail-closed：结构证据缺失时降级，不猜测、不伪造实时性。
