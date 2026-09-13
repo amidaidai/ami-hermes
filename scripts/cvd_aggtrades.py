@@ -77,11 +77,23 @@ def cvd_from_aggtrades(trades: list[dict]) -> dict:
 
 
 def fetch_aggtrades(symbol: str, limit: int = 1000, timeout: int = 6) -> list[dict]:
-    """拉取最近 limit 笔 aggTrades；主域失败时切换官方Vision市场数据域。"""
+    """拉取最近 limit 笔 aggTrades；现货域失败时切换 U 本位期货域。
+
+    2026-09-13 审计修复：XAUUSDT 等品种在 Binance 现货不存在（spot 域无此
+    symbol → 空），必须回退 U 本位期货逐笔（/fapi/v1/aggTrades），
+    否则 XAU 的 CVD 恒为 '?'、分析卡「CVD订单流」步骤永远报未采到。
+    """
     try:
-        from binance_public import fetch_spot
+        from binance_public import fetch_spot, fetch_futures
         payload = fetch_spot(
             "/api/v3/aggTrades",
+            {"symbol": str(symbol).upper(), "limit": int(limit)},
+            timeout=timeout,
+        )
+        if isinstance(payload, list) and payload:
+            return payload
+        payload = fetch_futures(
+            "/fapi/v1/aggTrades",
             {"symbol": str(symbol).upper(), "limit": int(limit)},
             timeout=timeout,
         )
