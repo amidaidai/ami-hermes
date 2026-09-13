@@ -21,7 +21,11 @@ REPO = Path("D:/Hermes agent")
 PAT = re.compile(r"(?<![\w/.])((?:scripts|references|templates|assets)/[A-Za-z0-9_.\-/]+\.[A-Za-z0-9]{1,6})")
 SKIP_PARTS = {"node_modules", ".git", "__pycache__", "hermes-agent"}
 # 已就地声明「未落地」的引用不再视为缺陷（annotate_missing_refs.py 打的标记）
-ANNOTATED_MARKERS = ("（未落地", "(future)", "（future)", "（未实现")
+ANNOTATED_MARKERS = (
+    "（未落地", "(future)", "（future)", "（未实现",
+    # 中文就地免责措辞 —— 审计时经常直接写在引用旁边
+    "设计稿", "不存在", "从未落地", "未落地", "勿引", "勿直接使用",
+)
 # 文档里的占位示例名，不是真引用
 PLACEHOLDER_RE = re.compile(r"/(xxx|xx|foo|bar|X|Y|your_[a-z_]+)\.", re.IGNORECASE)
 
@@ -74,12 +78,15 @@ def main() -> int:
             basename = Path(ref).name
             if basename in idx:
                 continue  # 文件在仓库别处存在（引用路径写法不同，不算坏）
-            # 该引用是否已被就地标注为「未落地」/「future」
+            # 该引用是否已被就地标注为「未落地」/「future」/「设计稿」…
+            # 判据：**引用所在整行**含免责措辞（早先用 ±24 字符窗口，会漏掉
+            # 形如 "- `references/x.md` - 说明 (future)" 这种标注在后半行的情况）。
             if any(
-                (m.group(0).split("`")[0].endswith(ANNOTATED_MARKERS)
-                 or any(mk in text[max(0, m.start() - 24):m.start() + len(ref) + 24]
-                        for mk in ANNOTATED_MARKERS))
-                for m in re.finditer(re.escape(ref), text)
+                any(mk in text[text.rfind(chr(10), 0, t.start()) + 1:
+                               text.find(chr(10), t.start()) if text.find(chr(10), t.start()) != -1
+                               else len(text)]
+                    for mk in ANNOTATED_MARKERS)
+                for t in re.finditer(re.escape(ref), text)
             ):
                 annotated[name].append(ref)
                 continue
