@@ -22,6 +22,16 @@ def _no_active_analysis_lease(monkeypatch):
     monkeypatch.setattr(xau_tv_sync, "analysis_lease_defer_exit", lambda: None)
 
 
+def test_live_threshold_aligned_below_cron_interval():
+    """阈值必须 < cron 间隔（15min）且保留 ≤2min 缓冲 —— 对齐 btc_tv_refresh 18/20。
+
+    旧值 10min 会让每个同步周期尾部 5 分钟被判「行动格过期」（2026-09-13 实测：
+    13:01 同步的数据在 13:15 卡上被判过期、门 tv_live 误红）。"""
+    src = (ROOT / "scripts" / "xau_tv_sync.py").read_text(encoding="utf-8")
+    assert "live_max_age_minutes: float = 13.0" in src
+    assert "max_age_minutes: float = 13.0" in src
+
+
 def test_main_degrades_nonzero_sync_result_to_stale_cache(monkeypatch, tmp_path):
     out = tmp_path / "xau_tv_state.json"
     monkeypatch.setattr(xau_tv_sync, "OUT", out)

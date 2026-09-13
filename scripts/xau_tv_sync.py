@@ -170,9 +170,15 @@ def _validate_live_payload(
     payload: dict[str, Any] | None,
     *,
     now: datetime | None = None,
-    max_age_minutes: float = 10.0,
+    max_age_minutes: float = 13.0,
 ) -> dict[str, Any]:
-    """Validate XAU's 5m action-grid cache independently from five-TF OHLCV."""
+    """Validate XAU's 5m action-grid cache independently from five-TF OHLCV.
+
+    2026-09-13 审计修复：max_age 10→13 分钟。阈值必须 < cron 间隔(15min)
+    并保留 ≤2min 缓冲（对齐 btc_tv_refresh 的 18/20 模式）；旧值 10 会让
+    每个 15min 同步周期的尾部 5 分钟被判「行动格过期」，XAU 卡周期性
+    误报 TV 不可用、门 tv_live 误红。
+    """
     data = payload if isinstance(payload, dict) else {}
     actual_symbol = str(data.get("symbol") or data.get("ticker") or "")
     identity_valid = actual_symbol.upper() == SYMBOL
@@ -229,7 +235,7 @@ def validate_xau_outputs(
     *,
     now: datetime | None = None,
     state_max_age_minutes: float = 30.0,
-    live_max_age_minutes: float = 10.0,
+    live_max_age_minutes: float = 13.0,
     require_batch_id: bool = True,
     max_pair_skew_seconds: float = 120.0,
 ) -> dict[str, Any]:

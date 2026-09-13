@@ -57,7 +57,9 @@ def test_xau_state_and_main_action_cache_must_be_fresh_and_symbol_scoped():
 
 def test_xau_five_tf_success_cannot_hide_stale_main_action_cache():
     now = datetime.now(TZ)
-    stale = (now - timedelta(minutes=11)).isoformat()
+    # 2026-09-13：live 阈值 10→13 分钟（对齐 btc_tv_refresh 18/20 模式，
+    # 阈值 < 15min cron 间隔）。构造值随之外移到 14 分钟，保持「超阈值=陈旧」语义。
+    stale = (now - timedelta(minutes=14)).isoformat()
     result = xau_tv_sync.validate_xau_outputs(
         _state(now.isoformat()),
         _live(stale),
