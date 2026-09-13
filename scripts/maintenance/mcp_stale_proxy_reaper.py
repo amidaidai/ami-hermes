@@ -28,20 +28,32 @@ def has_proxy(proc: psutil.Process) -> bool:
 def main() -> int:
     victims: list[psutil.Process] = []
     kept: list[int] = []
+    skipped = 0
+    # 2026-09-13：加竞态保护 —— 进程枚举与读取之间目标可能已退出。
+    # 之前 p.info["cmdline"] 会直接抛 NoSuchProcess 把整个脚本打断
+    # （实测 pid=38000 在枚举后被回收）。这类维护脚本会被反复运行，不能因为
+    # 一个恰好退出的进程就整体失败。
     for p in psutil.process_iter(["pid", "cmdline", "name"]):
-        cmd = " ".join(p.info["cmdline"] or [])
-        if TARGET not in cmd.lower():
-            continue
         try:
+            # 2026-09-13 收紧：只针对**真正的服务进程**（进程名含 financekit），
+            # 不再匹配整条 uv/uvx/python 包装链。理由：
+            #   · 包装进程是启动器，杀掉服务进程后它会自然退出，无需单独处理；
+            #   · 把包装链算进来会让计数虚高（实测 4 个服务被报成 18 个"无代理"），
+            #     并造成无谓的联动终止。
+            pname = (p.info["name"] or "").lower()
+            if TARGET not in pname:
+                continue
             proc = psutil.Process(p.info["pid"])
-        except psutil.NoSuchProcess:
+            if has_proxy(proc):
+                kept.append(proc.pid)
+            else:
+                victims.append(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            skipped += 1
             continue
-        if has_proxy(proc):
-            kept.append(proc.pid)
-        else:
-            victims.append(proc)
 
-    print(f"financekit 相关进程: 无代理 {len(victims)} 个 / 有代理 {len(kept)} 个")
+    print(f"financekit 相关进程: 无代理 {len(victims)} 个 / 有代理 {len(kept)} 个"
+          + (f" / 枚举期已退出 {skipped} 个" if skipped else ""))
     print(f"  保留(有代理): {sorted(kept)}")
 
     killed: list[str] = []
@@ -52,20 +64,23 @@ def main() -> int:
         for _ in range(3):
             try:
                 par = cur.parent()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                break
-            if not par or par.pid in (0, 1):
-                break
-            cmd = " ".join(par.cmdline() or [])
-            if TARGET not in cmd.lower() or has_proxy(par):
+                if not par or par.pid in (0, 1):
+                    break
+                cmd = " ".join(par.cmdline() or [])
+                if TARGET not in cmd.lower() or has_proxy(par):
+                    break
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 break
             chain.append(par)
             cur = par
         for target in [proc, *reversed(chain)]:
             try:
+                pid, tname = target.pid, target.name()
                 target.kill()
-                killed.append(f"{target.pid}({target.name()})")
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                killed.append(f"{pid}({tname})")
+            except psutil.NoSuchProcess:
+                killed.append(f"{target.pid} 已自行退出")
+            except (psutil.AccessDenied, psutil.ZombieProcess) as exc:
                 killed.append(f"{target.pid} 失败:{type(exc).__name__}")
 
     print(f"  已杀: {killed}")

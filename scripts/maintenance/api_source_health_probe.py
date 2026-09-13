@@ -378,11 +378,11 @@ def _metaso():
     return f"结果数={len(json.loads(t).get('webpages') or [])}"
 
 
-@case("Felo")
+@case("Felo（已退役 2026-09-13）")
 def _felo():
     k = _real("felo_api_key.txt")
     if not k:
-        raise Verdict("unconfigured", "无密钥文件")
+        raise Verdict("unconfigured", "密钥已按用户指示删除（端点失效，系统未引用）")
     last = ""
     for use_proxy in (True, False):
         try:
@@ -399,11 +399,11 @@ def _felo():
     raise Verdict("unavailable", f"两条通道均失败 ({last})")
 
 
-@case("AnySearch")
+@case("AnySearch（已退役 2026-09-13）")
 def _anysearch():
     k = _real("anysearch_api_key.txt")
     if not k:
-        raise Verdict("unconfigured", "无密钥文件")
+        raise Verdict("unconfigured", "密钥已按用户指示删除（DNS/SSL 不通，系统未引用）")
     last = ""
     for use_proxy in (False, True):
         try:
