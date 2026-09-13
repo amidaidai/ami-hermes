@@ -1795,8 +1795,11 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
     if not all_levels_list:
         for tf in ("4h", "1h", "15m"):
             k = klines.get(tf, {})
-            for side, name, key in [("resistance", f"{tf}VAH", "vah"), ("support", f"{tf}VAL", "val"),
-                                      ("resistance", f"{tf}高", "high"), ("support", f"{tf}低", "low")]:
+            # 2026-09-13：名字必须带空格分隔的周期前缀（"5m 高"）。
+            # _LEVEL_TF_RE 的 \b 对「5m高」（中文紧邻）不匹配 → XAU（无 keylevels
+            # 配置、走本回退）卡面只显示无周期的「阻/支」，等待条件无法具名。
+            for side, name, key in [("resistance", f"{tf} VAH", "vah"), ("support", f"{tf} VAL", "val"),
+                                      ("resistance", f"{tf} 高", "high"), ("support", f"{tf} 低", "low")]:
                 v = k.get(key)
                 if v:
                     try:
