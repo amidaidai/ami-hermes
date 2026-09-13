@@ -780,13 +780,76 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "B等待（副指标风险）" if status.startswith("A") and (crowding_risk or flow_risk) else status
     )
 
+    # 2026-09-13：v13 独立字段接入（用户批准的消费矩阵修复，三处数据流）。
+    # ① Basic Bus 解包：dual["oi_present"] 是 decision_loop 中 oi_agreement_low /
+    #    oi_dispersion_high 判定的必要前置——此前无人写入该键（死逻辑根因）。
+    # ② CVD 锚值 + 背景码（Bus 个位：1滚动买/2滚动卖/3仅前锚）→ ③表订单流行。
+    # ③ OI 离散度 / 单所主导 / 扩张广度 → 质量行显示 + decision_loop 降权输入。
+    _bus_info = None
+    _bus_raw = tv_main.get("sub_basic_packed_bus")
+    if _bus_raw not in (None, ""):
+        try:
+            _bus_info = TVC.decode_basic_bus(_bus_raw)
+        except Exception:
+            _bus_info = None
+    if isinstance(_bus_info, dict) and _bus_info.get("valid"):
+        dual["oi_present"] = bool(_bus_info.get("oi_present"))
+    _cvd_bg_text = ""
+    if isinstance(_bus_info, dict) and _bus_info.get("valid"):
+        _cvd_bg_text = {1: "滚动买", 2: "滚动卖", 3: "仅前锚"}.get(_bus_info.get("cvdBg") or 0, "")
+    _anchor_txt = ""
+    _anchor_raw = tv_main.get("sub_cvd_anchor_value")
+    if _anchor_raw not in (None, ""):
+        try:
+            _anchor_txt = f"锚{float(_anchor_raw):.2f}"
+            if _cvd_bg_text:
+                _anchor_txt += f"·{_cvd_bg_text}"
+        except (TypeError, ValueError):
+            _anchor_txt = ""
+    if _anchor_txt:
+        dual["cvd_anchor_text"] = _anchor_txt
+    _disp_val = None
+    _d_raw = tv_main.get("sub_oi_dispersion_ratio")
+    if _d_raw not in (None, ""):
+        try:
+            _disp_val = float(str(_d_raw).replace("−", "-"))
+        except (TypeError, ValueError):
+            _disp_val = None
+    if _disp_val is not None:
+        dual["oi_dispersion_ratio"] = _disp_val
+    _dom_val = None
+    _dm_raw = tv_main.get("sub_exchange_dominance_pct")
+    if _dm_raw not in (None, ""):
+        try:
+            _dom_val = int(float(str(_dm_raw).replace("−", "-")))
+        except (TypeError, ValueError):
+            _dom_val = None
+    if _dom_val:
+        dual["exchange_dominance_pct"] = _dom_val
+    _breadth_val = None
+    _b_raw = tv_main.get("sub_oi_breadth")
+    if _b_raw not in (None, ""):
+        try:
+            _breadth_val = int(float(str(_b_raw).replace("−", "-")))
+        except (TypeError, ValueError):
+            _breadth_val = None
+    if _breadth_val:
+        dual["oi_breadth"] = _breadth_val
+    _oi_metrics_txt = ""
+    if _disp_val is not None:
+        _oi_metrics_txt += f" · 离散{_disp_val:.2f}"
+    if _dom_val:
+        _oi_metrics_txt += f" · 主导{_dom_val}%" + ("⚠" if _dom_val >= 70 else "")
+    if _breadth_val:
+        _oi_metrics_txt += f" · 广度{_breadth_val:+d}"
+
     dual.update({
         "haldro_direction": f"{haldro_dir} · Composite {comp_text}",
         "haldro_position": f"OI {oi or '待判'} · 归一变化 {oi_change_pct if oi_change_pct not in (None, '') else '待判'}% · {lsr_text}",
         "lsr": lsr,
         "lsr_source": lsr_source,
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
-        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'} · 风险 {risk_text}" + feed_tail,
+        "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'}{_oi_metrics_txt} · 风险 {risk_text}" + feed_tail,
         "haldro_confirm": f"Confirm {confirm or '待判'}",
         "direction_verdict": "副单源，不参与协同" if valid_code <= 0 and feed.get("single") else "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if (raw_conflict and valid_code >= 2) else "副S3冲突·CVD/OI背离" if haldro_s3 else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
         "structure_verdict": "结构顺向" if aligned else "结构需确认",

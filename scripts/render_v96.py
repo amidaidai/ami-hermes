@@ -465,6 +465,10 @@ def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rat
         # 非 OANDA 现货）——不冒充身份。
         _gold_note = "·Binance黄金合约" if isinstance(dual, dict) and dual.get("gold_contract_cvd") else ""
         parts.append(f"CVD{cvd_emoji}{cvd_dir}{_gold_note}")
+    # 2026-09-13：CVD 锚值 + 背景（v13 独立字段接入；dual 由 _dual_indicator_verdict 组装）
+    _anchor_note = dual.get("cvd_anchor_text") if isinstance(dual, dict) else ""
+    if _anchor_note:
+        parts.append(str(_anchor_note))
     if taker_dir:
         parts.append(f"主动{taker_dir}")
     if funding_rate:
@@ -721,7 +725,7 @@ def render_v96_card(
     lines.append(f"| HALDRO副驾驶 | {_cell(haldro_short)} | {_cell(dual_verdict)} |")
     lines.append(f"| 订单流 | {_cell(multi_src_line)} | CVD/OI不配则降级 |")
     if isinstance(dual_indicator, dict) and dual_indicator.get("haldro_quality"):
-        lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:34]} | 覆盖不足不追 |")
+        lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:56]} | 覆盖不足不追 |")
     if isinstance(source_matrix, list):
         for source in source_matrix:
             if not isinstance(source, dict):

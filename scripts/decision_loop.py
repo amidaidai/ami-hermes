@@ -344,6 +344,12 @@ def resolve_final_verdict(
         oi_agreement = dual.get("oi_agreement_pct", main.get("sub_oi_agreement_pct"))
         if oi_present is True and oi_agreement not in (None, "") and _number(oi_agreement, 0.0) < 50:
             wait.append("oi_agreement_low")
+        # 2026-09-13：OI 离散度（v13 字段接入；阈值对齐 AggVol oiConsensusOk 的 2.5）。
+        # 只在 oi_present（Bus 判定）为真时生效——「缺失≠安全」：无数据不加戏也不放行。
+        oi_dispersion = dual.get("oi_dispersion_ratio", main.get("sub_oi_dispersion_ratio"))
+        if oi_present is True and oi_dispersion not in (None, "") and _number(oi_dispersion, 0.0) > 2.5:
+            wait.append("oi_dispersion_high")
+            warnings.append(f"oi_dispersion_high:{_number(oi_dispersion, 0.0):.2f}")
 
     valid_code = int(_number(dual.get("valid_code"), 0.0))
     haldro_state_raw = main.get("sub_haldro_state_pack")

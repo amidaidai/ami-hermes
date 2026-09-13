@@ -102,6 +102,18 @@ DW_SUB = [
     "Composite", "CVD Anchor Value",
 ]
 
+# ── 消费状态标注（2026-09-13 消费矩阵审计；证据见 docs/指标字段消费矩阵_20260913.md）
+# 以下字段已导出但系统无独立消费，经审计确认属「等效覆盖/存档备查」，不算缺口：
+#   MCP Execution Pack    — 成分（EntryValid/ATR/几何/确认位）已单独消费
+#   MCP Setup Score       — 仅桥接转存
+#   OI Price Direction    — Basic Bus 的 oiDir 同一信息
+#   HALDRO OI Pack        — Basic Bus 的 oiDir/oiAgree 同一信息
+#   HALDRO Contract Pack  — Basic Bus 合同号校验已覆盖
+#   S VWAP ±Band1         — 实盘未消费（回测链 five_model_matcher 在用）
+# 2026-09-13 新接入：Basic Bus→oi_present/cvdBg、CVD Anchor→③表锚值、
+#   OI Dispersion→decision_loop oi_dispersion_high、Dominance/Breadth→质量行。
+#   decode_oi_presence 保留备用：卡面 OI 显示走「待判」，暂无直读总线 %的落点。
+
 # v13 新增、旧消费方完全没接的决策级字段（本轮接入重点）
 NEW_IN_V13 = {
     "MCP RR Ratio": "R:R 比值；A 级硬闸 rrRatio >= 2.0；1.5–1.99 仅保留 B/C 人工观察候选，不授权执行",
