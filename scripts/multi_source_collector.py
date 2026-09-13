@@ -40,8 +40,15 @@ SOURCE_COOLDOWN_SECONDS = 900
 
 # ═══════════════════ Keys ═══════════════════
 def _read_secret(name: str) -> str:
+    """读取密钥 —— 委托 credential_store，占位符/说明性文件一律返回空串。
+
+    2026-09-13 加固：此前这里裸读文件，若某个 secret 实际是「说明性占位符」
+    （如 oanda_token.txt），会被当成真凭据去发请求，失败后又被静默吞掉，
+    表现成「源不可用」而非「从未配置」。守卫统一放在 credential_store。
+    """
     try:
-        return (SECRETS / name).read_text(encoding="utf-8").strip()
+        from credential_store import read_secret_file
+        return read_secret_file(SECRETS / name)
     except Exception:
         return ""
 
@@ -570,30 +577,74 @@ def td_quote(symbol: str = "AAPL") -> dict:
 
 # ═══════════════════ Massive.com ═══════════════════
 
+# Massive 日线的滚动取数窗口（日历日）与可接受陈旧上限。
+# 窗口留足以跨过周末/假期；上限用于把「拿到多老的柱子」变成可见事实。
+MASSIVE_WINDOW_DAYS = 14
+MASSIVE_MAX_AGE_DAYS = 5
+
+
 def massive_aggs(symbol: str = "AAPL", asset: str = "stock") -> dict:
+    """Massive 日线 —— 取最近一根已收盘的柱子。
+
+    2026-09-13 修复：原实现把 from_/to 写死为 "2026-06-17"/"2026-06-18"，
+    于是**无论何时调用都只返回 2026-06-18 那根日线**。它不报错、字段齐全、
+    格式合法，看门狗和卡面都不会拦 —— 属于最危险的「有数据但陈旧」，
+    比直接失败更难发现。
+
+    现在改为滚动窗口，并对返回柱做日期自检：载荷里带 ``as_of`` 与
+    ``stale_days``；超过 ``MASSIVE_MAX_AGE_DAYS`` 时额外带 ``_stale``，
+    供消费端按「陈旧 = 可见降级」处理，而不是冒充现价。
+    """
     try:
         from massive import RESTClient
         client = RESTClient(api_key=MASSIVE_KEY)
         ticker = symbol if asset == "stock" else f"X:{symbol}USD"
-        result = client.get_aggs(ticker=ticker, multiplier=1, timespan="day", 
-                                  from_="2026-06-17", to="2026-06-18", limit=2)
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=MASSIVE_WINDOW_DAYS)
+        result = client.get_aggs(ticker=ticker, multiplier=1, timespan="day",
+                                 from_=start.isoformat(), to=today.isoformat(), limit=10)
         if isinstance(result, list) and len(result) > 0:
             r = result[-1]
+
             def _to_float(value: Any) -> float:
                 return float(value or 0)
-            return {
+
+            ts = getattr(r, "timestamp", None)
+            payload = {
                 "open": _to_float(getattr(r, "open", 0)), "high": _to_float(getattr(r, "high", 0)),
                 "low": _to_float(getattr(r, "low", 0)), "close": _to_float(getattr(r, "close", 0)),
                 "volume": _to_float(getattr(r, "volume", 0)), "vwap": _to_float(getattr(r, "vwap", 0)),
-                "timestamp": r.timestamp,
+                "timestamp": ts,
             }
+            if ts:
+                try:
+                    bar_date = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date()
+                except (OverflowError, OSError, ValueError):
+                    bar_date = None
+                if bar_date is not None:
+                    age = (today - bar_date).days
+                    payload["as_of"] = bar_date.isoformat()
+                    payload["stale_days"] = age
+                    if age > MASSIVE_MAX_AGE_DAYS:
+                        payload["_stale"] = True
+            return payload
     except Exception as e:
         return {"_error": str(e)[:80]}
     return {}
 
 
 def massive_futures_snapshot(ticker: str = "ES") -> dict:
-    """期货快照 (免费层)"""
+    """期货快照 —— 注意：本套餐**不含**该接口。
+
+    2026-09-13 实测：稳定返回
+    ``You are not entitled to this data. Please upgrade your plan``。
+    原实现把错误截断到 80 字符，恰好把 "entitled / upgrade" 截掉，
+    导致日志里只剩一个残缺的 JSON 尾巴，无法判断是参数错还是套餐限制。
+
+    这里把「套餐未含」显式归一成一个短而明确的原因码，让降级可见、可诊断。
+    期货资产类当前只有 massive + macro 两个采集器 —— 该接口受限即等于
+    期货报价缺源，卡面会走「待采集 / —」，属于已知缺口，不是静默失败。
+    """
     try:
         from massive import RESTClient
         client = RESTClient(api_key=MASSIVE_KEY)
@@ -601,7 +652,13 @@ def massive_futures_snapshot(ticker: str = "ES") -> dict:
         if result:
             return {"snapshot": str(result[0])[:200]}
     except Exception as e:
-        return {"_error": str(e)[:80]}
+        text = str(e)
+        lowered = text.lower()
+        if "not entitled" in lowered or "upgrade your plan" in lowered:
+            return {"_error": "plan_not_entitled: 期货快照需付费套餐（massive.com/pricing）"}
+        if "429" in lowered or "rate limit" in lowered:
+            return {"_error": "quota_or_rate_limited"}
+        return {"_error": text[:200]}
     return {}
 
 

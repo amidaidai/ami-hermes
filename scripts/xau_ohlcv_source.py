@@ -42,20 +42,17 @@ _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tangxi/1.0"}
 
 
 def _read_secret(name: str) -> str:
-    """读取密钥；跳过注释行与占位符。"""
+    """读取密钥 —— 委托 credential_store 的统一守卫（跳过注释行/占位符/中文说明）。
+
+    2026-09-13：原先这里自带一套告警规则，与其它模块各写一份，行为会漂移；
+    现在统一到 `credential_store.read_secret`，`.json` 与「中文注释 + 真 key」
+    这两类边界也只在一处维护。
+    """
     try:
-        raw = (SECRETS / name).read_text(encoding="utf-8", errors="replace")
+        from credential_store import read_secret_file
+        return read_secret_file(SECRETS / name)
     except Exception:
         return ""
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith(("#", "//")):
-            continue
-        up = line.upper()
-        if up.startswith(("PLACEHOLDER", "TODO", "CHANGEME", "YOUR_")):
-            return ""
-        return line
-    return ""
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 20) -> dict | None:

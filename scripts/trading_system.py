@@ -404,13 +404,22 @@ def oanda_spot_price(symbol: str = "XAU_USD") -> float | None:
     优先从 hermes/secrets/oanda_token.txt 和 oanda_account_id.txt 读取凭据。
     无凭据则返回 None，由调用方降级。
     """
-    token_file = ROOT / "hermes" / "secrets" / "oanda_token.txt"
-    account_file = ROOT / "hermes" / "secrets" / "oanda_account_id.txt"
-    if not token_file.exists() or not account_file.exists():
-        return None
+    # 2026-09-13 加固：改为走 credential_store 的统一守卫。
+    # 此前裸读文件，占位符（oanda_token.txt 实为说明性 PLACEHOLDER 文件）会被
+    # 当成真 token 去拼 URL → InvalidURL（URL 含控制字符）→ 被 except 静默吞掉，
+    # 表现成「OANDA 不可用」，真实原因是「从未配置」。两者含义完全不同。
     try:
-        token = token_file.read_text(encoding="utf-8").strip()
-        account_id = account_file.read_text(encoding="utf-8").strip()
+        from credential_store import read_secret
+    except Exception:
+        read_secret = None  # type: ignore[assignment]
+    if read_secret is None:
+        return None
+    token = read_secret("oanda_token.txt", "OANDA_TOKEN")
+    account_id = read_secret("oanda_account_id.txt", "OANDA_ACCOUNT_ID")
+    account_id = "".join(account_id.split())
+    if not token or not account_id:
+        return None  # 未配置（含占位符情形）——由调用方按「未配置」降级
+    try:
         url = f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/pricing"
         headers = {"Authorization": f"Bearer {token}"}
         r = requests.get(url, headers=headers, params={"instruments": symbol}, timeout=10)
