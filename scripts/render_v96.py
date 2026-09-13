@@ -389,6 +389,42 @@ def _structure_table(levels: list[dict], price: float | None) -> str:
     return "| 结构位 | 价格 | 距现价 |\n|:---|:---:|---:|\n" + "\n".join(rows)
 
 
+def _ema_disclosure_line(vwap_ema: dict | None) -> str:
+    """VWAP/EMA 环境行（2026-09-13 接入，双 schema 兼容）。
+
+    EMA 引擎（vwap_ema_cvd_engine）自 v1.0 起计算 9/21/34/55 + EMA云，
+    但此前只在终端打印、卡面无展示（用户 2026-09-13 指标盘点发现的缺口）。
+    兼容两种来源：
+      - summary 引擎: {"available", "vwap": {"vwap","price_vs_vwap","in_band"}, "ema", "ema_cloud"}
+      - TV MCP fallback: {"vwap": {"value","price_above"}, "ema", "source"}
+    有数据即输出；无数据返回空串（卡面不出现占位行）。
+    """
+    if not isinstance(vwap_ema, dict):
+        return ""
+    vwap = vwap_ema.get("vwap") or {}
+    ema = vwap_ema.get("ema") or {}
+    cloud = vwap_ema.get("ema_cloud") or {}
+    parts = []
+    vwap_val = vwap.get("vwap")
+    if vwap_val is None:
+        vwap_val = vwap.get("value")
+    if vwap_val:
+        vs = vwap.get("price_vs_vwap")
+        if not vs and vwap.get("price_above") is not None:
+            vs = "上" if vwap.get("price_above") else "下"
+        pair = "·".join(x for x in ((f"价在{vs}" if vs else ""), str(vwap.get("in_band") or "")) if x)
+        parts.append(f"VWAP `{_num(vwap_val)}`（{pair}）" if pair else f"VWAP `{_num(vwap_val)}`")
+    fast, slow = ema.get("9"), ema.get("55")
+    if fast and slow:
+        parts.append(f"EMA9/55 `{_num(fast)}`/`{_num(slow)}`")
+    strength = str(cloud.get("trend_strength") or "").strip()
+    if strength:
+        parts.append(strength)
+    if not parts:
+        return ""
+    return "VWAP/EMA：" + " · ".join(parts)
+
+
 def _dual_short(dual: dict | None, ac: str) -> tuple[str, str, str]:
     if not isinstance(dual, dict):
         if ac == "加密":
@@ -648,6 +684,11 @@ def render_v96_card(
     lines.append(f"| 做法 | {_action_txt} · {recommend_trigger} · {recommend_rr} |")
     lines.append(f"| 依据 | SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict} |")
     lines.append("")
+    # 2026-09-13：VWAP/EMA 环境行（EMA 此前只算不上卡——用户指标盘点的缺口修复）
+    _ve_line = _ema_disclosure_line(vwap_ema)
+    if _ve_line:
+        lines.append(_ve_line)
+        lines.append("")
 
     lines.append("① 周期体温 / 多周期定位（D→4h→1h→15m→5m）")
     lines.append("")

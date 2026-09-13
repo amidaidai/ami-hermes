@@ -1645,7 +1645,15 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         pass
 
     # ═══ VWAP/EMA 本地计算引擎 (v1.0) ═══
+    # 2026-09-13：优先复用主流程回写的引擎结果（Step1 后处理失败兜底更全：
+    # 原始K线→期货K线→TV MCP）。本地重算仅在无可复用结果时进行——修复
+    # 「引擎已打印快线/慢线但卡面 VWAP/EMA 行空白」（XAU 场景无本地K线可用）。
     vwap_ema = {}
+    _ve_reused = False
+    _ve_existing = engine_data.get("_vwap_ema")
+    if isinstance(_ve_existing, dict) and (_ve_existing.get("vwap") or _ve_existing.get("ema")):
+        vwap_ema = _ve_existing
+        _ve_reused = True
     try:
         import sys as _s2
         _s2.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -1691,7 +1699,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                          "close": _c[i], "volume": _v[i] if i < len(_v) else 0}
                         for i in range(_n)
                     ]
-        if _vwap_klines:
+        if _vwap_klines and not _ve_reused:
             vwap_ema = vwap_ema_cvd_summary(symbol, _vwap_klines)
             engine_data["_vwap_ema"] = vwap_ema
     except Exception:
@@ -4722,6 +4730,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 print(f"  ✅ VWAP/EMA引擎：快线{_ema.get('9','?')}·慢线{_ema.get('55','?')}·CVD方向{_cv}·TV MCP")
             else:
                 print("  ⏭ VWAP/EMA引擎：无K线或TV Data Window数据，跳过")
+        # 2026-09-13：回写引擎结果供 render_card_locked 复用（EMA 上卡接线）。
+        # schema 兼容：summary 引擎与 TV MCP fallback 字段不同，非空即回写。
+        if isinstance(_vwap_ema_result, dict) and (_vwap_ema_result.get("vwap") or _vwap_ema_result.get("ema")):
+            engine_data["_vwap_ema"] = _vwap_ema_result
     except Exception as _vee:
         print(f"  ⚠️ VWAP/EMA引擎：{_vee}")
     
