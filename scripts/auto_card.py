@@ -5223,7 +5223,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                     engine_data["_tv_pine"] = tv_dmi_data
                     tv_grade = cache.get("grade") if "grade" in cache else (cache.get("tv_data", {}).get("grade") if "tv_data" in cache else "?")
                     print(f"  ✅ TV DMI(缓存): grade={tv_grade}")
-        else:
+        elif tv_raw:
+            # 2026-09-13：原 else 在 tv_raw=None（XAU 跳过 dmi 缓存且无前置注入）时
+            # 会 None.get() 崩溃——改为 elif，无 tv_raw 时保持 tv_dmi_data 为空。
             studies = tv_raw.get("studies", [])
             tables = tv_raw.get("tables", [])
             # TV MCP 标准返回：tables 嵌套在 studies[].tables[] 内，顶层为空
@@ -5256,8 +5258,14 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             # 优先同品种独立缓存，避免BTC/XAU轮流写通用tv_live.json导致跨品种覆盖。
             symbol_live_path = _tv_symbol_cache_path(symbol)
             generic_live_path = ROOT / "data" / "tv_live.json"
-            live_paths = [symbol_live_path, generic_live_path]
             cache_path2 = ROOT / "data" / "tv_dmi_cache.json"
+            _is_gold_asset = _asset_class(symbol) == "gold"
+            # 2026-09-13：XAU 只读专属缓存——通用 tv_live.json / tv_dmi_cache.json 是
+            # BTC 写入的，XAU 读它们只会产生「品种不匹配」噪声并污染门2原因串。
+            live_paths = [symbol_live_path] if _is_gold_asset else [symbol_live_path, generic_live_path]
+            # 新鲜度阈值与 xau_tv_sync（13min）对齐：旧实现读取侧 10min 默认与前置
+            # 13min 判定互相矛盾（前置说新鲜跳过、读取说过期拒用——同卡自相矛盾，实测）。
+            _live_max_age = 13 if _is_gold_asset else 10
             c2 = None
             skipped_tv_caches = []
             live_indicator_injected = False
@@ -5267,7 +5275,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                     continue
                 try:
                     live_candidate = _j2.loads(live_path.read_text(encoding="utf-8"))
-                    live_status = _tv_cache_status(live_candidate, symbol)
+                    live_status = _tv_cache_status(live_candidate, symbol, max_age_minutes=_live_max_age)
                     if live_candidate.get("fresh") and live_status.get("usable"):
                         live_indicator_injected = _inject_tv_live_pine(engine_data, live_candidate)
                         if live_indicator_injected:
@@ -5278,13 +5286,14 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                         skipped_tv_caches.append(f"{live_path.name}: {live_status.get('reason')}")
                 except Exception as exc:
                     skipped_tv_caches.append(f"{live_path.name}: {exc}")
-            structure_paths = list(dict.fromkeys([*live_paths, cache_path2]))
+            # 2026-09-13：XAU 结构读取同样只用专属缓存（通用缓存为 BTC 数据）。
+            structure_paths = [symbol_live_path] if _is_gold_asset else list(dict.fromkeys([*live_paths, cache_path2]))
             for p in structure_paths:
                 if p.exists():
                     try:
                         candidate = _j2.loads(p.read_text(encoding="utf-8"))
                         if candidate.get("fresh") and _tv_live_levels(candidate)[0] > 0:
-                            cache_status2 = _tv_cache_status(candidate, symbol)
+                            cache_status2 = _tv_cache_status(candidate, symbol, max_age_minutes=_live_max_age)
                             if cache_status2.get("usable"):
                                 c2 = candidate
                                 engine_data["_tv_live_status"] = cache_status2

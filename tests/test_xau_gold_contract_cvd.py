@@ -68,3 +68,16 @@ def test_render_falls_back_to_gold_contract_cvd_direction():
     """防回退：订单流行 cvd_dir 必须回退黄金合约 CVD（否则显示 N/A）。"""
     src = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
     assert '_gold_cvd_data.get("direction")' in src
+
+
+def test_xau_reads_only_symbol_scoped_tv_cache_with_aligned_age():
+    """防回退：XAU 只读专属 tv_live 缓存 + 读取阈值 13min 与 xau_tv_sync 对齐。
+
+    旧实现读取侧用 10min 默认（与前置 13min 判定互相矛盾），且会去读 BTC 的
+    通用 tv_live.json / tv_dmi_cache.json 制造「品种不匹配」噪声。"""
+    src = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert "_live_max_age = 13 if _is_gold_asset else 10" in src
+    assert "live_paths = [symbol_live_path] if _is_gold_asset" in src
+    assert "structure_paths = [symbol_live_path] if _is_gold_asset" in src
+    # XAU 无 _tv_pine 时不得走 else 的 None.get()（2026-09-13 实测回归）
+    assert "elif tv_raw:" in src
