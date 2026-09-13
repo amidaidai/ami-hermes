@@ -135,23 +135,67 @@ def iter_process_envs(hint: str) -> list[dict]:
 
 def check_runtime_env(procs: list[dict], needs: "dict[str, str] | None" = None,
                       hints: "dict[str, str] | None" = None) -> list[dict]:
-    """运行层检查：已运行的进程是否真的带代理。无进程时只记 INFO，不算失败。"""
+    """运行层检查：同一 server 的多个实例聚合成一条结论，不按 pid 刷屏。
+
+    2026-09-13 修正：此前每个无代理 pid 各报一条，而实际同时存在的实例可能有
+    十几到几十个（多表面 CLI/网关/Studio 各自 spawn），报告被刷屏且看不出重点。
+    正确的不变量是「**不应存在无代理实例**」——任何会话都可能绑到其中任一个，
+    绑到无代理的那个就会 429。所以聚合成「有代理 N / 无代理 M」并列出 M 的 pid。
+    """
     needs = NEEDS_PROXY if needs is None else needs
-    hints = PROC_HINT if hints is None else hints
     problems: list[dict] = []
     for name in needs:
         running = [p for p in procs if p.get("server") == name]
         if not running:
             continue  # 没跑 = 无法验证，交给 info 层
-        for p in running:
-            env = p.get("env") or {}
-            if not str(env.get("HTTP_PROXY") or "").strip():
-                problems.append({
-                    "layer": "runtime", "server": name, "code": "live_process_without_proxy",
-                    "detail": (f"pid={p.get('pid')} 的 {name} 进程环境里没有 HTTP_PROXY——"
-                               f"典型原因：配置已改但网关没重读。修复：在网关会话发 /reload-mcp"),
-                })
+        with_proxy = [p for p in running
+                      if str((p.get("env") or {}).get("HTTP_PROXY") or "").strip()]
+        without = [p for p in running if p not in with_proxy]
+        if without:
+            pids = ", ".join(str(p.get("pid")) for p in without[:12])
+            more = f" 等 {len(without)} 个" if len(without) > 12 else ""
+            problems.append({
+                "layer": "runtime", "server": name, "code": "live_processes_without_proxy",
+                "proxyless_pids": [p.get("pid") for p in without],
+                "with_proxy_count": len(with_proxy),
+                "without_proxy_count": len(without),
+                "detail": (f"存在 {len(without)} 个无代理实例（pid {pids}{more}），"
+                           f"另有 {len(with_proxy)} 个带代理。"
+                           f"典型原因：实例是在配置补代理之前启动的，之后又有客户端复用了旧实例。"
+                           f"修复：POST /api/hermes/mcp/reload 后跑 mcp_stale_proxy_reaper.py 清掉旧实例。"),
+            })
     return problems
+
+
+def functional_probe() -> dict:
+    """功能层：Yahoo 直连 vs 代理 的 A/B —— 证明「代理是不是真的必需」。
+
+    只读、不改任何配置。当直连被封而代理可达时，运行层的代理就不是可选项。
+    """
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/AAPL"
+           "?range=1d&interval=1d")
+    proxy = os.environ.get("HTTP_PROXY") or "http://127.0.0.1:7897"
+    result: dict = {"url": url, "proxy": proxy}
+    for label, use_proxy in (("direct", False), ("via_proxy", True)):
+        handler = (urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+                   if use_proxy else urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(
+            handler, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with opener.open(req, timeout=20) as resp:
+                result[label] = f"HTTP {resp.status}"
+        except urllib.error.HTTPError as exc:
+            result[label] = f"HTTP {exc.code}"
+        except Exception as exc:
+            result[label] = f"ERR {type(exc).__name__}"
+    result["proxy_required"] = (result.get("direct") != "HTTP 200"
+                                and result.get("via_proxy") == "HTTP 200")
+    return result
 
 
 def collect_runtime(needs: "dict[str, str] | None" = None,
@@ -189,13 +233,21 @@ def main(argv: list[str] | None = None) -> int:
     cfg_problems = check_config_env(servers)
     run_problems = check_runtime_env(procs)
     problems = cfg_problems + run_problems
+    func = functional_probe()
 
     for name, why in NEEDS_PROXY.items():
         env = ((servers.get(name) or {}).get("env") or {})
-        live = [p["pid"] for p in procs if p.get("server") == name]
+        insts = [p for p in procs if p.get("server") == name]
+        with_proxy = [p for p in insts
+                      if str((p.get("env") or {}).get("HTTP_PROXY") or "").strip()]
         ok = "✅" if str(env.get("HTTP_PROXY") or "").strip() else "❌"
         print(f"{ok} {name:12s} 代理={env.get('HTTP_PROXY') or '(未设)'}  "
-              f"运行进程={live or '(无)'}  ← {why}")
+              f"实例：带代理 {len(with_proxy)} / 无代理 {len(insts) - len(with_proxy)}"
+              f"  ← {why}")
+
+    print(f"\n功能层（Yahoo A/B）：直连 {func.get('direct')} · 代理 {func.get('via_proxy')}"
+          + ("  ⇒ 代理**必需**" if func.get("proxy_required") else "  ⇒ 直连当前可用"))
+    print("注：功能层只证明「代理是否必需」，MCP 工具是否真的回数据仍需实际调一次工具。")
 
     print()
     if problems:
@@ -209,8 +261,10 @@ def main(argv: list[str] | None = None) -> int:
         "config_path": str(cfg_path),
         "needs_proxy": NEEDS_PROXY,
         "problems": problems,
+        "functional": func,
         "verdict": "ok" if not problems else "problem",
-        "note": "只读检查；不代表外部源可达性，仅代表本地配置/进程环境正确。",
+        "note": ("只读检查；不代表外部源可达性，仅代表本地配置/进程环境正确。"
+                 "functional 段是 Yahoo 直连/代理 A/B；工具层是否真回数据需另调一次工具。"),
     }
     if not args.no_write:
         out = Path("data/maintenance/mcp_proxy_check.json")
