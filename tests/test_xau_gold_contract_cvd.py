@@ -71,12 +71,18 @@ def test_render_falls_back_to_gold_contract_cvd_direction():
 
 
 def test_xau_reads_only_symbol_scoped_tv_cache_with_aligned_age():
-    """防回退：XAU 只读专属 tv_live 缓存 + 读取阈值统一 5min（2026-09-13 二审）。
+    """防回退：XAU 只读专属 tv_live 缓存 + 读取阈值统一（2026-09-13 二审）。
 
     旧实现读取侧用 10min 默认与前置判定互相矛盾；二审后读取侧与
-    xau_tv_sync 的 5min 复用窗口一致（超窗口 → 出卡前现场同步）。"""
+    xau_tv_sync 的复用窗口一致（超窗口 → 出卡前现场同步）。
+    2026-09-14：阈值收敛为唯一常量 `TV_LIVE_READ_MAX_AGE_MIN`，
+    前置侧引用它并再留出出卡余量（tests/test_audit_fixes_20260914.py 锁死）。
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import auto_card as _ac
+    assert _ac.TV_LIVE_READ_MAX_AGE_MIN == 5.0
     src = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
-    assert "_live_max_age = 5" in src
+    assert "_live_max_age = TV_LIVE_READ_MAX_AGE_MIN" in src
     assert "live_paths = [symbol_live_path] if _is_gold_asset" in src
     assert "structure_paths = [symbol_live_path] if _is_gold_asset" in src
     # XAU 无 _tv_pine 时不得走 else 的 None.get()（2026-09-13 实测回归）

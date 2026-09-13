@@ -52,6 +52,21 @@ WATCH_FILES = {
         "payload_path": ("auto_approval_policy", "structure_reviewed_at"),
         "paths": [PROJECT_DATA / "keylevels_config.json", HERMES_DATA / "keylevels_config.json"],
     },
+    # XAU 现场同步生命体征（20260914 新增）：单次失败由脚本自身升级计数，
+    # 这里只盯「最近一次成功」是否还在可接受窗口内 —— 连续失败会让
+    # last_success_at 停住，从而在这里暴露，而不必读 cron 的 error 状态。
+    "xau_tv_sync_last_success": {
+        "threshold": 1,
+        "payload_path": ("last_success_at",),
+        "paths": [PROJECT_DATA / "xau_tv_sync_status.json", HERMES_DATA / "xau_tv_sync_status.json"],
+    },
+    # X 情绪客观面（20260914 起由 cron「X情绪客观面刷新」每小时产出）。
+    # 阈值与卡面的「超过 6 小时写本轮不采用」对齐。
+    "x_sentiment_context.json": {
+        "threshold": 6,
+        "payload_path": ("fear_greed", "ts"),
+        "paths": [PROJECT_DATA / "x_sentiment_context.json", HERMES_DATA / "x_sentiment_context.json"],
+    },
 }
 
 # 有意不监控的来源（生产者已停用）。列在这里是为了让「为什么没报」有据可查，
@@ -62,7 +77,7 @@ PAUSED_SOURCES = {
     "monitor_heartbeat.json": "旧行情守望守护（monitor/market_watchdog）已退役",
     ".btc_daemon_heartbeat.json": "旧 btc_daemon 守护已退役，现役为 keylevel_guard",
     "macro_snapshot.json / polymarket_sentiment.json": "宏观Poly刷新脚本已归档",
-    "x_sentiment*.json / dune_cache.json / qlib_factors.json": "对应采集 cron 已停用",
+    "x_sentiment*.json / dune_cache.json / qlib_factors.json": "dune/qlib 采集 cron 已停用（x_sentiment 客观面 20260914 已恢复 cron，改列在 WATCH_FILES）",
     "stablecoin_snapshot.json / liquidation_pressure.json / oi_snapshot_*.json": "对应采集 cron 已停用",
     "deribit_options.json / orion_radar.json": "对应采集 cron 已停用",
 }

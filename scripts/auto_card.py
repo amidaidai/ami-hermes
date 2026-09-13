@@ -21,6 +21,17 @@ from datetime import datetime, timezone, timedelta
 
 TZ = timezone(timedelta(hours=8))
 ROOT = Path("D:/Hermes agent")
+
+# TV 结构复用窗口（分钟）——读取侧唯一常量。
+# 语义：「卡内 TV 结构最多滞后一根 5m K 线」。XAU 注入判定与前置决策
+# 必须引用同一个值，否则会出现「前置说新鲜跳过、读取说过期拒绝」的
+# 自相矛盾卡（2026-09-13 已记录过同源事故，2026-09-14 复现时间维度版本）。
+TV_LIVE_READ_MAX_AGE_MIN = 5.0
+# 前置决策必须比读取窗口更严：出卡本身要花 20~160s，若前置按同一 5 分钟
+# 判「新鲜」，卡跑完时缓存已跨过阈值 → 主指标被丢弃、门2 亮红。
+# 留 3 分钟余量 = 覆盖最慢出卡路径，同时不改变用户批准的 5 分钟注入契约。
+TV_LIVE_PRE_SYNC_MARGIN_MIN = 3.0
+TV_LIVE_PRE_SYNC_MAX_AGE_MIN = TV_LIVE_READ_MAX_AGE_MIN - TV_LIVE_PRE_SYNC_MARGIN_MIN
 DATA = ROOT / "data"
 sys.path.insert(0, str(ROOT / "scripts"))
 from atomic_json import append_text_line, atomic_write_json, atomic_write_text
@@ -3784,14 +3795,15 @@ def _refresh_and_mark_snapshot(symbol: str, engine_data: dict) -> None:
         engine_data["quality"] = "B" if status.get("age_hours", 24) <= 4 else "C"
 
 
-def _load_xau_tv_contract() -> dict:
+def _load_xau_tv_contract(max_age_minutes: float | None = None) -> dict:
     """Validate the current XAU five-layer/action pair before any live resync."""
     try:
         from xau_tv_sync import validate_xau_outputs
 
         state = json.loads((ROOT / "data" / "xau_tv_state.json").read_text(encoding="utf-8"))
         live = json.loads((ROOT / "data" / "tv_live_XAUUSD.json").read_text(encoding="utf-8"))
-        return validate_xau_outputs(state, live, require_batch_id=True)
+        kwargs = {} if max_age_minutes is None else {"live_max_age_minutes": float(max_age_minutes)}
+        return validate_xau_outputs(state, live, require_batch_id=True, **kwargs)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return {"usable": False, "reason": f"XAU双缓存读取失败:{type(exc).__name__}"}
 
@@ -4225,7 +4237,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         if _asset_class(symbol) == "gold":
             xau_env = os.environ.copy()
             xau_env["XAU_TV_NO_PUSH"] = "1"
-            xau_contract = _load_xau_tv_contract()
+            # 前置决策用「读取窗口 − 出卡余量」判新鲜，确保出卡期间不会跨过
+            # 读取阈值（避免同一张卡「前置跳过 / 读取拒绝」自相矛盾）。
+            xau_contract = _load_xau_tv_contract(max_age_minutes=TV_LIVE_PRE_SYNC_MAX_AGE_MIN)
             engine_tv_ready = bool(xau_contract.get("usable"))
             if engine_tv_ready:
                 print("  ♻ XAU五层/5m行动格缓存新鲜，跳过重复切图")
@@ -5374,7 +5388,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             # 2026-09-13 用户批准：复用窗口统一收紧到 5 分钟。
             # 语义 = 「卡内 TV 结构最多滞后一根 5m K 线」；超出窗口的出卡前自动现场刷新。
             # （历史值：XAU 13 / BTC 10——用户担忧「缓存太久不实时」，实测后统一收紧。）
-            _live_max_age = 5
+            _live_max_age = TV_LIVE_READ_MAX_AGE_MIN
             c2 = None
             skipped_tv_caches = []
             live_indicator_injected = False
@@ -5704,20 +5718,28 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 if macro_status in ("live", "cache", "inherited"):
                     completed_steps.add("macro")
         cron_fresh = []
+        cron_paused = []
         cron_missing = []
         if "cron_read" in pipeline_steps:
             try:
-                from pipeline_router import cron_sources
+                from pipeline_router import (cron_sources, cron_source_paused,
+                                            cron_source_max_age, cron_source_file)
                 from source_health import inspect_json_file
                 for source_name in cron_sources(symbol):
-                    source_path = ROOT / "data" / f"{source_name}.json"
-                    source_health = inspect_json_file(source_path, max_age_hours=6.0)
+                    source_path = ROOT / "data" / cron_source_file(source_name)
+                    source_health = inspect_json_file(
+                        source_path, max_age_hours=cron_source_max_age(source_name))
                     if source_health.get("fresh"):
                         cron_fresh.append(source_name)
+                    elif cron_source_paused(source_name):
+                        # 刻意不采 ≠ 采不到：分开记账，避免每轮卡都像报故障。
+                        cron_paused.append(source_name)
                     else:
                         status = source_health.get("status") or "unavailable"
                         cron_missing.append(f"{source_name}({status})")
-                if cron_fresh and not cron_missing:
+                # 只要有「刻意停用」的源，本步就不算完成 —— 不把设计性缺口
+                # 记成完成度，避免卡面分数虚高（脚注里已如实列出是哪几个）。
+                if cron_fresh and not cron_missing and not cron_paused:
                     completed_steps.add("cron_read")
             except Exception:
                 cron_missing.append("cron_sources")
@@ -5764,7 +5786,12 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                         f"五周期可用={tv_step['five_usable']}·覆盖{tv_step['five_coverage']}/5"
                     )
             elif s == "cron_read":
-                step_notes[s] = f"新鲜:{','.join(cron_fresh) or '无'}；缺失/过期:{','.join(cron_missing) or '无'}"
+                if cron_paused:
+                    step_notes[s] = (f"新鲜:{','.join(cron_fresh) or '无'}；"
+                                     f"设计性停用:{','.join(cron_paused)}；"
+                                     f"缺失/过期:{','.join(cron_missing) or '无'}")
+                else:
+                    step_notes[s] = f"新鲜:{','.join(cron_fresh) or '无'}；缺失/过期:{','.join(cron_missing) or '无'}"
             elif s in completed_steps:
                 step_notes[s] = "已完成"
             else:
@@ -6206,6 +6233,33 @@ def _find_nearest_key_level(klines: dict, price: float) -> tuple:
     return candidates[0]
 
 
+_KNOWN_FLAGS = ("--push", "--full", "--quick", "--inherit", "--now", "--mode-auto", "--message")
+_FLAG_TAKES_VALUE = ("--message",)
+
+
+def _reject_unknown_flags(argv) -> str | None:
+    """未知 CLI 参数必须显式报错，不能静默当成品种。
+
+    历史事故形态：`auto_card.py --mode full` —— `--mode` 不被识别、被
+    `_parse_cli_symbol` 跳过，而它的值 `full` 被当成「品种」，
+    于是为伪品种 FULL 生成了一张看起来正常的卡（静默错输出）。
+    """
+    it = iter(range(len(argv)))
+    for i in it:
+        arg = argv[i]
+        if not arg.startswith("-"):
+            continue
+        if arg in _KNOWN_FLAGS:
+            if arg in _FLAG_TAKES_VALUE:
+                next(it, None)
+            continue
+        extra = ""
+        if arg in ("--mode", "-m"):
+            extra = "（档位请用 --full / --inherit / --quick，或 --mode-auto --message \"<原话>\"）"
+        return f"未知参数 {arg}{extra}"
+    return None
+
+
 def _parse_cli_symbol(argv=None) -> str:
     """Return the trading symbol from positional args or --message text."""
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -6263,7 +6317,22 @@ def _vwap_structure_line(vwap_ema: dict) -> str:
 
 
 if __name__ == "__main__":
+    _unknown = _reject_unknown_flags(sys.argv[1:])
+    if _unknown:
+        print(f"❌ {_unknown}", file=sys.stderr)
+        print("用法：auto_card.py <SYMBOL> [--quick|--full|--inherit|--now] [--push]\n"
+              "      auto_card.py --mode-auto --message \"<用户原话>\"", file=sys.stderr)
+        raise SystemExit(2)
     sym = _parse_cli_symbol()
+    # 未识别资产仍按通用管线出卡（设计允许），但必须显式提示，
+    # 避免「伪品种卡」看起来与真品种卡一模一样。
+    try:
+        from pipeline_router import parse_asset_identity
+        _ident = parse_asset_identity(sym) or {}
+        if str(_ident.get("asset_class") or "").lower() in ("unknown", ""):
+            print(f"⚠ 未识别资产『{sym}』——按通用管线处理，请确认这不是参数误传。")
+    except Exception:
+        pass
     do_push = "--push" in sys.argv
     # 日常默认快速；完整扫描必须显式 --full，避免裸跑误触发重管线。
     _mode = "quick"

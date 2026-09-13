@@ -270,6 +270,36 @@ def main() -> int:
         except Exception:
             missing.append(module)
     print(f"Python deps: {'OK' if not missing else 'MISSING '+','.join(missing)}")
+
+    # XAU 现场同步：单次抖动只告警，连续失败（≥2 轮）才算结构性降级。
+    # 该文件由 xau_tv_sync.py 每轮写入，缺失只代表「还没有观测」，
+    # 不能当成失败（否则新增观测本身会把预检打成 red）。
+    xau_sync_ok = True
+    status_path = Path("data/xau_tv_sync_status.json")
+    sync_status = read_json(status_path)
+    if isinstance(sync_status, dict) and sync_status.get("_error"):
+        if status_path.exists():
+            # 读不出来 ≠ 通过，也 ≠ 失败：如实报「未观测」并带上原因，
+            # 否则会把损坏的状态文件伪装成「连续失败=0 的健康」。
+            print(f"XAU同步: 状态文件不可读（{str(sync_status['_error'])[:60]}）—— 未观测，不影响判定")
+        else:
+            print("XAU同步: 尚无状态记录（未观测，不影响判定）")
+        sync_status = {}
+    elif not sync_status:
+        print("XAU同步: 尚无状态记录（未观测，不影响判定）")
+    if sync_status:
+        streak = int(sync_status.get("consecutive_failures") or 0)
+        st = str(sync_status.get("status") or "?")
+        age = age_hours(sync_status.get("checked_at"))
+        detail = (f"连续失败={streak} last_success={str(sync_status.get('last_success_at'))[:19]} "
+                  f"kept={sync_status.get('kept') or '-'} err={str(sync_status.get('last_error'))[:60]}")
+        if st == "ok":
+            print(f"XAU同步: OK checked={age:.1f}h前")
+        elif streak >= 2:
+            xau_sync_ok = False
+            print(f"XAU同步: DEGRADED {detail}")
+        else:
+            print(f"XAU同步: WARN(单次失败) {detail}")
     # Dependency failures are a runtime blocker too: the preflight must not
     # report healthy market contracts while the collector interpreter cannot
     # import its required data stack.
@@ -282,6 +312,7 @@ def main() -> int:
         and xau_contract.get("usable")
         and not cron_issues
         and not missing
+        and xau_sync_ok
     )
     if not kl_ok:
         print(f"批准关键位判定: FAIL ({kl_status}/{kl_intent}) —— 监控不可用或静默未声明")

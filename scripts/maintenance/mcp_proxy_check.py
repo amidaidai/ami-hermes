@@ -15,7 +15,9 @@
 
 只有该 server 明确需要代理时才纳入检查（NEEDS_PROXY），不要把本地/国内源拉进来。
 
-退出码：0 = 全部通过；2 = 发现配置或运行层问题。
+退出码：0 = 全部通过；2 = 发现配置或运行层问题；3 = 本工具不可用
+（config.yaml 读不到 / 解析不出 mcp_servers 段）——**3 不等于发现问题**，
+不要把它当代理故障上报。
 默认写 data/maintenance/mcp_proxy_check.json，--no-write 可关闭。
 只读：不修改任何配置、不重启任何进程。
 """
@@ -67,15 +69,109 @@ def find_config() -> Path | None:
     return None
 
 
-def load_mcp_servers(config_path: Path) -> dict:
-    """读 config.yaml 的 mcp_servers 段。PyYAML 缺失时抛 RuntimeError。"""
+def _strip_scalar(raw: str) -> str:
+    """去掉 YAML 标量的引号/行尾注释，用于最小回退解析。"""
+    s = raw.strip()
+    for q in ('"', "'"):
+        if len(s) >= 2 and s.startswith(q) and s.endswith(q):
+            return s[1:-1]
+    if " #" in s:
+        s = s.split(" #", 1)[0].rstrip()
+    return s
+
+
+def _minimal_mcp_servers_parse(text: str) -> dict:
+    """PyYAML 缺失时的最小回退：只还原本工具真正消费的两个字段。
+
+    本工具只读 `mcp_servers.<name>.env`（代理键）与 `.enabled`，
+    不需要通用 YAML 能力；因此按缩进精确提取这两处，比引入依赖更可靠。
+
+    覆盖范围 = 标准两级嵌套写法（server 键缩进 +2，其 `env:`/`enabled:`
+    再深一级）。更花哨的 YAML（锚点/内联映射/流式列表）不在覆盖内：
+    那些情况下字段会被当成「未设置」，由调用方按 `parser=minimal` 如实披露，
+    **绝不乐观假设**。故意不做「猜」——漏报可见，误报会掩盖真问题。
+    """
+    servers: dict = {}
+    in_servers = False
+    servers_indent: int | None = None
+    server_indent: int | None = None
+    current: str | None = None
+    in_env = False
+    env_indent: int | None = None
+
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        line = raw.strip()
+
+        if not in_servers:
+            if line.startswith("mcp_servers:"):
+                in_servers = True
+                servers_indent = indent
+            continue
+        if servers_indent is None:
+            break
+        if indent <= servers_indent and not line.startswith("mcp_servers:"):
+            break  # 离开 mcp_servers 段
+
+        # 新 server 键：恰好比 mcp_servers 深一级的 `name:` 行
+        if indent == servers_indent + 2 and line.endswith(":") and not line.startswith("-"):
+            current = _strip_scalar(line[:-1])
+            if current not in ("env", "enabled"):
+                server_indent = indent
+                servers.setdefault(current, {})
+                in_env = False
+                env_indent = None
+                continue
+
+        if current is None:
+            continue
+        # 非本 server 的子树（缩进已退回）→ 放弃本 server 的上下文
+        if server_indent is not None and indent < server_indent:
+            current = None
+            in_env = False
+            env_indent = None
+            continue
+
+        if line.startswith("enabled:"):
+            val = _strip_scalar(line.split(":", 1)[1]).lower()
+            servers[current]["enabled"] = val not in ("false", "no", "0")
+            in_env = False
+            continue
+        if line.startswith("env:"):
+            servers[current].setdefault("env", {})
+            tail = _strip_scalar(line.split(":", 1)[1])
+            if tail and tail not in ("{}", "null", "~"):
+                in_env = False       # 内联写法，回退解析不展开
+            else:
+                in_env = True
+                env_indent = indent
+            continue
+        if in_env and env_indent is not None and indent > env_indent and ":" in line:
+            k, v = line.split(":", 1)
+            servers[current].setdefault("env", {})[_strip_scalar(k)] = _strip_scalar(v)
+            continue
+        if in_env and env_indent is not None and indent <= env_indent:
+            in_env = False
+    return servers
+
+
+def load_mcp_servers(config_path: Path) -> tuple[dict, str]:
+    """读 config.yaml 的 mcp_servers 段。
+
+    返回 (servers, parser)。`parser` 为 `yaml` 或 `minimal`：
+    后者表示 PyYAML 不可用，已退回缩进级最小解析，调用方必须如实披露。
+    """
+    text = config_path.read_text(encoding="utf-8")
     try:
         import yaml  # type: ignore
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("需要 PyYAML 才能解析 config.yaml") from exc
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except ImportError:
+        servers = _minimal_mcp_servers_parse(text)
+        return (servers if isinstance(servers, dict) else {}), "minimal"
+    data = yaml.safe_load(text) or {}
     servers = data.get("mcp_servers") or {}
-    return servers if isinstance(servers, dict) else {}
+    return (servers if isinstance(servers, dict) else {}), "yaml"
 
 
 def check_config_env(servers: dict, needs: "dict[str, str] | None" = None) -> list[dict]:
@@ -212,22 +308,34 @@ def collect_runtime(needs: "dict[str, str] | None" = None,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="MCP 代理配置守卫（只读）")
     ap.add_argument("--no-write", action="store_true", help="不写 JSON 报告")
+    ap.add_argument("--config", type=Path, default=None,
+                    help="显式指定 config.yaml（默认按 HERMES_HOME/常见安装位探测）")
     args = ap.parse_args(argv)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"═ MCP 代理守卫 · {now} ═")
 
-    cfg_path = find_config()
-    if cfg_path is None:
-        print("❌ 找不到 config.yaml（试过 HERMES_HOME / ~/AppData/Local/hermes / ~/.hermes）")
-        return 2
+    cfg_path = args.config if args.config else find_config()
+    if cfg_path is None or not Path(cfg_path).is_file():
+        print("❌ 找不到 config.yaml（试过 --config / HERMES_HOME / "
+              "~/AppData/Local/hermes / ~/.hermes）")
+        return 3
     print(f"配置：{cfg_path}")
 
     try:
-        servers = load_mcp_servers(cfg_path)
-    except RuntimeError as exc:
-        print(f"❌ {exc}")
-        return 2
+        servers, parser = load_mcp_servers(cfg_path)
+    except (OSError, UnicodeError) as exc:
+        print(f"❌ 无法读取 config.yaml：{exc}")
+        return 3
+    if not servers:
+        # 解析器给不出 mcp_servers 段 ≠ 代理配置有问题：如实区分，
+        # 避免把「工具读不到配置」伪装成「发现代理问题」。
+        print(f"❌ 未能从 {cfg_path} 解析出 mcp_servers 段"
+              f"（parser={parser}）——本工具不可用，请检查配置文件或 PyYAML")
+        return 3
+    if parser != "yaml":
+        print(f"⚠️ PyYAML 不可用 → 使用最小回退解析（parser={parser}）；"
+              "结论覆盖同语义但更少字段，缺字段按未设置处理")
 
     procs = collect_runtime()
     cfg_problems = check_config_env(servers)
@@ -259,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     report = {
         "checked_at": now,
         "config_path": str(cfg_path),
+        "parser": parser,
         "needs_proxy": NEEDS_PROXY,
         "problems": problems,
         "functional": func,

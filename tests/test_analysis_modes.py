@@ -59,7 +59,10 @@ def test_quick_crypto_reuses_cached_spot_and_skips_cmc_global_network_calls():
 def test_xau_preflight_validates_fresh_pair_before_starting_expensive_sync():
     source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
     block = source[source.index('if _asset_class(symbol) == "gold":'):source.index("# XAU 已由 xau_tv_sync")]
-    assert block.index("xau_contract = _load_xau_tv_contract()") < block.index("xau_sync = subprocess.run(")
+    # 2026-09-14：前置决策改用「读取窗口 − 出卡余量」，比读取侧更严，
+    # 防止出卡期间跨过 5 分钟阈值导致「前置跳过 / 读取拒绝」自相矛盾。
+    assert block.index("xau_contract = _load_xau_tv_contract(") < block.index("xau_sync = subprocess.run(")
+    assert "max_age_minutes=TV_LIVE_PRE_SYNC_MAX_AGE_MIN" in block
     assert "跳过重复切图" in block
 
 

@@ -140,11 +140,27 @@ mcp_servers:
         assert "/mcp/reload" in out
         assert not (tmp_path / "data").exists()
 
-    def test_missing_config_exit_2(self, tmp_path, monkeypatch, capsys):
+    def test_missing_config_exit_3(self, tmp_path, monkeypatch, capsys):
+        """找不到 config.yaml = 「本工具不可用」，必须与「发现代理问题」分码。
+
+        2026-09-14：原实现返回 2（=发现问题），会把「读不到配置」上报成
+        代理故障。语义纠正为 3；调用方与文档同步。
+        """
         monkeypatch.setenv("HERMES_CONFIG", str(tmp_path / "nope.yaml"))
         monkeypatch.setattr(m, "config_candidates", lambda: [tmp_path / "nope.yaml"])
-        assert m.main(["--no-write"]) == 2
+        assert m.main(["--no-write"]) == 3
         assert "找不到 config.yaml" in capsys.readouterr().out
+
+    def test_exit_code_2_reserved_for_real_problems(self, tmp_path, monkeypatch, capsys):
+        """2 仍然留给真实代理问题（配置层缺代理键）。"""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "mcp_servers:\n  financekit:\n    command: uvx\n    enabled: true\n    env: {}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(m, "collect_runtime", lambda *a, **k: [])
+        monkeypatch.setattr(m, "functional_probe", lambda *a, **k: {})
+        assert m.main(["--config", str(cfg), "--no-write"]) == 2
 
 
 class TestRealRepoConfig:

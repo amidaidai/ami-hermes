@@ -211,6 +211,48 @@ CRON_SOURCES = {
     "other":   ["cot_data", "x_sentiment"],
 }
 
+# 有意停用的采集源（2026-08-29 binance-only 迁移产物）。
+# 它们对应的 cron 已被摘掉，文件永远不会再更新 —— 卡面必须把这类
+# 「刻意不采」与「本该采到却没采到」分开写，否则每轮卡都像在报故障。
+# 恢复某个源时：先恢复其 cron 并验证产出，再把名字从这里删掉。
+CRON_SOURCES_PAUSED = {
+    "dune_cache": "Dune 链上采集 cron 已停用",
+    "qlib_factors": "QLib 因子采集 cron 已停用",
+    "liquidation_pressure": "清算压力采集 cron 已停用",
+    "deribit_options": "Deribit 期权采集 cron 已停用",
+    "stablecoin_flows": "稳定币流采集 cron 已停用",
+    "cot_data": "COT 持仓采集 cron 已停用",
+}
+
+
+def cron_source_paused(name: str) -> bool:
+    return str(name) in CRON_SOURCES_PAUSED
+
+
+# 源名 ≠ 文件名（历史遗留）。按源名拼路径会永久误判「文件不存在」——
+# x_sentiment 的真实产物是 x_sentiment_context.json。
+CRON_SOURCE_FILES = {
+    "x_sentiment": "x_sentiment_context.json",
+}
+
+
+def cron_source_file(name: str) -> str:
+    return CRON_SOURCE_FILES.get(str(name), f"{name}.json")
+
+
+# 各源的新鲜度契约（小时）。缺省 6h。
+# 必须与产出方的契约一致 —— 拿 6h 去判一个 24h TTL 的缓存 = 每轮永久误报，
+# 而误报最终会让人忽略整张完成度表。
+CRON_SOURCE_MAX_AGE = {
+    "xau_macro_context": 24.0,        # trading_system._xau_macro_context 的 TTL
+    "cot_data": 24.0 * 7,             # CFTC 周报
+    "x_sentiment": 6.0,               # 卡面「超过 6 小时不采用」的同一口径
+}
+
+
+def cron_source_max_age(name: str, default: float = 6.0) -> float:
+    return float(CRON_SOURCE_MAX_AGE.get(str(name), default))
+
 
 ASSET_STEP_DESCRIPTIONS = {
     "macro": {

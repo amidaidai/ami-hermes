@@ -26,6 +26,7 @@ TZ = timezone(timedelta(hours=8))
 OUT = ROOT / "data" / "xau_tv_state.json"
 LIVE_OUT = ROOT / "data" / "tv_live_XAUUSD.json"
 STAGED_OUT = OUT.with_name(f"{OUT.name}.tmp")
+STATUS_OUT = ROOT / "data" / "xau_tv_sync_status.json"
 NO_PUSH_FLAG = ROOT / "data" / "xau_tv_no_push.json"
 SYMBOL = "OANDA:XAUUSD"
 # v9.7: 补 D 层日线，使"自上而下确认"有大背景（原只同步 5m/15m/1h/4h）
@@ -352,6 +353,52 @@ def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1800) -> None:
         source_snapshot("XAUUSD")
     except Exception as exc:
         print(f"⚠ XAU多源快照刷新失败: {exc}", file=sys.stderr)
+
+
+def _write_sync_status(ok: bool, error: Any = None, kept: str = "") -> dict:
+    """记录每轮同步结果，提供「连续失败」升级证据。
+
+    退出码语义不变（失败仍返回非零，让调度器看得见）；本文件解决的是
+    **另一个缺口**：单次抖动与「XAU 现场结构已经连续变旧」在 cron 上
+    长得一样。连续计数 + last_success_at 让健康检查能按严重度分级。
+    """
+    prev: dict[str, Any] = {}
+    try:
+        if STATUS_OUT.exists():
+            prev = json.loads(STATUS_OUT.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        prev = {}
+    now_iso = datetime.now(TZ).isoformat()
+    if ok:
+        payload = {
+            "schema": "xau_tv_sync_status_v1",
+            "status": "ok",
+            "consecutive_failures": 0,
+            "last_error": None,
+            "kept": "",
+            "last_success_at": now_iso,
+            "checked_at": now_iso,
+        }
+    else:
+        streak = int(prev.get("consecutive_failures") or 0) + 1
+        payload = {
+            "schema": "xau_tv_sync_status_v1",
+            "status": "failed" if streak < 2 else "degraded",
+            "consecutive_failures": streak,
+            "last_error": (str(error)[:200] if error else None),
+            "kept": kept,
+            "last_success_at": prev.get("last_success_at"),
+            "checked_at": now_iso,
+        }
+    try:
+        from atomic_json import atomic_write_json
+        atomic_write_json(STATUS_OUT, payload)
+    except Exception:
+        try:
+            STATUS_OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+    return payload
 
 
 async def _run_with_retry(sync_id: str, max_attempts: int = 3) -> int:
@@ -727,6 +774,7 @@ def main() -> int:
         if all(isinstance(staged.get("timeframes", {}).get(tf), dict)
                for tf in ("1D", "4h", "1h", "15m", "5m")):
             _push_committed_xau_report(staged)
+        _write_sync_status(True)
         return 0
     except Exception as e:
         try:
@@ -745,6 +793,10 @@ def main() -> int:
                     state_meta = existing_contract.get("state") or {}
                     age = state_meta.get("age_seconds") or 0.0
                     print(f"⚠ XAU TV同步失败({e})，保留 {age:.0f}s 前已验证缓存")
+                    st = _write_sync_status(False, e, kept="verified_cache")
+                    if int(st.get("consecutive_failures") or 0) >= 2:
+                        print(f"🔴 已连续 {st['consecutive_failures']} 轮同步失败 —— "
+                              f"XAU 现场结构未更新，卡面 5m 层可能落后，请查看 TV Desktop/CDP")
                     return 1
             except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
                 pass
@@ -757,6 +809,7 @@ def main() -> int:
                 existing_state = json.loads(OUT.read_text(encoding="utf-8"))
             if isinstance(existing_state, dict) and existing_state.get("timeframes"):
                 print(f"⚠ XAU TV同步失败({e})，保留最近一次五周期结构（本轮不可用）")
+                _write_sync_status(False, e, kept="structure_only")
             else:
                 payload = {
                     "symbol": SYMBOL,
@@ -770,6 +823,7 @@ def main() -> int:
                 from atomic_json import atomic_write_json
                 atomic_write_json(OUT, payload)
                 print(f"⚠ XAU TV同步失败({e})，写明确不可用状态")
+                _write_sync_status(False, e, kept="none")
         except (OSError, UnicodeError, json.JSONDecodeError):
             pass
         # 同步失败必须向调度器返回非零；否则 Cron 会把明确的 stale/
