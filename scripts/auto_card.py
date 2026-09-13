@@ -4220,7 +4220,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                     if isinstance(row, dict) and row.get("source") in {"Binance现货", "CoinGecko"}
                     and _decision_float(row.get("price")) > 0
                 ), 0.0)
-                cmc = {"price": cached_spot, "dominance": 0.0, "_source_status": "cache"}
+                # 2026-09-13：市占未知就不写 0.0 —— 旧实现硬编码 0.0，卡面把「没采到」
+                # 打印成「市占0.0%」，读者会当成真实读数。
+                cmc = {"price": cached_spot, "_source_status": "cache"}
             _register_source_record(engine_data, "cmc", cmc, symbol=symbol)
             spot_price = cmc.get("price", 0)
             # 优先 Binance U 本位期货价，CMC 仅保留为现货交叉验证/备用
@@ -4243,7 +4245,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             except Exception:
                 pass
             basis = f" 期现差{(futures_price/spot_price-1)*100:+.3f}%" if futures_price and spot_price else ""
-            print(f"  ✅ 期货: ${primary_price:,.0f} (Binance Perp) | CMC现货: ${spot_price:,.0f}{basis} | 市占{cmc.get('dominance',0):.1f}%")
+            _dom = _decision_float(cmc.get("dominance"))
+            _dom_txt = f"{_dom:.1f}%" if _dom > 0 else "—（未采到）"
+            print(f"  ✅ 期货: ${primary_price:,.0f} (Binance Perp) | CMC现货: ${spot_price:,.0f}{basis} | 市占{_dom_txt}")
             
             # CMC global
             glob = cmc_global() if "macro" in pipeline_steps else {}
@@ -4254,7 +4258,11 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             fg = cmc_fear_greed() if "macro" in pipeline_steps else {}
             _register_source_record(engine_data, "fear_greed", fg, symbol=symbol, status="not_run" if "macro" not in pipeline_steps else None)
             engine_data["fear_greed"] = fg
-            print(f"  ✅ 恐慌贪婪: {fg.get('value','?')} ({fg.get('classification','?')})")
+            # 2026-09-13：没采到就直说，「✅ ? (?)」会被当成采到了。
+            if fg.get("value") in (None, "", "?"):
+                print(f"  ⚠️ 恐慌贪婪: 本轮未采到有效字段（来源未路由或失败）")
+            else:
+                print(f"  ✅ 恐慌贪婪: {fg.get('value')} ({fg.get('classification') or '—'})")
             
             # CoinGecko top coins → 板块轮动检测（仅full）
             try:
@@ -4263,7 +4271,17 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 _register_source_record(engine_data, "cg_top", top, symbol=symbol, status="not_run" if "cg_pro" not in pipeline_steps else None)
                 engine_data["cg_top"] = top
                 cg_status = top.get("_source_status", "not_run") if isinstance(top, dict) else "unavailable"
-                print(f"  {'✅' if cg_status in ('live', 'cache') else '⚠️'} CoinGecko Top10: {top.get('rotation','?')} | 状态{cg_status} | BTC {top.get('btc_change_24h',0):+.1f}% vs Alt {top.get('avg_alt_change_24h',0):+.1f}%")
+                # 2026-09-13：not_run/失败时不再打印「BTC +0.0% vs Alt +0.0%」
+                # —— 那是 .get(...,0) 的默认值伪装成读数。
+                _btc_chg = top.get("btc_change_24h") if isinstance(top, dict) else None
+                _alt_chg = top.get("avg_alt_change_24h") if isinstance(top, dict) else None
+                _icon = "✅" if cg_status in ("live", "cache") else "⚠️"
+                if _btc_chg is None and _alt_chg is None:
+                    print(f"  {_icon} CoinGecko Top10: 状态{cg_status}·本轮未采到有效字段")
+                else:
+                    _btc_txt = f"{float(_btc_chg):+.1f}%" if _btc_chg is not None else "—"
+                    _alt_txt = f"{float(_alt_chg):+.1f}%" if _alt_chg is not None else "—"
+                    print(f"  {_icon} CoinGecko Top10: {top.get('rotation','?')} | 状态{cg_status} | BTC {_btc_txt} vs Alt {_alt_txt}")
             except Exception:
                 pass
             try:
@@ -4871,16 +4889,38 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             if _x_path.exists():
                 import json as _xj
                 _x_data = _xj.loads(_x_path.read_text(encoding="utf-8"))
-                _fg = _x_data.get("fear_greed", {})
-                _gm = _x_data.get("global_market", {})
-                _queries = _x_data.get("suggested_x_queries", [])
-                _btc_dom = _gm.get("btc_dominance", "?")
-                _fg_v = _fg.get("value", "?")
-                _fg_c = _fg.get("classification", "?")
-                _q_str = " | ".join(_queries[:2]) if _queries else "无"
-                print(f"  ✅ X情绪: BTC恐贪{_fg_v}({_fg_c}) · 市占{str(_btc_dom)[:6]}% · {_q_str}")
+                # 2026-09-13 审计：该文件的生产者早已消失（停在 2026-07-15），旧实现却仍用
+                # ✅ 打印那时的恐贪 25 / 市占 56.3% —— 比「没有」更容易误导。现在按语义
+                # 时间戳判新鲜度：陈旧就明确写「本轮不采用」，不再把旧值当当前值展示。
+                try:
+                    from source_health import payload_timestamp
+                    _x_ts = payload_timestamp(_x_data)
+                except Exception:
+                    _x_ts = None
+                _x_age_h = ((datetime.now(TZ) - _x_ts.astimezone(TZ)).total_seconds() / 3600
+                            if _x_ts is not None else None)
+                _x_fresh = _x_age_h is not None and _x_age_h <= 6.0
+                _fg = _x_data.get("fear_greed") or {}
+                _gm = _x_data.get("global_market") or {}
                 engine_data["x_sentiment"] = _x_data
-                _register_source_record(engine_data, "x_sentiment", _x_data, symbol=None, max_age_hours=6.0)
+                if _x_fresh:
+                    _btc_dom = _gm.get("btc_dominance")
+                    _dom_txt = (f"{float(_btc_dom):.1f}%"
+                                if isinstance(_btc_dom, (int, float)) and _btc_dom else "—")
+                    _note = _x_data.get("x_note") or {}
+                    _note_txt = (f" · X叙述(仅情绪·不改裁决): {str(_note.get('text'))[:60]}"
+                                 if _note.get("text") else "")
+                    _q_str = " | ".join((_x_data.get("suggested_x_queries") or [])[:2]) or "无"
+                    print(f"  ✅ X情绪: BTC恐贪{_fg.get('value', '?')}({_fg.get('classification', '?')})"
+                          f" · 市占{_dom_txt} · {_q_str}{_note_txt}")
+                    _register_source_record(engine_data, "x_sentiment", _x_data, symbol=None,
+                                            max_age_hours=6.0)
+                else:
+                    _age_txt = f"{_x_age_h:.1f}h前" if _x_age_h is not None else "无时间戳"
+                    print(f"  ⚠️ X情绪: 上下文陈旧({_age_txt})·本轮不采用（旧值不展示）")
+                    _register_source_record(engine_data, "x_sentiment", _x_data, symbol=None,
+                                            status="stale_cache",
+                                            error=f"context_stale:{_age_txt}")
             else:
                 _register_source_record(engine_data, "x_sentiment", None, status="unavailable", error="cache_missing", symbol=None)
                 print(f"  ⚠️ X情绪: 缓存文件不存在")

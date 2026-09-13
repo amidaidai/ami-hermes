@@ -90,7 +90,10 @@ def inspect_payload(
         if contract
         else data.get("_source_status") or data.get("source_status")
     )
-    explicit_status = str(explicit) if explicit in VALID_STATES else None
+    # 2026-09-13：payload 里的 source_status 可能是结构化字典（例如刷新器写的逐项状态），
+    # 直接做 `in VALID_STATES` 会抛 unhashable type: 'dict' 并让整个状态判定失败。
+    # 只接受字符串，其余一律当作「没有显式状态」。
+    explicit_status = explicit if isinstance(explicit, str) and explicit in VALID_STATES else None
     contract_error = contract.get("error") if contract else None
     payload_error = data.get("error") or data.get("_source_error")
 
