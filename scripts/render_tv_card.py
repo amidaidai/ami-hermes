@@ -135,7 +135,15 @@ def _fmt_num(v):
         return "—"
     try:
         f = float(str(v).replace(",", "").replace("`", ""))
-        return f"{f:,.0f}" if f >= 1000 else f"{f:.2f}"
+        if f >= 1000:
+            return f"{f:,.0f}"
+        a = abs(f)
+        if 0.01 <= a < 10:
+            # 2026-09-13 FX 精度修复：与 render_v96._num 同规则。
+            return f"{f:.4f}"
+        if 0 < a < 0.01:
+            return f"{f:.6f}".rstrip("0").rstrip(".")
+        return f"{f:.2f}"
     except (TypeError, ValueError):
         return str(v).replace("`", "")
 

@@ -3216,6 +3216,7 @@ def _apply_tv_live_structure(
     direction: str,
 ) -> bool:
     """Apply a single-period TV structure only when no valid five-TF snapshot exists."""
+    from render_v96 import _num as _tv_num  # FX 价格精度：与卡片渲染同规则（2026-09-13）
     if engine_data.get("_tv_five_tf_klines"):
         return False
     if not isinstance(klines, dict) or not poc or not vah or not val:
@@ -3227,7 +3228,7 @@ def _apply_tv_live_structure(
                 "open": poc, "change_pct": 0,
                 "poc": poc, "vah": vah, "val": val,
                 "direction": direction,
-                "description": f"TV现场 POC {poc:.0f} | VAH {vah:.0f} VAL {val:.0f} | {direction}",
+                "description": f"TV现场 POC {_tv_num(poc)} | VAH {_tv_num(vah)} VAL {_tv_num(val)} | {direction}",
             }
         elif tf in klines and isinstance(klines[tf], dict):
             row = klines[tf]
@@ -3235,7 +3236,7 @@ def _apply_tv_live_structure(
             row["vah"] = vah
             row["val"] = val
             if "待" in str(row.get("description", "")):
-                row["description"] = f"TV注入 POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f}"
+                row["description"] = f"TV注入 POC{_tv_num(poc)} VAH{_tv_num(vah)} VAL{_tv_num(val)}"
     return True
 
 
@@ -5306,6 +5307,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 engine_data["_tv_live_status"] = {"usable": False, "reason": reason}
                 print(f"  ⚠ TV实时注入未采用: {reason}")
             if c2 and c2.get("fresh"):
+                from render_v96 import _num as _tv_num  # FX 价格精度：与卡片渲染同规则（2026-09-13）
                 if not live_indicator_injected:
                     _inject_tv_live_pine(engine_data, c2)
                 klines = engine_data.setdefault("klines", {})
@@ -5328,7 +5330,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                     merged = engine_data.setdefault("merged", {})
                     merged["vah"] = vah; merged["val"] = val; merged["poc"] = poc
                 if applied_single_tf:
-                    print(f"  📡 TV实时注入: POC{poc:.0f} VAH{vah:.0f} VAL{val:.0f} → {len(klines)}周期")
+                    print(f"  📡 TV实时注入: POC{_tv_num(poc)} VAH{_tv_num(vah)} VAL{_tv_num(val)} → {len(klines)}周期")
                 else:
                     print("  📡 TV实时指标已注入；保留五周期逐层结构，未用单周期值覆盖")
     except Exception as _tve:

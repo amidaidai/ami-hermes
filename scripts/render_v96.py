@@ -44,6 +44,14 @@ def _num(v, digits=0):
         return f"{f:,.0f}"
     if digits:
         return f"{f:,.{digits}f}"
+    a = abs(f)
+    if 0.01 <= a < 10:
+        # 2026-09-13 FX 精度修复：2 位小数不够——EURUSD 1.1638 曾显示成 "1.16"。
+        # |v|∈[0.01,10)（外汇/小额价格）保留 4 位小数。
+        return f"{f:.4f}"
+    if 0 < a < 0.01:
+        # 极小值（小市值币种）：6 位小数并去掉尾部零。
+        return f"{f:.6f}".rstrip("0").rstrip(".")
     return f"{f:.2f}"
 
 
