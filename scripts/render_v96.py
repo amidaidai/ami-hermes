@@ -246,6 +246,10 @@ def _level_kind(name: str, side: str, level: float, price: float | None) -> tupl
     elif "npoc" in raw:
         label = "nPOC"
         use = "nPOC裸区"
+    # 2026-09-13：DO Price（日开盘）具名（消费矩阵建议 6）
+    elif "日开" in cn or "do price" in raw:
+        label = "DO"
+        use = "日开盘参考"
     elif "高" in cn or "res" in raw or "阻" in cn:
         label = "阻"
         use = "阻力位"
@@ -389,40 +393,54 @@ def _structure_table(levels: list[dict], price: float | None) -> str:
     return "| 结构位 | 价格 | 距现价 |\n|:---|:---:|---:|\n" + "\n".join(rows)
 
 
-def _ema_disclosure_line(vwap_ema: dict | None) -> str:
-    """VWAP/EMA 环境行（2026-09-13 接入，双 schema 兼容）。
+def _ema_disclosure_line(vwap_ema: dict | None, do_price: float = 0.0,
+                         price: float | None = None) -> str:
+    """VWAP/EMA/DO 环境行（2026-09-13，双 schema 兼容）。
 
-    EMA 引擎（vwap_ema_cvd_engine）自 v1.0 起计算 9/21/34/55 + EMA云，
-    但此前只在终端打印、卡面无展示（用户 2026-09-13 指标盘点发现的缺口）。
+    2026-09-13：EMA（engine 自 v1.0 起算而未上卡）与 DO Price（日开盘
+    定价参考，消费矩阵建议 6）先后并入本行；DO 不占结构位表名额。
     兼容两种来源：
       - summary 引擎: {"available", "vwap": {"vwap","price_vs_vwap","in_band"}, "ema", "ema_cloud"}
       - TV MCP fallback: {"vwap": {"value","price_above"}, "ema", "source"}
     有数据即输出；无数据返回空串（卡面不出现占位行）。
     """
-    if not isinstance(vwap_ema, dict):
-        return ""
-    vwap = vwap_ema.get("vwap") or {}
-    ema = vwap_ema.get("ema") or {}
-    cloud = vwap_ema.get("ema_cloud") or {}
     parts = []
-    vwap_val = vwap.get("vwap")
-    if vwap_val is None:
-        vwap_val = vwap.get("value")
-    if vwap_val:
-        vs = vwap.get("price_vs_vwap")
-        if not vs and vwap.get("price_above") is not None:
-            vs = "上" if vwap.get("price_above") else "下"
-        pair = "·".join(x for x in ((f"价在{vs}" if vs else ""), str(vwap.get("in_band") or "")) if x)
-        parts.append(f"VWAP `{_num(vwap_val)}`（{pair}）" if pair else f"VWAP `{_num(vwap_val)}`")
-    fast, slow = ema.get("9"), ema.get("55")
-    if fast and slow:
-        parts.append(f"EMA9/55 `{_num(fast)}`/`{_num(slow)}`")
-    strength = str(cloud.get("trend_strength") or "").strip()
-    if strength:
-        parts.append(strength)
+    if isinstance(vwap_ema, dict):
+        vwap = vwap_ema.get("vwap") or {}
+        ema = vwap_ema.get("ema") or {}
+        cloud = vwap_ema.get("ema_cloud") or {}
+        vwap_val = vwap.get("vwap")
+        if vwap_val is None:
+            vwap_val = vwap.get("value")
+        if vwap_val:
+            vs = vwap.get("price_vs_vwap")
+            if not vs and vwap.get("price_above") is not None:
+                vs = "上" if vwap.get("price_above") else "下"
+            pair = "·".join(x for x in ((f"价在{vs}" if vs else ""), str(vwap.get("in_band") or "")) if x)
+            parts.append(f"VWAP `{_num(vwap_val)}`（{pair}）" if pair else f"VWAP `{_num(vwap_val)}`")
+        fast, slow = ema.get("9"), ema.get("55")
+        if fast and slow:
+            parts.append(f"EMA9/55 `{_num(fast)}`/`{_num(slow)}`")
+        strength = str(cloud.get("trend_strength") or "").strip()
+        if strength:
+            parts.append(strength)
+    ve_existed = bool(parts)
+    # DO Price（日开盘）——日内定价参考（2026-09-13，消费矩阵建议 6）
+    has_do = False
+    try:
+        if do_price and float(do_price) > 0:
+            do_seg = f"DO `{_num(do_price)}`"
+            if price:
+                _pct = (float(do_price) - float(price)) / float(price) * 100
+                do_seg += f"（{'+' if _pct >= 0 else ''}{_pct:.2f}%）"
+            parts.append(do_seg)
+            has_do = True
+    except (TypeError, ValueError, ZeroDivisionError):
+        has_do = False
     if not parts:
         return ""
-    return "VWAP/EMA：" + " · ".join(parts)
+    head = "VWAP/EMA/DO" if (has_do and ve_existed) else "DO" if has_do else "VWAP/EMA"
+    return head + "：" + " · ".join(parts)
 
 
 def _dual_short(dual: dict | None, ac: str) -> tuple[str, str, str]:
@@ -521,6 +539,7 @@ def render_v96_card(
     final_verdict: dict | None = None,
     source_matrix: list[dict] | None = None,
     session_name: str = "",
+    do_price: float = 0.0,
 ) -> str:
     klines = klines or {}
     st_a = st_a or {"stop": None, "target": None}
@@ -689,7 +708,7 @@ def render_v96_card(
     lines.append(f"| 依据 | SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict} |")
     lines.append("")
     # 2026-09-13：VWAP/EMA 环境行（EMA 此前只算不上卡——用户指标盘点的缺口修复）
-    _ve_line = _ema_disclosure_line(vwap_ema)
+    _ve_line = _ema_disclosure_line(vwap_ema, do_price=do_price, price=price)
     if _ve_line:
         lines.append(_ve_line)
         lines.append("")
@@ -710,7 +729,9 @@ def render_v96_card(
     lines.append("")
     lines.append("| 结构位 | 价格 | 用法 | 距现价 |")
     lines.append("|:---|:---:|:---|---:|")
-    for item in levels_prepared[:6]:
+    # 2026-09-13：渲染上限与 _prepare_levels 的容量对齐（7）。此前 prepare 7 / render 6
+    # 的不一致会吞掉第 7 个候选位（DO Price 接入后恰排第 7 被截）。
+    for item in levels_prepared[:7]:
         use = item.get("use") or item.get("name") or item.get("side") or "关键位"
         lines.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)[:20]} | {item['dist']} |")
     if not levels_prepared:

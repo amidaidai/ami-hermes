@@ -71,7 +71,7 @@ def test_ema_line_fallback_schema():
 def test_ema_line_wired_into_card_body():
     """防回退：_ema_disclosure_line 必须被 render_v96_card 调用。"""
     src = (ROOT / "scripts" / "render_v96.py").read_text(encoding="utf-8")
-    assert "_ve_line = _ema_disclosure_line(vwap_ema)" in src
+    assert "_ve_line = _ema_disclosure_line(vwap_ema, do_price=do_price, price=price)" in src
 
 
 def test_vwap_ema_backfill_and_reuse_wired():

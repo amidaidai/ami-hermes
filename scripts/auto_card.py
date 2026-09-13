@@ -1879,7 +1879,16 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
                             all_levels_list.append({"side": side, "display_name": name, "level": fv, "name": name})
                     except (TypeError, ValueError):
                         pass
-    
+
+    # 2026-09-13：DO Price（日开盘）接入（消费矩阵建议 6——展示性字段接入）。
+    # 指标 DW「DO Price」自 v13 起导出但系统未消费；作为日内定价参考并入
+    # 「VWAP/EMA」环境行（与结构位解耦——DO 不是结构位，不参与位表排序竞争）。
+    try:
+        _do_src = engine_data.get("_tv_main") or {}
+        _do_price_v = float(str(_do_src.get("do_price")).replace("−", "-"))
+    except (TypeError, ValueError):
+        _do_price_v = 0.0
+
     dual_indicator = _dual_indicator_verdict(symbol, meta, engine_data, cvd_dir, cvd_quality)
     try:
         from cross_validation import build_source_matrix, evaluate_cross_validation
@@ -2001,6 +2010,7 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         taker_dir=taker_dir, taker_ratio=taker_ratio,
         funding_rate=funding_rate, kill_zone=kill_zone,
         vwap_ema=vwap_ema, fg_v=fg_v,
+        do_price=_do_price_v,
         levels=all_levels_list,
         bearish=bearish, st_a=st_a, st_b=st_b,
         rr_a=rr_a, rr_b=rr_b, rr_a_note=rr_a_note, rr_b_note=rr_b_note,

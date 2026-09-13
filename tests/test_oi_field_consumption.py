@@ -84,6 +84,49 @@ def test_multi_source_line_renders_anchor():
     assert "锚" not in line2
 
 
+def test_structure_table_renders_full_capacity():
+    """②表渲染上限=prepare 容量 7（此前 [:6] 会吞第 7 个候选位）。"""
+    src = (ROOT / "scripts" / "render_v96.py").read_text(encoding="utf-8")
+    assert "levels_prepared[:7]" in src
+    assert "levels_prepared[:6]" not in src
+
+
+def test_level_kind_do_price_named():
+    """DO Price 具名（消费矩阵建议 6）。"""
+    from render_v96 import _level_kind
+    label, _icon, use = _level_kind("D 日开", "resistance", 77242.8, 77260.0)
+    assert label == "D·DO"
+    assert "日开" in use
+
+
+def test_do_price_wired_into_card():
+    """DO Price 走环境行（消费矩阵建议 6）：auto_card 传参 + render 接线。"""
+    ac = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert "_do_price_v = float" in ac
+    assert "do_price=_do_price_v" in ac
+    rv = (ROOT / "scripts" / "render_v96.py").read_text(encoding="utf-8")
+    assert "do_price: float = 0.0" in rv
+    assert "_ema_disclosure_line(vwap_ema, do_price=do_price, price=price)" in rv
+
+
+def test_ema_line_with_do_price():
+    from render_v96 import _ema_disclosure_line
+    line = _ema_disclosure_line(
+        {"vwap": {"vwap": 76750.0, "price_vs_vwap": "上", "in_band": "1σ内"},
+         "ema": {"9": 76760.0, "55": 76700.0}, "ema_cloud": {"trend_strength": "多头排列"}},
+        do_price=77242.8, price=76750.0)
+    assert line.startswith("VWAP/EMA/DO：")
+    assert "DO `77,243`" in line
+    assert "+0.64%" in line
+
+
+def test_do_only_line():
+    from render_v96 import _ema_disclosure_line
+    line = _ema_disclosure_line(None, do_price=77242.8, price=76750.0)
+    assert line.startswith("DO：")
+    assert "DO `77,243`" in line
+
+
 def test_decision_loop_dispersion_high_triggers_wait():
     from decision_loop import resolve_final_verdict
     out = resolve_final_verdict(
