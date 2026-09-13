@@ -8,6 +8,7 @@ v9.6 增加双指标共振闸门后为8问。
 """
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
+import math
 
 TZ = timezone(timedelta(hours=8))
 
@@ -64,6 +65,17 @@ GATE_RULES = {
 }
 
 FINAL_STATES = {"GO-A", "GO-B", "WAIT", "NO-GO"}
+
+def _finite_rr(value) -> float:
+    """Invalid, missing and non-finite diagnostic values fail closed."""
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
 
 def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     """执行GO/NO-GO八问，返回通过/拒绝和详情。
@@ -160,15 +172,33 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         yellow_gates.append("tv_live")
 
     # ── 门3: R:R底线 ──
-    rr_a = float(meta.get("rr_a") or meta.get("rr1", 0) or 0)
-    rr_b = float(meta.get("rr_b") or meta.get("rr2", 0) or 0)
-    primary_rr = rr_a or rr_b or 0
-    if primary_rr >= 2.0:
-        gates["rr_ratio"] = {"status": "green", "reason": f"主线R:R 1:{primary_rr:.1f}·≥1:2"}
-    else:
-        gates["rr_ratio"] = {"status": "red", "reason": f"{GATE_RULES['rr_ratio']['red_light']} 当前主线1:{primary_rr:.1f}"}
+    # st_a/st_b describe legacy opposite plans (auto_card:1737-1744).
+    # A nonzero 0.547/0.566 was never replaced by rr_b through Python ``or``;
+    # only a falsey/missing primary could trigger that historical fallback.
+    # decision_loop recomputes canonical RR from selected execution geometry,
+    # so consume that RR in EVERY final state, not only GO-A. Invalid explicit
+    # values never borrow a legacy alias or the opposite plan.
+    final_rr = engine_data.get("_final_verdict")
+    rr_source = "meta.rr_a" if "rr_a" in meta else "meta.rr1"
+    raw_rr = meta.get("rr_a") if "rr_a" in meta else meta.get("rr1")
+    if isinstance(final_rr, dict) and "rr" in final_rr:
+        raw_rr = final_rr["rr"]
+        rr_source = "final_verdict.rr"
+    rr_a = _finite_rr(raw_rr)
+    rr_b = _finite_rr(meta.get("rr_b") if "rr_b" in meta else meta.get("rr2"))
+    if rr_a > 0 and rr_a >= 2.0:
+        gates["rr_ratio"] = {"status": "green", "reason": f"主线R:R 1:{rr_a:.1f}·≥1:2"}
+    elif rr_a > 0:
+        gates["rr_ratio"] = {"status": "red", "reason": f"{GATE_RULES['rr_ratio']['red_light']} 当前主线1:{rr_a:.1f}"}
         red_gates.append("rr_ratio")
         go = False
+    else:
+        _fallback_note = f"（反侧参考1:{rr_b:.1f}·不得用作放行依据）" if rr_b > 0 else ""
+        gates["rr_ratio"] = {"status": "red", "reason": f"主推方向R:R缺失·禁止以反侧兜底{_fallback_note}"}
+        red_gates.append("rr_ratio")
+        go = False
+
+    gates["rr_ratio"]["source"] = rr_source
 
     # ── 门4: 事件窗口 ──
     event_ban = engine_data.get("_banned_live") or meta.get("protections_status", "").startswith("拦截")

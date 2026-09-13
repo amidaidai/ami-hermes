@@ -119,6 +119,7 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
         tier = "normal"
 
     return {
+        "risk_state_status": constitution["risk_state_status"],
         "allowed": allowed,
         "risk_usd": risk_usd,
         "position_size": position_size,

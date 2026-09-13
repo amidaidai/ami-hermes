@@ -132,11 +132,19 @@ def label_ready_records(
     return labeled, dict(stats)
 
 
+# 本机实测（2026-09-13）：Binance 直连固定 12s 超时，走代理 0.4s 可用。
+# 每条信号都先探直连＝每条白等 12s；111 条 ≈ 22 分钟，*/15 的 cron 会永久跑不完。
+# 探明可用模式后缓存并优先复用；直连给短超时作兜底。
+_PROXY_MODE: list[bool | None] = [None]
+
+
 def _fetch_json(url: str, direct: bool) -> Any:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if direct else urllib.request.build_opener()
     req = urllib.request.Request(url, headers={"User-Agent": "TangXi-Shadow/1.0"})
-    with opener.open(req, timeout=10) as response:
-        return json.loads(response.read())
+    with opener.open(req, timeout=5 if direct else 10) as response:
+        payload = json.loads(response.read())
+    _PROXY_MODE[0] = direct
+    return payload
 
 
 def fetch_binance_closed_bars(symbol: str, timeframe: str, start_ms: int, limit: int) -> list[Any]:
@@ -147,8 +155,10 @@ def fetch_binance_closed_bars(symbol: str, timeframe: str, start_ms: int, limit:
 
     ]
     now_ms = int(time.time() * 1000)
+    preferred = _PROXY_MODE[0]
+    order = (True, False) if preferred is None else (preferred, not preferred)
     for url in urls:
-        for direct in (True, False):
+        for direct in order:
             try:
                 payload = _fetch_json(url, direct)
                 if isinstance(payload, list):

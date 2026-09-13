@@ -21,8 +21,8 @@ from pathlib import Path
 
 REPO = Path("D:/Hermes agent")
 SCRIPTS = REPO / "scripts"
-SKIP_DIRS = {"__pycache__", "node_modules", ".git", "_archive", "_disabled_20260829",
-             "tools", "backups", "tmp", ".pytest_cache", ".pytest-cache"}
+SKIP_DIRS = {"__pycache__", "node_modules", ".git", "_archive", "_disabled",
+             "_disabled_20260829", "tools", "backups", "tmp", ".pytest_cache", ".pytest-cache"}
 
 
 def py_files(root: Path):

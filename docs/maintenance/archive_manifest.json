@@ -1,0 +1,656 @@
+{
+  "schema_version": 1,
+  "archive_root": "scripts/_disabled",
+  "active_root": "scripts",
+  "archived_python_count": 81,
+  "entries": [
+    {
+      "path": "scripts/_disabled/alert_dedup.py",
+      "sha256": "cb3cca766981df124e5ad63718db4091d5237c48ba0329ff062fd80c9cac2440",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/alert_dedup.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/auto_review.py",
+      "sha256": "4102e9838fd0cfe056299e9188a29e120fb977100d00d55c919681e663d14986",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/auto_review_cron.py",
+      "sha256": "92c34abfcae81ef2813f95f652342dedd518f57f8228421050532ad1a3644fde",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/backtest_runner.py",
+      "sha256": "26329e9997a57a4f153c3d71483d258194fcbf9b4497e35957476e679e5248b9",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/backtest_runner.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/backtest_runner_v2.py",
+      "sha256": "f3c638b5c29f51743ef3b2ddec9e51077721df442f2b78a5904cf1e95830ebf4",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/backtest_runner_v2.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/batch_review.py",
+      "sha256": "340b9022f6c95dbbfa47efc0893570227e547b9836c44a2457d1f081decdd6a7",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/bayesian_optimizer.py",
+      "sha256": "ce5867b1f9dfc2328a23c8c93f03077371ef5257c531f5308be949fa0521394d",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/btc_card_gen.py",
+      "sha256": "1910f30cb07cb72e88750f6d465e22bf1af65d6d4807fa171c52bb55bddd7774",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/btc_levels_read.py",
+      "sha256": "127630b3452f5f33fbe59ba5b38a360f2a55bcccc40bb61bb5123375dd9c3ec5",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/btc_monitor.py",
+      "sha256": "684210d758eeaf0689f978e7cc43613f86239b3c1b3ccecc6a8eeab358ca29e1",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/btc_push_386.py",
+      "sha256": "081e1bfa409a1ca968a062d41be71f4cf019ae0eb3d2f4da3f2ab28a603e2b00",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/btc_zone_alert.py",
+      "sha256": "c18186bd36adc7f5125c085b8f0eec97abc225418481b022ba6727b3db3a0426",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/check_monitor_events.py",
+      "sha256": "2870ef73805793e67eb56fbfb8647632ae7cb934d23953b2a88ed56322d82eda",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/coingecko_mcp_bridge.py",
+      "sha256": "ebe07bcee358840294412ecf540d05a7b505311251fd212119f907d94b1451d6",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/credential_store.py",
+      "sha256": "7a2bfa6ea08b40ce56a204aacdd3ce11cc27b925aa26009207057da9d7ee1905",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/credential_store.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/cvd_analyzer.py",
+      "sha256": "851e494ed285637b71aa63b0cdc48c019b56eb490593526395ef7687d1273f95",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/cvd_analyzer.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/daily_learn.py",
+      "sha256": "360afee3cefa321b1b9b738d1f3cba007ea7c88d76b50509be0096d738f597f7",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/daily_review.py",
+      "sha256": "3c0025c0834cd4b34ba0c23d3ab481120ec6cceab8337dd8e01b085440360d0c",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/daily_trade_review_reminder.py",
+      "sha256": "819889aadaba8392866ee9ff168194dc7b9a4d5fea58df52aa7379992544e646",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/dmi_decision.py",
+      "sha256": "5cbd5e8c626089432dce2c92521e414b8dfa3ff1a990face9c852598867cd16b",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/dryrun_progressive.py",
+      "sha256": "db2b32ae465f59635bf8b688e3fb4a8d143a6b71b7096f45dbd227ba013a75a5",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/dune_collector.py",
+      "sha256": "971321d74be513841687b9d56f6d7e2b44ec27c8d4b96106f6a6ceaa1b1070f4",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/dune_collector.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/engine_orchestrator.py",
+      "sha256": "9533f357e14d3f8efe84d748ae59bcd33d428b2655476062622331e092c65a33",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/engine_orchestrator.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/equity_tracker.py",
+      "sha256": "cd3c965017d3056c4e81394ba7335ba41ec30cda04ea83483998dd0d383af6b5",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/etf_flow_collector.py",
+      "sha256": "33185a9c52e04f8b4e7b48979c5555542c46bf5339541975742230cccb075997",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/event_calendar.py",
+      "sha256": "6cd430fcf098bf0c1c1cb3397f8e4d0265e47aefc36207819b47a4c748d04e8f",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/fallback_chain.py",
+      "sha256": "0d3f4bf5782a6f7c219cc98bcbf78d96b455df20482bccc75b31e637a116d146",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/five_model_matcher.py",
+      "sha256": "12ae122be1b22d2bb63448a7bb2d45bdfabcf37a0ebdb2e9cddebee40686df7c",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/five_model_matcher.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/freerouter.py",
+      "sha256": "2b223bb991418fba3903c7821037cd8a75e525d8d637da1f2b37765cfb72f36a",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/gold_monitor.py",
+      "sha256": "3e339291c94bd1ea5c331cfc8223b5fa78c01b8d5950d31a0a8fb821d997a6e1",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/hard_stop.py",
+      "sha256": "08904d1b150547554d2afb53bd231ee9cd47109247856ba711ee4d5d283e45f8",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/hard_stop.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/indicator_feed.py",
+      "sha256": "ffce49fe27261ea45bef7fbb92de7e9518ee6fefc2931e064f4ea7c2674e0195",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/liquidation_collector.py",
+      "sha256": "b0b02927e69a72a3abbe4154829c7a99de1e992b974c687b3e3318a6b38fd077",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/liquidation_collector.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/logger.py",
+      "sha256": "8c06c4d4d4a9c8fc11194a84c7492ba4f9d4519d98267141128a7e3d74e93134",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/macro_poly_refresh.py",
+      "sha256": "1cdd9562eb083381949c3dc01af9c4d5de3f41209bb5884cbcff1d1092f568b7",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/model_checklist.py",
+      "sha256": "1447445f39d22190015a50d4a7d613a3c3108e47d74ad89000ce3ecc26333a39",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/model_optimizer.py",
+      "sha256": "83a470b615985e2f0ad8fa162d54afd77ab11088f54a55a30f79a341584c1b09",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/monitor_display.py",
+      "sha256": "ec9f3664092d46d7f976535af5d8e6bcf33d6cefe93d9e6be6828316482c4f48",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/multi_symbol_templates.py",
+      "sha256": "1eb8d92884920b7bfbd01b2056b9380fb6c48d0e1d50a5ae9b02c33d869cae6d",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/orion_radar_card.py",
+      "sha256": "dc57829acd121bf471ab970f0c8e442322f303566a713ae02313eb4e1eb1238a",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/orion_radar_card.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/orion_screener_radar.py",
+      "sha256": "fc20c079d7dd955d1ac82a30003e8615fd4ef58f39c0580001b71920f679dba6",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/orion_screener_radar.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/p0_refresh_all.py",
+      "sha256": "05f4cfa9d618c4881e59b718788009c7102d4a7ae8c8a0ee459221525e0f131c",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/pine_static_scan.py",
+      "sha256": "8f8e2af3f8bd06980d9bd7de48fdbddc0e4d400b7aecfcb857076527ea866dc6",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/pipeline_2022.py",
+      "sha256": "11f914c10d0a0054e4c85e50c2fcaaed60a955d6b25d21535327035f90873380",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/pipeline_integration.py",
+      "sha256": "b45d84309e2415aa02b40ddc8b34111aafed619cc8e926ae7e14f6941ad68a68",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/position_sizer.py",
+      "sha256": "560ab2af231b5e7dad35750360455b87d62f292cce70c3b9733ece6154db927b",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/position_sizer.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/prediction_tracker.py",
+      "sha256": "e57842fd4c711e888f2d4487f26ec479aaa1ff712332c029dc2eb3c64d5a8c52",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/prediction_tracker.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/qlib_factors.py",
+      "sha256": "436a4fc3012f51902d2a31b7339cf905127f00db2545879b9245df8554a77ce5",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/qlib_factors.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/readiness_report.py",
+      "sha256": "e4224be23c9d48a8a2c60ac870e9bf7395fdb24952d207ae463004e1cc1c46d6",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/regime_backtest.py",
+      "sha256": "b618e3eb9c8c6b9debc3f38255d4a8e7bd7fa817750e8def900ef18dcc81d842",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/regime_backtest.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/regime_classifier.py",
+      "sha256": "72328ad6603f964d26cdc9e4ca89c6b4b69df72e17b182d4ff562328d51e215d",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/regression_system_audit.py",
+      "sha256": "d9e2a812eaffc8b8350135327b6752691e3feea1fb97d063b010f26b81de6283",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/run_daily_validation.py",
+      "sha256": "9d8f3d93df9cdf838a61f630eb86ae2a2c8482e166bbf6e299546115a4c42936",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/runtime_core_checks.py",
+      "sha256": "d845e306de1fe392e9b1e8736334a463a6b6786008e587cc60954ea6291afcf0",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/scoring_engine_v2.py",
+      "sha256": "4eb5ef7aff3d2f8dacca2ccb9981e85adb4817cff2246f8b4a2cba9dc3f44ddc",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/session_filter.py",
+      "sha256": "62d361e467dc4f0639d01ecfb0d4820f0835ec72e833506d0533a889726d09dc",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/session_filter.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/shadow_outcome_labeler.py",
+      "sha256": "2899a69d9ac2199d2a5458c572ae0af3551e7158b70ac41a09eb74196c394c72",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/shadow_outcome_labeler.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/signal_confluence.py",
+      "sha256": "f0b2ab5f4917b2c8196142a119b7bb5a42ad5dfb44c4ecf3dac01060c215a809",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/signal_confluence.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/signal_validators.py",
+      "sha256": "c28240563826adeea285379cf0e63ab1f5eba2da82cf0ac8aa74f09fc9a7c10b",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/signal_validators.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/smart_monitor.py",
+      "sha256": "07560a032e855877476c87939a01ff8de1664b2944f9efe792ac54f71422645a",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/stablecoin_collector.py",
+      "sha256": "312d0714e74641ac339680d9136b8d1172b9c939d7682c374d97d0ea3a7f37b2",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/stablecoin_collector.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/stock_quote.py",
+      "sha256": "3366d2f12e66afa48901d5d67a65cc61071670487982ea27abb07090ac6323e0",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/structure_detector.py",
+      "sha256": "eb769c5410c2145f766aaacf942d7fe5728da374a4ab2019eaad01de76057a1e",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/telegram_direct.py",
+      "sha256": "e920e6aa7875cf718b5a373192112aae7a0d7faddae1d7a72f7f839d385b6431",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/telegram_direct.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tg_table_card.py",
+      "sha256": "3db96353592a8f1cea740a1182093b99c3f75b65b85e45450a4c70e14e9acd49",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/trade_exec_bridge.py",
+      "sha256": "958db6e95312a8ab402d895feb71f8bd3f2959e47948b01bd55dea96003ab5d7",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/trade_exec_bridge.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/trade_journal.py",
+      "sha256": "17b10579f75e23cc33da10751148d5e97255db705bd632e2952426cb0fd7702c",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/triple_barrier.py",
+      "sha256": "3b26f51e03cb47748d63ad4fb98c4cad44a04a08311a3c9654ef16ea78a63426",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/triple_barrier.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/triple_confirm.py",
+      "sha256": "1e769c026245bf503f17d4740397f7dae3f3eea1f76c15378730d4352598d861",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/triple_confirm.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_bridge_wrapper.py",
+      "sha256": "cc523ed7c0c5581c852da20e061c2a9ba85b08fef3f2c8052faaecfe129ddff6",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_data_bridge.py",
+      "sha256": "b07b554b72dec1e86c088f9a30895feea93b543c3dd23862d632d0bdd6661158",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/tv_data_bridge.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_fetch_bridge.py",
+      "sha256": "1dd8f1000461ca12c8284d0c06da0c7f9de2e071982aa9149c95b5bfac71e238",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_keepalive.py",
+      "sha256": "44df2994aaec44d13fdc432e2cabdfd5975eae83b2ea8c963c0ad2701d2e0a7e",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/tv_keepalive.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_levels_collector.py",
+      "sha256": "b4bc4f66046dc18fa1da7f27dc461a4b1fbd12423390a226732c7ccbd2b4c73a",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_live_dump.py",
+      "sha256": "782762ce5c062682062378db6129a0cf62d23510955cef5e747dbe803bda3d38",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/tv_live_dump.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/tv_signal_monitor_wrapper.py",
+      "sha256": "90007aa5d850f7fc973a43da9b07a0b23b37f2351a6b02d875cbda2d89dc5fbe",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/walk_forward.py",
+      "sha256": "c584dc53804f5e665809ce1222fc82c0744f9ca94eb63c8e21bd9e2239a9ac71",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/watchdog.py",
+      "sha256": "3a8870da02bde45035dce15a5f2a17e54fedf10b730e4973f8aaf4e84e961a1a",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/watchdog.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/web_fallback_chain.py",
+      "sha256": "a6174384b6098ac19990f04599995660a19e102d36ee5859c097967b9ca2b356",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/x_sentiment_collector.py",
+      "sha256": "36e24aa727768d21f8b2f8c3e58accdcf01754384a4e5bfa5ea5f89599437768",
+      "active_root_same_name": true,
+      "active_root_path": "scripts/x_sentiment_collector.py",
+      "reason": "unknown",
+      "retired_date": "unknown"
+    },
+    {
+      "path": "scripts/_disabled/x_sentiment_context.py",
+      "sha256": "a64cf4e423239c40bbb3e7208df33b8edc659d5a0cf685192834d97c78692f09",
+      "active_root_same_name": false,
+      "active_root_path": null,
+      "reason": "unknown",
+      "retired_date": "unknown"
+    }
+  ]
+}

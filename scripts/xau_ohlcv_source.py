@@ -156,17 +156,41 @@ def _twelvedata_candles(key: str, interval: str, count: int = 3) -> list[dict]:
     data = _http_json(url)
     if not data or data.get("status") == "error":
         return []
+    from xau_ohlcv_evidence import evidence, timestamp
+    meta = data.get("meta") or {}
+    tf = next((tf for tf, value in TD_INTERVAL.items() if value == interval), None)
+    if meta.get("symbol") != TD_SYMBOL or meta.get("interval") != interval or not tf:
+        return []
+    # The request explicitly sets timezone=UTC; reject conflicting metadata.
+    if meta.get("exchange_timezone", "UTC") not in ("UTC", "Etc/UTC"):
+        return []
+    values = data.get("values") or []
+    def utc_time(v):
+        raw = str(v.get("datetime") or "")
+        return timestamp(raw + "+00:00") if raw else None
+    times = [utc_time(v) for v in values]
+    if any(t is None for t in times) or any(a <= b for a, b in zip(times, times[1:])):
+        return []
     out = []
-    for v in (data.get("values") or [])[1:]:         # [1:] 跳过正在形成的那根
+    for i, v in enumerate(values[1:], 1):
         bar = _bar(v.get("open"), v.get("high"), v.get("low"), v.get("close"))
-        if bar:
+        proof = evidence("twelvedata", meta["symbol"], tf, times[i].isoformat(),
+                         next_open=times[i-1].isoformat())
+        if bar and proof:
+            bar.update(evidence=proof, volume=v.get("volume"), volume_kind="unavailable" if v.get("volume") is None else "provider_volume")
             out.append(bar)
     return out
 
 
 def _clean(d: dict) -> dict:
-    """把内部字段去掉，只留对外口径。"""
-    return {k: d[k] for k in ("open", "high", "low", "close", "change_pct")}
+    """把内部字段去掉，只留对外口径。
+
+    2026-09-13：OHLCV 之外补带来源证据（evidence/volume/volume_kind）。
+    消费者的既有口径（open/high/low/close/change_pct）保持不变，只做增量——
+    否则「这层 K 线到底来自哪个源、哪根已闭合柱」在落盘后无法复核。
+    """
+    keep = ("open", "high", "low", "close", "change_pct", "evidence", "volume", "volume_kind")
+    return {k: d[k] for k in keep if k in d}
 
 
 def fetch_all(count: int = 3) -> dict:

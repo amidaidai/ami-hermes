@@ -10,12 +10,18 @@ v9.9 目标：手机端好看，但不牺牲棠溪双指标/多周期能力。
 """
 from __future__ import annotations
 
+import math
 import re
 import sys
 from datetime import datetime, timezone, timedelta
 
 # 棠溪看盘顺序：从上往下（D背景 → 4h → 1h → 15m → 5m主执行层）
 TF_ORDER = ("D", "4h", "1h", "15m", "5m")
+
+# 结构位名称里的周期前缀（"D VAL" / "15m VAH" …）必须保留到卡面标签，
+# 否则跨周期价值区会被压成同一层，出现 VAL 在 VAH 上方的伪结构。
+_LEVEL_TF_RE = re.compile(r"^\s*(D|W|M|4h|1h|15m|5m)\b", re.IGNORECASE)
+_LEVEL_TF_CANON = {"d": "D", "w": "W", "m": "M", "4h": "4h", "1h": "1h", "15m": "15m", "5m": "5m"}
 
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -39,6 +45,21 @@ def _num(v, digits=0):
     if digits:
         return f"{f:,.{digits}f}"
     return f"{f:.2f}"
+
+
+def _finite_rr(value):
+    """Return a finite float R:R, else None. Never raises on malformed input.
+
+    「缺失/非法」与「有值但不足2」是两种事实：前者不得写成「R:R不足」，
+    也不能回落到旧计划里的 rr_a 兜底（2026-09-13 加固）。
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _price(v):
@@ -189,6 +210,16 @@ def _vwap_pos(tf_data: dict, price: float | None) -> str:
 def _level_kind(name: str, side: str, level: float, price: float | None) -> tuple[str, str, str]:
     raw = f"{side} {name}".lower()
     cn = f"{side} {name}"
+    # 周期标注必须保留：历史缺陷（2026-09-12 实测）把 "D VAL"(77,388.5，日级价值区)
+    # 与 "15m VAH"(77,334，执行层) 都压成无周期的 VAL/VAH，卡面因此出现
+    # 「VAL 上 / VAH 下」的价值区倒挂伪结构。→ 现在标签与用法都带周期前缀。
+    tf = ""
+    try:
+        m = _LEVEL_TF_RE.match(str(name or ""))
+        if m:
+            tf = _LEVEL_TF_CANON.get(m.group(1).lower(), m.group(1))
+    except Exception:
+        tf = ""
     if "fvg" in raw:
         label = "FVG"
         use = "FVG缺口"
@@ -216,6 +247,9 @@ def _level_kind(name: str, side: str, level: float, price: float | None) -> tupl
     else:
         label = "位"
         use = "关键位"
+    if tf:
+        label = f"{tf}·{label}"
+        use = f"{tf}·{use}"
     if price is None:
         icon = "⚖"
     elif level > float(price):
@@ -278,7 +312,30 @@ def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> li
             dist_txt = "—"
         clean.append({"level": lvl, "side": side, "name": name, "kind": kind, "icon": icon, "dist": dist_txt, "use": use})
     clean.sort(key=lambda x: abs(x["level"] - float(price or 0)))
+    clean = _demote_inconsistent_value_area(clean)
     return clean[:7]
+
+
+def _demote_inconsistent_value_area(rows: list[dict]) -> list[dict]:
+    """同周期价值区一致性断言：同 TF 内 VAL 价位高于 VAH = 数据自相矛盾。
+
+    历史缺陷（2026-09-12）：跨周期 VAL/VAH 被压成同层后卡面出现「VAL 在 VAH 上方」。
+    现在周期前缀已保留，此处再做兜底：同 TF 的 VAL>VAH 时把该 VAL 降为普通关键位，
+    不允许它继续以「VAL下沿支撑」的名义出现在卡面。
+    """
+    by_tf: dict[str, dict[str, dict]] = {}
+    for item in rows:
+        kind = str(item.get("kind") or "")
+        tf = kind.split("·")[0] if "·" in kind else ""
+        base = kind.split("·")[-1]
+        if base in ("VAL", "VAH"):
+            by_tf.setdefault(tf, {})[base] = item
+    for tf, pair in by_tf.items():
+        val, vah = pair.get("VAL"), pair.get("VAH")
+        if val and vah and float(val["level"]) > float(vah["level"]):
+            val["kind"] = f"{tf}·位" if tf else "位"
+            val["use"] = "关键位（同周期价值区数据不一致·不按VAL用）"
+    return rows
 
 
 def _structure_table(levels: list[dict], price: float | None) -> str:
@@ -398,12 +455,8 @@ def render_v96_card(
     # FinalVerdict is mandatory for executable rendering. Legacy ``status``
     # and st_a values are display context only and cannot authorize a card.
     final_state = str((final_verdict or {}).get("state") or ("WAIT" if final_verdict is None else status) or "").upper()
-    final_executable = (
-        final_state == "GO-A"
-        and final_verdict is not None
-        and (final_verdict or {}).get("executable") is True
-        and all((final_verdict or {}).get(k) not in (None, "", "—", "--") for k in ("entry", "stop", "target"))
-    )
+    from render_tv_card import final_is_executable
+    final_executable = final_is_executable(final_verdict or {})
     final_side = (final_verdict or {}).get("side")
     if final_side in {"long", "short", "neutral"}:
         # Directional text and the primary/backup side must follow the same
@@ -422,15 +475,16 @@ def render_v96_card(
     execution_entry = None
     execution_stop = None
     execution_target = None
-    execution_rr = rr_a
+    canonical = final_verdict or {}
+    execution_rr = canonical["rr"] if "rr" in canonical else rr_a
     if final_state == "GO-A" and final_executable:
         execution_entry = (final_verdict or {}).get("entry")
         execution_stop = (final_verdict or {}).get("stop")
         execution_target = (final_verdict or {}).get("target")
-        try:
-            execution_rr = float((final_verdict or {}).get("rr"))
-        except (TypeError, ValueError):
-            execution_rr = rr_a
+        # Missing legacy rr is derived only from the canonical tuple, never st_a.
+        canonical = final_verdict or {}
+        actual_rr = abs(float(canonical["target"]) - float(canonical["entry"])) / abs(float(canonical["entry"]) - float(canonical["stop"]))
+        execution_rr = float(canonical["rr"]) if "rr" in canonical else actual_rr
         if any(value in (None, "", "—", "--") for value in (execution_entry, execution_stop, execution_target)):
             final_executable = False
             final_state = "WAIT"
@@ -443,8 +497,20 @@ def render_v96_card(
         rr_a = execution_rr
     if not final_executable:
         final_state = "NO-GO" if final_state == "NO-GO" else "WAIT"
-    if final_state == "NO-GO" or str(status).startswith("X") or execution_rr < 2:
-        action_summary = "⚠禁做 — 主线无优势或R:R不足"
+    # 2026-09-13：R:R「缺失/非法」与「有值但不足2」必须分开陈述，且都 fail-closed。
+    # 旧实现直接比较 execution_rr < 2，遇到 None/字符串会抛异常，或把缺失写成「R:R不足」。
+    _rr_num = _finite_rr(execution_rr)
+    _rr_b_num = _finite_rr(rr_b)
+    if final_state == "NO-GO" or str(status).startswith("X") or (_rr_num is not None and _rr_num < 2):
+        # 2026-09-12：结论文案必须与真实约束一致。旧实现无论 NO-GO 的真实原因
+        # 是副指标冲突还是高级门控否决，一律写「R:R不足」，与 R:R 闸门自身
+        # 的输出自相矛盾（实测同卡出现「🟢主线R:R 1:3.3」+「R:R不足」）。
+        if _rr_num is not None and _rr_num < 2:
+            action_summary = "⚠禁做 — 主线R:R不足(<1:2)"
+        elif final_state == "NO-GO":
+            action_summary = "⚠禁做 — 主副指标/门控未通过·等确认后重算"
+        else:
+            action_summary = "⚠禁做 — 结构禁做"
         recommend_name = "⚠️主推 禁做"
         recommend_trigger = "等确认后重算；现价无优势"
         recommend_exec = "不下单；等R:R≥1:2且主副指标重新共振"
@@ -458,11 +524,11 @@ def render_v96_card(
         recommend_name = f"⭐主推 {dir_a}"
         recommend_trigger = f"{_price(st_a.get('entry'))}确认"
         recommend_exec = f"{dir_a} {_price(st_a.get('entry'))} 损{_price(st_a.get('stop'))} 标{_price(st_a.get('target'))}"
-        recommend_rr = f"1:{execution_rr:.1f}"
+        recommend_rr = f"1:{_rr_num:.1f}"
         backup_name = f"🔁备选 {dir_b}"
         backup_trigger = "主推失效后反向确认"
         backup_exec = f"{dir_b}失效路径；不与主推平权"
-        backup_rr = f"1:{rr_b:.1f}" if rr_b >= 2 else "观察"
+        backup_rr = f"1:{_rr_b_num:.1f}" if _rr_b_num is not None and _rr_b_num >= 2 else "观察"
     else:
         # WAIT：B/C 观察候选只从 FinalVerdict 的 watch 元组来（与推送卡同一实现），
         # 未授权就必须写明「未授权」，且绝不回落到原始 entry/stop/target。
@@ -565,7 +631,7 @@ def render_v96_card(
     lines.append("|:---|:---|---|---:|")
     lines.append(f"| {recommend_name} | {_cell(recommend_trigger)} | {_cell(recommend_exec)} | {recommend_rr} |")
     lines.append(f"| {backup_name} | {_cell(backup_trigger)} | {_cell(backup_exec)} | {backup_rr} |")
-    lines.append("| ⚠️禁止 | 追单/数据过期/主副冲突 | 夹击+去杠杆+R:R不足 | — |")
+    lines.append("| ⚠️禁止（通用规则） | 不追单；数据或主副证据失效时不执行 | 执行须R:R≥2 | — |")
     lines.append("")
 
     # 风控额度必须标出来源：没接真实账户时不能把兜底默认值写成看似的真实额度。
@@ -575,8 +641,8 @@ def render_v96_card(
         _risk_txt = "风控 —（未接账户余额·非真实额度）"
     lines.append(f"【裁决】{action_summary} · {_risk_txt} · {leverage_text or ''}")
     # 未授权裁决不得展示计划失效价：失效价=止损价，与 Entry/Stop/Target 同一道闸。
-    inv_display = _price(inv_line) if (inv_line and final_executable) else '`—`'
-    lines.append(f"失效 {inv_display} · 数据{data_grade} · 主副指标已纳入")
+    inv_display = _price(execution_stop) if final_executable else '`—`'
+    lines.append(f"失效 {inv_display} · 价格共识{data_grade}（非全源健康度） · 来源状态见多源验证")
     return "\n".join(lines) + "\n"
 
 

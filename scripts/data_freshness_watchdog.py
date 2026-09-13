@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-数据新鲜度看门狗 v1.1
-检查关键JSON数据文件的最后修改时间，过期超过阈值推告警。
-只检查实际存在的文件，静默=健康。
+数据新鲜度看门狗 v1.2（默认仅本地）
+检查现役关键 JSON 的语义时间戳；缺失、陈旧或不可用均记为异常。
+默认/check/report 均静默落盘；静默不代表健康，请读本地 JSON 报告。
+仅显式 --send 可请求去重外发，HANGQING_NO_SEND=1 优先阻止发送。
 """
 import json, sys, os, time
 import importlib
@@ -16,8 +17,8 @@ TZ = timezone(timedelta(hours=8))
 PROJECT_DATA = Path("D:/Hermes agent/data")
 HERMES_DATA = Path(os.path.expanduser("~/AppData/Local/hermes/data"))
 
-# 实际存在的文件 + 阈值（小时）
-# 注意：棠溪系统有两套落盘目录。paths 会取“存在文件中的最新 mtime”，避免双落盘期间误报。
+# 现役必需文件 + 阈值（小时）；所有候选路径缺失必须报异常。
+# 两套落盘目录优先选择最新显式语义时间戳，不使用文件 mtime。
 #
 # 20260910 重写：原清单盯着 10 个**采集器已停用**的产出（x_sentiment / dune / qlib /
 # stablecoin / oi_snapshot / deribit / orion / liquidation_pressure / polymarket …），
@@ -43,8 +44,14 @@ WATCH_FILES = {
     # ── 监控链自身生命体征（20260910 新增，这次事故的直接教训）─────────
     ".keylevel_guard_heartbeat.json": {"threshold": 0.3, "paths": [PROJECT_DATA / ".keylevel_guard_heartbeat.json"]},
     ".keylevel_guard_health.json": {"threshold": 0.3, "paths": [PROJECT_DATA / ".keylevel_guard_health.json"]},
-    # 结构复核结果：盖不上章说明关键位正在失效，必须在闸落下前被看见
-    "keylevels_structure_review.json": {"threshold": 6, "paths": [PROJECT_DATA / "keylevels_structure_review.json", HERMES_DATA / "keylevels_structure_review.json"]},
+    # 结构复核：真正的时间戳在 keylevels_config.json 的 auto_approval_policy 里
+    # （keylevels_structure_review.json 只是复核结果 {ok,valid,checked,stamped}，
+    #  本身按设计不含时间戳 —— 盯它必然天天误报「无显式时间戳」→ 报警疲劳）。
+    "structure_reviewed_at": {
+        "threshold": 6,
+        "payload_path": ("auto_approval_policy", "structure_reviewed_at"),
+        "paths": [PROJECT_DATA / "keylevels_config.json", HERMES_DATA / "keylevels_config.json"],
+    },
 }
 
 # 有意不监控的来源（生产者已停用）。列在这里是为了让「为什么没报」有据可查，
@@ -61,7 +68,17 @@ PAUSED_SOURCES = {
 }
 
 
-def _best_existing(paths):
+def _nested(payload, payload_path):
+    """Follow a declared key path; anything missing returns None."""
+    node = payload
+    for key in payload_path or ():
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _best_existing(paths, payload_path=None):
     existing = [p for p in paths if p.exists()]
     if not existing:
         return None
@@ -69,7 +86,11 @@ def _best_existing(paths):
     for path in existing:
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
-            timestamp = payload_timestamp(payload) if isinstance(payload, dict) else None
+            if payload_path:
+                from source_health import parse_timestamp
+                timestamp = parse_timestamp(_nested(payload, payload_path))
+            else:
+                timestamp = payload_timestamp(payload) if isinstance(payload, dict) else None
             if timestamp is not None:
                 stamped.append((timestamp.timestamp(), path))
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -81,8 +102,31 @@ def _best_existing(paths):
     return existing[0]
 
 
-def _payload_health(path: Path, *, threshold_hours: float) -> dict:
+def _nested_health(path: Path, payload_path, *, threshold_hours: float) -> dict:
+    """Freshness of a nested timestamp key (e.g. auto_approval_policy.*)."""
+    try:
+        from source_health import parse_timestamp
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {"fresh": False, "status": "unavailable", "timestamp": None,
+                "age_hours": None, "reason": f"JSON不可读: {type(exc).__name__}"}
+    timestamp = parse_timestamp(_nested(payload, payload_path)) if isinstance(payload, dict) else None
+    if timestamp is None:
+        return {"fresh": False, "status": "unavailable", "timestamp": None,
+                "age_hours": None, "reason": "嵌套时间戳缺失/无效"}
+    age_hours = (datetime.now(TZ) - timestamp.astimezone(TZ)).total_seconds() / 3600
+    if age_hours <= threshold_hours:
+        return {"fresh": True, "status": "live", "timestamp": timestamp.isoformat(),
+                "age_hours": round(age_hours, 3), "reason": "嵌套时间戳新鲜"}
+    return {"fresh": False, "status": "stale_cache", "timestamp": timestamp.isoformat(),
+            "age_hours": round(age_hours, 3),
+            "reason": f"嵌套时间戳过期+{round((age_hours - threshold_hours) / threshold_hours * 100)}%"}
+
+
+def _payload_health(path: Path, *, threshold_hours: float, payload_path=None) -> dict:
     """Return semantic freshness; file mtime is never market evidence."""
+    if payload_path:
+        return _nested_health(path, payload_path, threshold_hours=threshold_hours)
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from source_health import inspect_json_file
@@ -120,63 +164,81 @@ def _fmt_hours(h: float | None) -> str:
     return f"{h:.1f}h" if h < 10 else f"{h:.0f}h"
 
 
-def main():
-    now = datetime.now(TZ)
-    ts = now.strftime("%Y年%m月%d日%H：%M")
-    
-    stale = []
-    fresh = []
-    
-    for fname, cfg in WATCH_FILES.items():
-        threshold_hours = float(cfg["threshold"])
-        fp = _best_existing(cfg["paths"])
-        if fp is None:
-            continue  # 跳过不存在的文件，不告警
-        
-        payload_health = _payload_health(fp, threshold_hours=threshold_hours)
-        raw_age_hours = payload_health.get("age_hours")
-        age_hours = float(raw_age_hours) if isinstance(raw_age_hours, (int, float)) else None
-        quality_issue = _quality_issue(fname, fp)
+def check():
+    """Read active artifacts only, without importing any delivery code."""
+    items = []
+    for name, cfg in WATCH_FILES.items():
+        path = _best_existing(cfg["paths"], cfg.get("payload_path"))
+        health = (_payload_health(path, threshold_hours=float(cfg["threshold"]),
+                                  payload_path=cfg.get("payload_path"))
+                  if path is not None else
+                  {"fresh": False, "status": "missing", "reason": "现役关键文件不存在",
+                   "age_hours": None, "timestamp": None})
+        quality = _quality_issue(name, path) if path is not None else ""
+        if quality:
+            health = dict(health, fresh=False, status="unavailable", reason=quality)
+        items.append(dict(health, name=name, threshold_hours=float(cfg["threshold"]),
+                          paths=[str(p) for p in cfg["paths"]],
+                          selected_path=str(path) if path is not None else None))
+    issues = sum(not item.get("fresh", False) for item in items)
+    return {"generated_at": datetime.now(TZ).isoformat(), "healthy": issues == 0,
+            "active_count": len(items), "issue_count": issues, "items": items,
+            "paused_sources": dict(PAUSED_SOURCES)}
 
-        if not payload_health.get("fresh") or quality_issue or age_hours is None:
-            stale.append((fname, age_hours, threshold_hours, str(fp), quality_issue or payload_health.get("reason", "")))
-        else:
-            fresh.append((fname, round(age_hours, 2), str(fp)))
-    
-    if not stale:
-        # 干净无异状，完全静默
-        return 0
 
-    lines = [f"## 数据过期/质量告警 — {ts}", ""]
-    lines.append("| 文件 | 数据年龄 | 阈值 | 问题 |")
-    lines.append("|---|---:|---:|:---|")
-    over_values = []
-    for fname, age, threshold, fp, quality_issue in stale:
-        over_pct = round((age - threshold) / threshold * 100) if isinstance(age, (int, float)) and threshold > 0 else None
-        if isinstance(age, (int, float)) and age > threshold:
-            over_values.append(over_pct)
-        issue = quality_issue or (f"过期+{over_pct}%" if over_pct is not None else "无显式时间戳")
-        lines.append(f"| {fname} | {_fmt_hours(age)} | {_fmt_hours(threshold)} | 💀 {issue} |")
-    lines.append("")
-    lines.append(f"正常文件: {len(fresh)} 个 · 异常文件: {len(stale)} 个")
-    lines.append("")
-    worst = f"最严重过期+{max(over_values)}%" if over_values else "内容质量失败"
-    lines.append(f"**总体结论**: **{len(stale)}个数据源异常**（{worst}），**需检查对应采集脚本/接口**。")
+DEFAULT_REPORT = PROJECT_DATA / "data_freshness_watchdog_report.json"
 
-    output = "\n".join(lines)
-    try:
-        dedup_wrapper = importlib.import_module("alert_dedup").dedup_wrapper
-        dedup_wrapper("data_freshness", output, force_seconds=14400)
-    except (ImportError, AttributeError):
-        print(output)
-    # v9.8: 同时推 TG 真表格（原本漏发）
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from telegram_reliable import push_tg_rich
-        push_tg_rich("", output)
-    except Exception as _te:
-        print(f"⚠ 数据新鲜度RichMarkdown推送失败: {_te}", file=sys.stderr)
-    # no_agent 语义：stdout 非空即推送，非零退出会被 cron 标记为脚本错误
+
+def main(argv=None):
+    """Quiet local report by default, including under no_agent cron.
+
+    check/report both persist JSON. Only report --send authorizes delivery;
+    HANGQING_NO_SEND=1 overrides it. Findings are data, not process errors.
+    """
+    import argparse
+    import tempfile
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", nargs="?", choices=("check", "report"), default="report")
+    parser.add_argument("--output", type=Path, default=DEFAULT_REPORT)
+    parser.add_argument("--send", action="store_true", help="Explicitly authorize one deduplicated alert")
+    args = parser.parse_args(argv)
+    if args.command == "check" and args.send:
+        parser.error("check is local-only; use report --send for explicit delivery")
+    result = check()
+    result["delivery"] = "local_only"
+    authorized = args.send and os.environ.get("HANGQING_NO_SEND") != "1"
+    if args.send and not authorized:
+        result["delivery"] = "blocked_by_no_send"
+
+    def save():
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        name = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=args.output.parent,
+                                             prefix=args.output.name + ".", suffix=".tmp", delete=False) as handle:
+                name = handle.name
+                json.dump(result, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            os.replace(name, args.output)
+        finally:
+            if name and os.path.exists(name):
+                os.unlink(name)
+
+    save()  # Durable evidence before any optional external action.
+    if authorized and result["issue_count"]:
+        try:
+            sender = importlib.import_module("alert_dedup").dedup_wrapper
+            output = "数据新鲜度告警\n" + "\n".join(
+                f"{item['name']}: {item['status']} — {item.get('reason', '')}"
+                for item in result["items"] if not item.get("fresh"))
+            sender("data_freshness", output, force_seconds=14400)
+            result["delivery"] = "dedup_requested"  # Not proof of remote delivery.
+        except Exception as exc:
+            result["delivery"] = "failed"
+            result["delivery_error"] = type(exc).__name__
+            save()
+            return 1
+        save()
     return 0
 
 

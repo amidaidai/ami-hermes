@@ -277,7 +277,20 @@ def _final_is_executable(final: dict) -> bool:
     grade = str(final.get("grade") or "")
     side_matches = (side == "long" and grade.startswith("A多")) or (side == "short" and grade.startswith("A空"))
     geometry_ok = (side == "long" and stop < entry < target) or (side == "short" and stop > entry > target)
-    return side_matches and geometry_ok
+    if not side_matches or not geometry_ok:
+        return False
+    if not all(math.isfinite(v) and v > 0 for v in (entry, stop, target)):
+        return False
+    actual_rr = abs(target - entry) / abs(entry - stop)
+    try:
+        declared_rr = float(final["rr"]) if "rr" in final else actual_rr
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(actual_rr) and actual_rr >= 2 and math.isfinite(declared_rr) and declared_rr >= 2
+
+
+# Both card paths share the same defensive execution boundary.
+final_is_executable = _final_is_executable
 
 
 def _matrix_line(main: dict) -> str:

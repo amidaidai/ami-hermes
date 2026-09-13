@@ -417,21 +417,38 @@ def macro_overview() -> dict:
                     }
             except Exception:
                 pass
-        # 宏观情绪分类
-        vix_val = result.get("vix", {}).get("price", 20)
-        spx_chg = result.get("spx", {}).get("change_pct", 0)
-        if vix_val > 30:
+        # 宏观情绪分类：只允许用**真实取到**的字段判定。
+        # 历史缺陷（2026-09-13 实测）：VIX 取数失败时用默认 20、SPX 用默认 0，
+        # 于是失败场景固定输出「中性 | VIX 20 | SPX +0.0%」——看起来像采到了。
+        def _num(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if number == number and abs(number) != float("inf") else None
+
+        vix_val = _num((result.get("vix") or {}).get("price"))
+        spx_chg = _num((result.get("spx") or {}).get("change_pct"))
+        if vix_val is None and spx_chg is None:
+            sentiment = None
+        elif vix_val is not None and vix_val > 30:
             sentiment = "恐慌 (Risk-off)"
-        elif vix_val > 22:
+        elif vix_val is not None and vix_val > 22:
             sentiment = "谨慎 (Risk-off 偏)"
-        elif spx_chg < -1:
+        elif spx_chg is not None and spx_chg < -1:
             sentiment = "避险 (Risk-off)"
-        elif spx_chg > 1 and vix_val < 18:
+        elif spx_chg is not None and vix_val is not None and spx_chg > 1 and vix_val < 18:
             sentiment = "乐观 (Risk-on)"
         else:
             sentiment = "中性"
-        result["sentiment"] = sentiment
-        result["vix_level"] = vix_val
+        if sentiment is not None:
+            result["sentiment"] = sentiment
+        if vix_val is not None:
+            result["vix_level"] = vix_val
+        if result:
+            # 只在这一轮真的取到东西时才盖时间戳：否则 _cached 只能报 unavailable，
+            # 不允许拿旧快照冒充实时。
+            result["timestamp"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
         return result
     return _cached("macro", fetch, ttl=300)
 

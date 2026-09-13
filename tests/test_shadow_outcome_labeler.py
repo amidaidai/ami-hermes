@@ -102,3 +102,21 @@ def test_label_ready_records_skips_non_crypto_without_false_failure():
     rows, stats = sol.label_ready_records([record], lambda *_: (_ for _ in ()).throw(AssertionError()), now_ms=99_000_000)
     assert rows == []
     assert stats["unsupported"] == 1
+
+
+def test_probe_mode_is_remembered_so_cron_cannot_time_out(monkeypatch):
+    """直连在本机固定 12s 超时；探明可用模式后必须优先复用，否则整轮标注跑不完。"""
+    calls: list[bool] = []
+    def fetch(url, direct):
+        calls.append(direct)
+        if direct:
+            raise OSError("direct route timed out")
+        sol._PROXY_MODE[0] = direct  # 与真实 _fetch_json 同契约：成功即记下可用模式
+        return [[1783760400000, "1", "1", "1", "1", "1", 1783761299999, "0", 1, "0", "0", "0"]]
+    monkeypatch.setattr(sol, "_fetch_json", fetch)
+    monkeypatch.setattr(sol, "_PROXY_MODE", [None])
+    assert sol.fetch_binance_closed_bars("BTCUSDT", "15m", 1, 16)
+    assert sol._PROXY_MODE[0] is False
+    calls.clear()
+    assert sol.fetch_binance_closed_bars("BTCUSDT", "15m", 1, 16)
+    assert calls == [False], calls  # 第二轮不再白试直连

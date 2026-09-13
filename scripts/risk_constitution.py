@@ -67,11 +67,12 @@ CONSTITUTION = {
 @dataclass
 class RiskState:
     """风险状态跟踪"""
-    date: str = field(default_factory=lambda: datetime.now(TZ).strftime("%Y-%m-%d"))
+    # Unknown is not a fresh, funded account. Only a producer supplies these.
+    date: str = ""
     daily_realized_pnl: float = 0.0
-    daily_starting_balance: float = 100.0
+    daily_starting_balance: float = 0.0
     weekly_realized_pnl: float = 0.0
-    weekly_starting_balance: float = 100.0
+    weekly_starting_balance: float = 0.0
     trades_count: int = 0
     loss_streak: int = 0
     max_loss_streak: int = 0
@@ -81,18 +82,48 @@ class RiskState:
     # 社区建议增强: 交易频率 + 冷却
     trades_today: int = 0
     last_loss_time: Optional[str] = None  # ISO格式时间戳
+    state_error: str = ""  # Read/validation failure; never cleared by a read.
+
+
+def risk_state_status(state: RiskState) -> dict:
+    """Validate the source business date at consumption time (UTC+8).
+
+    Reading does not roll a day forward or reset PnL. Producers must reconcile
+    the account before publishing the next daily snapshot.
+    """
+    source_date = state.date
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    status, reason = "fresh", "风险状态业务日期有效"
+    if state.state_error:
+        status, reason = "invalid", f"风险状态无效: {state.state_error}·禁做"
+    elif not source_date:
+        status, reason = "missing", "风险状态缺失/无来源日期·禁做"
+    else:
+        try:
+            parsed = datetime.strptime(source_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+            if parsed != source_date or source_date > today:
+                raise ValueError("invalid/future date")
+        except (TypeError, ValueError):
+            status, reason = "invalid", f"风险状态日期无效/未来: {source_date!r}·禁做"
+        else:
+            if source_date != today:
+                status, reason = "stale", f"风险状态陈旧: {source_date}，需要{today}已核对状态·禁做"
+    return {"status": status, "usable": status == "fresh", "source_date": source_date,
+            "reason": reason}
 
 
 def load_risk_state() -> RiskState:
     """从 risk_state.json 加载"""
     path = DATA_DIR / "risk_state.json"
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return RiskState(**{k: v for k, v in data.items() if k in RiskState.__dataclass_fields__})
-        except Exception:
-            pass
-    return RiskState()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return RiskState(state_error="snapshot must be an object")
+        return RiskState(**{k: v for k, v in data.items() if k in RiskState.__dataclass_fields__})
+    except FileNotFoundError:
+        return RiskState()
+    except (OSError, ValueError, TypeError) as exc:
+        return RiskState(state_error=type(exc).__name__)
 
 
 def save_risk_state(state: RiskState):
@@ -163,7 +194,12 @@ def check_constitution(symbol: str,
     """
     if state is None:
         state = load_risk_state()
-    
+    # 2026-09-13：风险快照陈旧/缺失/损坏必须「可见」，但不把整条分析链变成永久禁做。
+    # 本仓既有契约：未接真实账户时风控额度一律标注「非真实额度」（risk_backed=False）。
+    # 因此这里只上报状态，不新增硬拦截 —— 硬拦截权属于 FinalVerdict 的既有闸门；
+    # 历史遗留的模拟快照（sim from monitor…）不得伪装成已核对账户。
+    status = risk_state_status(state)
+
     reasons = []
     violations = []
     
@@ -270,6 +306,7 @@ def check_constitution(symbol: str,
     reasons = [r for r in reasons if not r.startswith("⚠")]  # 清理警告
     
     return {
+        "risk_state_status": status,
         "allowed": allowed,
         "reasons": reasons,
         "violations": violations,

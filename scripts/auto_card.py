@@ -1797,6 +1797,24 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
         source_matrix = build_source_matrix(
             symbol, engine_data, dual_indicator, pipeline_steps=engine_data.get("_pipeline_steps") or ()
         )
+        # 2026-09-13：风险快照陈旧/缺失/损坏必须在来源矩阵可见，不让它冒充实时。
+        # 只上报为 risk_context（告警级），不新增 FinalVerdict 硬拦截。
+        try:
+            from risk_constitution import load_risk_state, risk_state_status
+            _risk_status = risk_state_status(load_risk_state())
+            engine_data["_risk_state_status"] = _risk_status
+            _state_map = {"fresh": "live", "stale": "stale_cache",
+                          "missing": "unavailable", "invalid": "unavailable"}
+            source_matrix.append({
+                "id": "risk_state", "label": "风险快照", "requested": True,
+                "role": "risk_context",
+                "status": _state_map.get(str(_risk_status.get("status")), "unavailable"),
+                "evidence": f"{_risk_status.get('source_date') or '无来源日期'}·{_risk_status.get('status')}",
+                "impact": str(_risk_status.get("reason") or "")[:32],
+                "entered_final_verdict": False,
+            })
+        except Exception:
+            pass
         engine_data["_cross_validation_matrix"] = source_matrix
         engine_data["_cross_validation"] = evaluate_cross_validation(source_matrix)
     except Exception as _cve:
@@ -4129,7 +4147,8 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 if not engine_tv_ready:
                     print(f"  ⚠ TV前置详情: {(tv_refresh.stderr or tv_refresh.stdout)[:160]}")
             else:
-                # 2026-08-31 P0: tv_live_dump.py 已迁入 _disabled_20260829 归档区，
+                # 2026-08-31 P0: tv_live_dump.py 已迁入归档区
+                # （2026-09-12 起归档目录统一为 scripts/_disabled/），
                 # 前置刷新改由实时缓存（tv_live_<SYM>.json / tv_dmi_cache.json）兜底，不再强制子进程。
                 engine_tv_ready = False
                 print(f"  ⚠ tv_live_dump.py 缺失（已归档8/29）→ 跳过前置刷新，依赖TV实时缓存/现场MCP")
@@ -4263,7 +4282,16 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 macro = macro_overview() if "macro" in pipeline_steps else {}
                 _register_source_record(engine_data, "macro_overview", macro, symbol=symbol, status="not_run" if "macro" not in pipeline_steps else None)
                 engine_data["macro"] = macro
-                print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
+                # 采不到就直说：不再用默认值打印出一个看起来正常的「中性 | VIX 20」。
+                _m_status = str(macro.get("_source_status") or ("not_run" if not macro else "unavailable"))
+                if macro.get("vix_level") is None and not macro.get("spx"):
+                    print(f"  📊 宏观[{_m_status}]: 本轮未采到有效字段")
+                else:
+                    _vix = macro.get("vix_level")
+                    _spx = (macro.get("spx") or {}).get("change_pct")
+                    print(f"  📊 宏观[{_m_status}]: {macro.get('sentiment') or '未判定'} | "
+                          f"VIX {_vix if _vix is not None else '—'} | "
+                          f"SPX {f'{float(_spx):+.1f}%' if _spx is not None else '—'}")
             except Exception:
                 pass
             
@@ -4346,7 +4374,17 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 macro = macro_overview() if "macro" in pipeline_steps else {}
                 _register_source_record(engine_data, "macro_overview", macro, symbol=symbol, status="not_run" if "macro" not in pipeline_steps else None)
                 engine_data["macro"] = macro
-                print(f"  📊 宏观: {macro.get('sentiment','?')} | VIX {macro.get('vix_level','?')} | US10Y {macro.get('us10y',{}).get('price','?')}% | SPX {macro.get('spx',{}).get('change_pct',0):+.1f}%")
+                _m_status = str(macro.get("_source_status") or ("not_run" if not macro else "unavailable"))
+                if macro.get("vix_level") is None and not macro.get("spx") and not macro.get("us10y"):
+                    print(f"  📊 宏观[{_m_status}]: 本轮未采到有效字段")
+                else:
+                    _vix = macro.get("vix_level")
+                    _u10 = (macro.get("us10y") or {}).get("price")
+                    _spx = (macro.get("spx") or {}).get("change_pct")
+                    print(f"  📊 宏观[{_m_status}]: {macro.get('sentiment') or '未判定'} | "
+                          f"VIX {_vix if _vix is not None else '—'} | "
+                          f"US10Y {_u10 if _u10 is not None else '—'}% | "
+                          f"SPX {f'{float(_spx):+.1f}%' if _spx is not None else '—'}")
             except Exception:
                 pass
             try:

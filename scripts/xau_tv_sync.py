@@ -553,17 +553,21 @@ async def _run(sync_id: str):
 
 async def _collect_xau_tfs_via_chart(session, result: dict, set_timeframe,
                                       get_chart_state, get_ohlcv, parse_result) -> None:
-    """回退路径：逐周期切图取 OHLCV（API 不可用或校核不过时的安全网）。
-
-    这是 20260911 之前唯一的老路径，一字未改地保留 ——
-    API 方案出任何问题时，行为与今天一致。
-    """
+    """Fallback with before/after actual identity and candle-time evidence."""
+    result["ohlcv_source"] = "tradingview_mcp"
     for tf, resolution in TIMEFRAMES:
         await set_timeframe(session, resolution)
         await asyncio.sleep(3)
-        state = await get_chart_state(session)
-        ohlcv = await get_ohlcv(session)
-        tf_data = _parse_ohlcv(parse_result(ohlcv), parse_result(state))
+        state = parse_result(await get_chart_state(session))
+        ohlcv = parse_result(await get_ohlcv(session))
+        after = parse_result(await get_chart_state(session))
+        tf_data = _parse_ohlcv(ohlcv, state, expected_tf=tf)
+        if _parse_ohlcv(ohlcv, after, expected_tf=tf) is None:
+            tf_data = None
+        result.setdefault("ohlcv_evidence", {})[tf] = {
+            "status": "verified" if tf_data else "rejected",
+            "reason": "identity/time coverage checked before and after read" if tf_data else "identity, coverage or candle timestamp invalid",
+        }
         if tf_data:
             result["timeframes"][tf] = tf_data
             print(f"  ✅ {tf}: H{tf_data['high']:.1f} L{tf_data['low']:.1f} C{tf_data['close']:.1f}")
@@ -613,9 +617,17 @@ def _push_committed_xau_report(result: dict[str, Any]) -> None:
 
 
 
-def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
-    """优先解析TV MCP结构化OHLCV，并只消费倒数第二根已闭合K线。"""
+def _parse_ohlcv(ohlcv_text: str, state_text: str, *, expected_tf: str | None = None,
+                 now: datetime | None = None) -> dict | None:
+    """Parse bars; production callers must provide the requested timeframe."""
     try:
+        if expected_tf is not None:
+            state = json.loads(state_text)
+            resolutions = dict(TIMEFRAMES)
+            actual = str(state.get("resolution") or state.get("timeframe") or "").upper()
+            if (state.get("symbol") != SYMBOL
+                    or actual not in {resolutions.get(expected_tf, ""), expected_tf.upper()}):
+                return None
         payload = json.loads(ohlcv_text)
         if isinstance(payload, dict) and isinstance(payload.get("result"), str):
             payload = json.loads(payload["result"])
@@ -627,10 +639,28 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str) -> dict | None:
             l = float(bar["low"])
             c = float(bar["close"])
             if 1000 < l <= h < 10000 and l <= min(o, c) <= max(o, c) <= h:
-                return {
+                out = {
                     "open": o, "high": h, "low": l, "close": c,
                     "change_pct": (c - o) / o * 100 if o else 0.0,
                 }
+                if expected_tf is not None:
+                    from xau_ohlcv_evidence import evidence, timestamp
+                    if len(bars) < 2 or payload.get("success") is False:
+                        return None
+                    for field, expected in (("symbol", SYMBOL), ("resolution", dict(TIMEFRAMES)[expected_tf])):
+                        if payload.get(field) is not None and str(payload[field]) != expected:
+                            return None
+                    times = [timestamp(b.get("time")) for b in bars]
+                    if any(t is None for t in times) or any(a >= b for a, b in zip(times, times[1:])):
+                        return None
+                    proof = evidence("tradingview_mcp", state["symbol"], expected_tf,
+                                     bar.get("time"), next_open=bars[-1].get("time"), now=now)
+                    if proof is None:
+                        return None
+                    out["evidence"] = proof
+                    out["volume"] = bar.get("volume")
+                    out["volume_kind"] = "broker_tick_volume" if bar.get("volume") is not None else "unavailable"
+                return out
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         pass
     return None
