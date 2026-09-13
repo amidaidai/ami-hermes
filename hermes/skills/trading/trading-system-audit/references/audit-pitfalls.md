@@ -248,11 +248,11 @@ has_typehints = len(re.findall(r'->\s*\w+', code))
 |-----|------|------|------|
 | Brave Search | ✅ 可用 | 2000/月 | 主力搜索：Reddit帖子+技术文章+实时结果 |
 | Exa Search | ✅ 可用 | 1000/月 | 语义搜索：深度技术文章、walk-forward/overfitting |
-| Tavily | ✗ 401 | dev tier | key格式可能不对，需确认endpoint |
-| Metaso | ✗ SSL | 待确认 | 中文搜索，SSL错误可能需代理 |
-| Felo | ✗ 405 | 待确认 | Method Not Allowed，endpoint待确认 |
-| Firecrawl | ✗ 402 | 欠费 | 新key也欠费，不可用 |
-| AnySearch | 待测 | — | — |
+| Tavily | ✅ 可用 | 免费层 | **2026-09-13 复测恢复正常**（此前记 401） |
+| Metaso | ✅ 可用 | 免费层 | **2026-09-13 复测返回结果**（此前记 SSL 错） |
+| Felo | ✗ 不通 | 端点失效 | 端点只剩 `{"Hello":"World"}` 占位；系统未引用 |
+| Firecrawl | ✅ 可用 | 免费层 | **2026-09-13 复测 `scrape` 成功**（此前记欠费 402） |
+| AnySearch | ✗ 不通 | DNS/SSL | 直连 DNS 失败、代理下 SSL EOF；系统未引用 |
 | DDGS (web_search内置) | ⚠ 不稳定 | 免费 | 兜底使用 |
 
 ### 网页爬取工具

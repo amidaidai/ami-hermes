@@ -240,7 +240,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 | 守望刷新 | `行情守望.py` 即使无有效监控价位，也必须每5分钟刷新 BTC/XAU SourceSnapshot；过期价位不能阻断数据刷新 | `data/monitor_heartbeat.json` fresh，`source_snapshot_BTCUSDT/XAUUSD.json` fresh |
 | R:R硬底线 | GO/NO-GO 只看主线计划 `rr_a/rr1`，不是取A/B最大值；主线 R:R<1:2 必须 `NO-GO·rr_ratio`，即使反向 `rr_b`>2 也不能显示 GO | `python scripts/auto_card.py BTCUSDT` 若模板审计报 `rr1<2.0`，GO/NO-GO 必须同步红灯 |
 | 跨资产情绪隔离 | CoinGecko社区面板、BTC/crypto Polymarket、BTC x_sent 缓存只用于加密；XAU/外汇/股票改用本品种热点/宏观/金十/COT，禁止把BTC情绪灌进非加密卡 | `python scripts/auto_card.py XAUUSD` 输出应含“非加密跳过BTC/crypto预测市场桥/不采用BTC缓存” |
-| Windows输出安全 | 渲染器 `stdout/stderr.reconfigure()` 必须捕获 `OSError/ValueError`，避免 cron/管道句柄异常导致出卡中断 | `python -m py_compile scripts/render_v8.py` |
+| Windows输出安全 | 渲染器 `stdout/stderr.reconfigure()` 必须捕获 `OSError/ValueError`，避免 cron/管道句柄异常导致出卡中断 | `python -m py_compile scripts/render_v96.py` |
 | 正式分析前置修复 | 用户说“分析BTC/分析XAU”触发完整模式时，若 TV CDP 断连、`data_freshness_watchdog.py` 报 source snapshot / tv_live / heartbeat 过期、或行情守望心跳停滞，不准直接用缓存出卡；必须先修运行态，再跑完整卡 | `tv_launch(kill_existing=true)` → `tv_health_check` → `python scripts/p0_refresh_all.py` → `python scripts/watchdog.py` 或重启守望 → `python scripts/tv_live_dump.py --verbose` → `python scripts/auto_card.py BTCUSDT` |
 
 ### 完整分析运行态预检（2026-07-07实战固化）
@@ -252,7 +252,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 4. `chart_set_symbol` 到目标品种，主周期（加密15m/黄金5m）截图前先刷新 `python scripts/tv_live_dump.py --verbose`。
 5. 只有上述恢复后再跑 `auto_card.py {symbol}`，最终卡的完整性备注写明“已修复TV/守望/快照后重新出卡”。
 
-回归命令：`python -m py_compile scripts/auto_card.py scripts/render_v8.py scripts/行情守望.py scripts/data_freshness_watchdog.py scripts/watchdog.py scripts/pipeline_router.py scripts/go_nogo_gate.py && python -m pytest -q`，随后实跑 `python scripts/auto_card.py BTCUSDT` + `python scripts/auto_card.py XAUUSD` 验证管线和闸门一致。详细复盘与探针见 `references/analysis-accuracy-hardening-2026-07-06.md`。
+回归命令：`python -m py_compile scripts/auto_card.py scripts/render_v96.py scripts/行情守望.py scripts/data_freshness_watchdog.py scripts/watchdog.py scripts/pipeline_router.py scripts/go_nogo_gate.py && python -m pytest -q`，随后实跑 `python scripts/auto_card.py BTCUSDT` + `python scripts/auto_card.py XAUUSD` 验证管线和闸门一致。详细复盘与探针见 `references/analysis-accuracy-hardening-2026-07-06.md`。
 
 | 缺口 | 状态 | 修复 |
 |------|:--:|------|
@@ -732,7 +732,7 @@ tool_call(name="mcp_tradingview_data_get_pine_lines", arguments={})
 | TV实时数据注入 | tv_live.json + tv_dmi_cache.json 双缓存 → auto_card D周期不再"待刷新" | `references/tv-live-injection-architecture.md` |
 | Orion LLM cron恢复 | 四层验证+LLM解读·9-23每30min·~$0.50/月 | `references/orion-llm-cron-verification.md` |
 | GO/NO-GO七问闸门 | 数据新鲜/TV现场/R:R/事件/Protections/样本WFO/组合暴露 → 已接入auto_card渲染 | `scripts/go_nogo_gate.py` |
-| 量价健康度行 | 多源交叉验证表新增 吸收·扫荡·位移 字段 | `scripts/render_v8.py` |
+| 量价健康度行 | 多源交叉验证表新增 吸收·扫荡·位移 字段 | `scripts/render_v96.py` |
 | XAU klines真实数据 | gold-api+金十24h高/低 → 推算VAH/VAL/POC | `hermes/scripts/auto_card.py` |
 | predicted_grade | A/B/C/D预测评级自动写入每笔trade_plan | `hermes/scripts/auto_card.py` append_trade_plan |
 | 双缓存架构 | tv_live.json(agent现场) > tv_dmi_cache.json(cron) | `references/tv-live-injection-architecture.md` |
@@ -799,7 +799,7 @@ Router 自动根据资产类别跳过不适用步骤：
 ### Step 2 — TV MCP 主分析
 1. `tv_health_check` → 如不通则 `tv_launch(kill_existing=true)` → 等8s重试
 2. 若 `tv_launch` 返回 ClosedResourceError 或「MCP server unreachable」→ **MCP server进程已崩溃**。不能连续重试——等~60s让Hermes auto-retry恢复MCP连接后，再调 `tv_launch(kill_existing=true)`。完整恢复流程见 `references/tv-mcp-crash-recovery-2026-06-30.md`。
-3. （完整 CDP 恢复流程见 `tangxi-system-audit` → `references/tv-mcp-cdp-recovery.md`）
+3. （完整 CDP 恢复流程见 `tangxi-system-audit` → `references/tv-mcp-cdp-recovery.md`（未落地·勿引））
 2. `chart_get_state` → 确认品种（如 `BINANCE:BTCUSDT.P`）和已加载指标
 3. **全周期强制刷新（2026-06-29 用户纠正·五层）**：必须依次读取 1D→4h→1h→15m→5m，不可跳过任一周期。加密主执行=15m（截图15m），贵金属主执行=5m（截图5m），其他市场(外汇/股票/期货)看流动性选主周期截图。
    - 先切D：读OHLCV summary（日线宏观结构背景），等15-30s
@@ -1105,7 +1105,7 @@ Telegram 普通 `sendMessage`/`parse_mode=MarkdownV2` 不支持管道表真渲�
 6. `deliver: origin` 的 job 可能静默丢包，验证用户是否实际收到
 7. 守护进程存活检查：`cat data/monitor_heartbeat.json` + `cat data/.btc_daemon_heartbeat.json` — 两者都必须 status=running 且时间 <5分钟
 8. 完整架构见 `references/cron-architecture-v9.md`
-9. 资源消耗审计见 `references/resource-consumption-audit.md`
+9. 资源消耗审计见 `references/resource-consumption-audit.md`（未落地·勿引）
 
 ### 守护进程 vs Cron（v9.0 架构）
 

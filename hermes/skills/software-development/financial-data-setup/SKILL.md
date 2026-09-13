@@ -132,6 +132,40 @@ hermes config set mcp_servers.financekit.env.NO_PROXY    "localhost,127.0.0.1"
 可直连，别给它们加。杀 financekit 进程会断当前会话的 MCP 连接（ClosedResourceError），
 新会话自愈；期间美股/宏观用 FMP（/stable/quote）或 stock-api 兜底。
 
+### 别再从这条坑里走一遍：两条通用铁律
+
+**铁律一：诊断环境必须等于被测环境。** 在终端里手动跑成功，**不证明**服务里也能成功 ——
+shell 自带 `HTTP_PROXY`，而 MCP 子进程没有。凡是「服务里失败、手动却成功」的现象，
+先比对两者的 env / cwd / 解释器，不要先归因「进程状态陈旧」。
+
+```python
+# 比对本进程 env 与目标进程 env（psutil 可读同用户进程的 environ）
+import psutil, os
+KEYS = ('HTTP_PROXY','HTTPS_PROXY','NO_PROXY','ALL_PROXY')
+print('本进程:', {k: os.environ.get(k) for k in KEYS if os.environ.get(k)})
+for p in psutil.process_iter(['pid','name']):
+    if 'financekit' in (p.info['name'] or '').lower():
+        e = p.environ(); print(p.info['pid'], {k: e.get(k) for k in KEYS if e.get(k)} or '⚠️ 无代理')
+```
+
+**铁律二：改了配置文件 ≠ 运行中的进程变了。** MCP 子进程由网关按**启动时**载入的配置生成，
+改完 `config.yaml` 后旧进程照旧跑、重启多少次都还是旧 env。改完必须**两层都验**：
+
+| 层 | 验什么 | 命令 |
+|:--|:--|:--|
+| 配置层 | `mcp_servers.financekit.env` 有代理 | `hermes config get mcp_servers.financekit.env` |
+| 运行层 | **在跑的进程** env 真有代理 | `python scripts/maintenance/mcp_proxy_check.py` |
+
+回归守卫已落地：`scripts/maintenance/mcp_proxy_check.py`（仓内，只读，配 14 条测试）——
+报 `live_process_without_proxy` 就是「配置已改、网关没重读」，修法是在网关会话发
+`/reload-mcp`（网关**没有** `mcp_servers` 自动重载 watcher，只有 CLI 有）。
+**推广**：任何「配置驱动 + 长命进程」的组合（MCP server / cron 脚本 / 守护进程），
+守卫都要同时查配置层与运行层。
+
+完整取证链（4 个被排除的错误假设、白名单源码、守卫设计、边界表）见
+`tangxi-runtime-audit-and-cleanup` 的
+`references/mcp-subprocess-env-and-diagnostic-environment-trap-20260913.md`。
+
 ## Coverage Comparison
 
 | Feature | FinanceKit | akshatbindal/finance | Notes |

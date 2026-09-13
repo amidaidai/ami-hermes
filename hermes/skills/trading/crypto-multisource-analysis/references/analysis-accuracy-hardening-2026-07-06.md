@@ -1,5 +1,9 @@
 # Analysis Accuracy Hardening · 2026年7月6日
 
+> ⚠ **历史快照（正文按当时状态保留，未改写）**。文中的 `render_v8.py` 已于 2026-07-07
+> 更名为 `scripts/render_v96.py`（函数 `render_v96_card()`）。规则本身仍有效，
+> 只是文件名要按新名替换。
+
 ## Scope
 Session hardening for 棠溪 multi-asset analysis cards and GO/NO-GO gates. Use this as the regression checklist when changing `auto_card.py`, `go_nogo_gate.py`, `render_v8.py`, `行情守望.py`, or freshness watchdogs.
 
@@ -17,7 +21,7 @@ Session hardening for 棠溪 multi-asset analysis cards and GO/NO-GO gates. Use 
 
 ```bash
 cd "D:/Hermes agent"
-python -m py_compile scripts/auto_card.py scripts/render_v8.py scripts/行情守望.py scripts/data_freshness_watchdog.py scripts/watchdog.py scripts/pipeline_router.py scripts/go_nogo_gate.py
+python -m py_compile scripts/auto_card.py scripts/render_v96.py scripts/行情守望.py scripts/data_freshness_watchdog.py scripts/watchdog.py scripts/pipeline_router.py scripts/go_nogo_gate.py
 python -m pytest -q
 python scripts/data_freshness_watchdog.py
 python scripts/tv_live_dump.py --verbose

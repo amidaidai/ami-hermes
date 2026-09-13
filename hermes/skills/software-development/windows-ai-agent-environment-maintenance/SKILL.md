@@ -37,14 +37,14 @@ Use this skill when the user asks to inspect, repair, remove, or validate AI-age
 When `tv_launch` fails with `TradingView not found on win32. Searched: C:\Users\...\AppData\Local\TradingView\TradingView.exe`:
 
 1. **Root cause**: TradingView Desktop is often installed as a Windows Store app (WindowsApps), placing the real exe at `C:\Program Files\WindowsApps\TradingView.Desktop_*\TradingView.exe`. This folder is protected — `tv_launch` cannot read it.
-2. **Fix**: Copy the exe from WindowsApps to the expected path:
+2. **Fix — automated (preferred, 2026-09-13)**: run `python scripts/tv_sync_appdir.py --kill` in the 棠溪 repo. It reads `AppxManifest.xml` → `Identity Version` on both sides and does a full `robocopy /MIR` whenever the Store package is newer; the same sync is wired into `launch_tv_debug.bat` and `scripts/tv_keepalive.py`, so version drift self-heals.
+   Manual fallback — mirror the WHOLE directory, not just the exe (a lone exe breaks when the Electron major version changed; `icudtl.dat` / `*.pak` / `ffmpeg.dll` must match too):
    ```bash
-   mkdir -p "/c/Users/<user>/AppData/Local/TradingView"
-   cp "/c/Program Files/WindowsApps/TradingView.Desktop_*/TradingView.exe" \
-      "/c/Users/<user>/AppData/Local/TradingView/TradingView.exe"
+   robocopy "C:\Program Files\WindowsApps\TradingView.Desktop_<ver>_x64__<hash>" \
+            "C:\Users\<user>\AppData\Local\TradingView" /MIR /NFL /NDL /NJH /NJS
    ```
 3. Then call `mcp_tradingview_tv_launch(kill_existing=true, port=9222)` — it finds the copied exe and launches with CDP.
-4. **Verify**: `mcp_tradingview_tv_health_check` should return `cdp_connected: true` and `api_available: true`.
+4. **Verify**: `curl -s --noproxy "*" http://127.0.0.1:9222/json/version` must show `TVDesktop/<expected version>` (Store updates silently, so the version string — not `Get-AppxPackage` — is the only trustworthy evidence); then `mcp_tradingview_tv_health_check` must return `cdp_connected: true` and `api_available: true`.
 
 **Additional recovery steps if TV crashes mid-session**: Re-launch via `tv_launch(kill_existing=true)` kills all instances and starts fresh. Wait 30-45s for full chart load before calling chart APIs.
 
@@ -81,6 +81,22 @@ curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT"
 If the TV figure is off by an order of magnitude (64K vs 79K), treat the TV data as stale: run `python scripts/tv_live_dump.py --symbol BTCUSDT --verbose` to force-refresh, then re-read. Verify the current date/time from the live tick too (a stale cache can also carry an old *date*, e.g. "7月12日" when it's actually 8月28日 — always write BJT from the fresh timestamp).
 
 > Full session transcript: `references/tv-mcp-tool-naming-stale-cache-2026-08-28.md`
+
+### TradingView MCP: after a TV Desktop restart or upgrade, re-verify before trusting readings
+
+A Store/MSIX-driven TV upgrade is **silent** — `Get-AppxPackage` can show the new version while the running process (launched from `%LOCALAPPDATA%\TradingView`) is still the old one. The only trustworthy version evidence is the CDP handshake:
+
+```bash
+curl -s --noproxy "*" http://127.0.0.1:9222/json/version   # must contain TVDesktop/<expected version>
+```
+
+`--noproxy "*"` is mandatory: with `HTTP_PROXY`/`HTTPS_PROXY` set, curl to `localhost:9222` goes through the proxy and fails, which is what makes a naive `goto check` retry loop spin forever instead of reporting ready.
+
+Regression checklist after any Electron major-version change (e.g. 38 → 41): `tv_health_check` (`cdp_connected` + `api_available` true), `chart_get_state` (both the main pine indicator and the aggregated sub-indicator present in `studies`), `quote_get`, a screenshot that you actually **look at** (candles + value-area + CVD/AggVol panes drawn), and a forced cache refresh. Reading the numbers is not enough — a broken render still returns plausible study values.
+
+**Aggregated sub-indicator coverage ramps up after a restart — do not report it as "sources were cut".** Immediately after a TV restart/upgrade, the `Volume Aggregated` study can read `Coverage Exchanges: 2`, `Coverage Perp: 1`, `OI Breadth: 1` with `LSR` / `OI Dispersion Ratio` missing entirely; within ~3-5 minutes it fills to `5 / 5 / 4` and `OI Breadth 4` on its own. `Stale Venue Count` stays 0 during the ramp and only rises when venues are genuinely missing. Wait and re-read before concluding anything about degraded coverage — this farm treats full source coverage (5 exchanges + 4 OI venues) as a standing requirement, so an early 2/5 reading written up as "sources cut" is a high-severity misreport.
+
+The full upgrade runbook (dual-path robocopy mirror, backup placement, replay-test procedure) lives in the user-owned skill `tv-chart-layout-manager` → `references/windows-tradingview-update-mcp-path.md`.
 
 ## Common Checks
 
@@ -167,6 +183,9 @@ the failure is usually one of three stacked causes:
 - **Python 3.11 f-strings cannot contain backslashes** (`f"{len(re.findall(r'x\\.y', s))}"` → SyntaxError). Precompute into a variable, or write the script to a `.py` file — regex and `\n` in f-strings are the usual triggers.
 - **Inline `for f in ...; do ... done` one-liners get blocked by the hardline command-parser guard.** Put the loop in a `.py` script and run that; heredoc (`python - <<'PY'`) is also fragile in this shell for anything you want to keep.
 - **`read_file` returns `unchanged`/dedup for a path already read earlier in a compacted conversation** — get the body via `search_files(pattern=r"^.{1,200}$", output_mode="content")`, which dumps one match per line with line numbers.
+- **`taskkill //F //IM <name>.exe` fails in this git-bash terminal** with `无效参数/选项 - '//F'` (MSYS mangles the doubled slash instead of collapsing it to `/F`). Wrap it in cmd: `cmd /c "taskkill /F /IM TradingView.exe"`.
+- **Skills live in `~/AppData/Local/hermes/skills/` — NOT in the repo's `hermes/skills/` mirror.** Editing the repo copy (e.g. `D:/Hermes agent/hermes/skills/...`) with the generic `patch`/`write_file` tools reports success but changes nothing the agent will ever load, because `skill_view` reads the AppData dir. Symptom: a whole session of skill edits, then `skill_view` still returns the old text. **Rule: route every skill edit through `skill_manage`**, which resolves to the live dir; verify by re-`skill_view`-ing and reading the returned body. The same AppData↔repo mirroring applies to `scripts/` (`~/AppData/Local/hermes/scripts` is a junction into the repo) — there the repo copy IS live, which is exactly why the skills dir is the trap.
+- **`backups/` in the 棠溪 repo is git-tracked** — drop large binary backups (hundreds of MB, e.g. a TradingView app-dir copy) into `outputs/` instead (gitignored); otherwise they appear as untracked and risk being committed.
 
 ## References
 

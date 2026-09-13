@@ -22,8 +22,9 @@ category: trading
 4. 并行调用 Binance `get_price`；标准/完整更新再取 OI、Funding、Long/Short、Taker。
 5. 如为签名链路核验，调用账户摘要或余额读取，输出只读验证结果，不读取或暴露密钥。
 6. 计算并说明 TV/Binance 价格差；跨源微差不是自动否决，品种错配或结构无法对应才是硬问题。
-7. 每轮加密更新都截取 TradingView full 截图，首行放图片引用；截图应含价格轴和 CVD/副指标窗格。
-8. 结论先给：方向箭头 + 现价 + 当前动作 + BJT时间；随后给短表格和关键位。
+7. 每轮加密更新都截取 TradingView full 截图，首行放图片引用；截图应含价格轴和 CVD/副指标窗格。**首行＝图片本体：图片之前不得出现任何文字行（标题、前言行、状态行都算违规）**。用户要求重排版/改版式也算新一轮，照常重拍截图并重读行动格。
+8. 版式顺序固定，证据在前、方案在后，不得把方案提到多周期/关键位/多源之前：①首屏一行＝品种 · 北京时间 · 现价 · 方向（C等待/GO-A/NO-GO）＋ 唯一⭐主推或等待；②多周期定位；③具名结构关键位；④多源冲突（衍生品/情绪事件/宏观相关，各一短行）；⑤主方案＝触发/确认/失效/下一目标；⑥备选只写「主推失效后看什么」。
+9. 正文上限：短行 ＋ 最多两张窄表（每表≤3列）；不套多层分节标题与圈号小节，同一事实只写一遍（重复标题＋方案前置助长用户报「排版难看」的观感）。
 
 ## “现在呢/看哪个位置”专用输出规则
 
@@ -33,7 +34,7 @@ category: trading
 - ↓ 反抽主位受阻并完成结构确认：进入空头人工观察；
 - ○ 在主位附近横盘或未收线：观望，不在中间位置追单。
 
-当主/副指标出现 S3/S4 冲突、未收线、缩量、OI背离或OI缺失时，主推只能是等待/观望；不能生成正式 Entry、Stop、Target。人工候选必须标注“未授权”，且不得与主推并列成两个方案。
+当主/副指标出现 S3/S4 冲突、未收线、缩量、OI背离或OI缺失时，主推只能是等待/观望；不能生成正式 Entry、Stop、Target。人工候选必须标注“未授权”，且不得与主推并列成两个方案。用户要求「标注推荐哪一个方案」时：⭐标在主侧并出现在首屏；对侧不得写成带独立触发/目标的平行方案，只作主推失效路径出现。
 
 ## 提醒与条件监控协议
 
@@ -63,6 +64,23 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 
 任何失败必须在结果里可见。Binance价格失败时，继续采集仍可用的期货端点，并注明价格降级来源；不能因一个端点失败而假称整套 Binance 已验证。
 
+## 第三方平台/第三方源数据比对（引用非官方数字前必做）
+
+引用任何非 Binance/TV 的第三方行情数字（外部平台截图、KOL 贴图、聚合站）前，先用官方端点给它对账，再决定能不能当证据：
+
+| 对账项 | 官方口径 | 判据 |
+|:--|:--|:--|
+| 永续最新价 | `fapi/v1/ticker/24hr.lastPrice` | 快照差几美元=正常延迟，不据此判造假 |
+| 未平仓量 | `fapi/v1/openInterest.openInterest` × `premiumIndex.markPrice` | 换算成美元后应与第三方报价一致 |
+| 资金费率 | `fapi/v1/premiumIndex.lastFundingRate` | 先换算成百分比小数位再比 |
+| 24h 高/低 | `fapi/v1/ticker/24hr.highPrice/lowPrice` | **滚动窗**：早期极值滚出后官方值会比几分钟前的快照更窄/更高，属正常漂移，不是数据错误 |
+| 24h 成交额 | `fapi/v1/ticker/24hr.quoteVolume` | 1-2% 偏差可接受，逐项标注 |
+| 现货对照 | `api/v3/ticker/24hr.lastPrice` | 期现基差用来看快照时序，不用于否决 |
+
+- 只有**量级错误、方向反向、品种错配**才判该源不可用；微差不否决（同 TV↔Binance 口径）。
+- 对账结果写进回复（`项目 | 第三方 | 官方` 三列），不写「已核对」三字了事。
+- 多端点对账一律写成 `outputs/*.py` 再跑（urllib + `ProxyHandler({"http":"http://127.0.0.1:7897","https":"..."})`）；不要用长内联 curl 或嵌套 `$()`，那会被 hardline block。
+
 ## 系统自带入口（auto_card 跑卡）实跑纪律
 
 完整档不要手写数据采集序列 —— 跑仓库自带入口更准，但它有陷阱：
@@ -70,7 +88,8 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 - **`python scripts/auto_card.py --help` 不打印帮助，它会直接跑一张 quick 卡**（实测：打印「一键分析卡 · BTCUSDT · quick / 3步路由」并真去刷 TV）。想看用法读源码或直接用下一条命令。
 - 完整（L3）调用：`HANGQING_NO_SEND=1 TANGXI_ENABLE_AUTOMATED_TG=0 python scripts/auto_card.py <SYM> --mode-auto --message "分析 <SYM>"`。回执看第 3 行的 `档位=full` 与 `管线路由：15步`（加密）；不带 `--mode-auto --message` 就是静默 quick。
 - 耗时 2-3 分钟，**后台跑 + wait**，不要前台阻塞；卡落在 `data/auto_card_<SYM>_full.md`，尾部自带管线完成度审计（直接用它写“完成 N/M”）。
-- 跑卡前声明分析租约，跑完释放：`python scripts/tv_analysis_lease.py start --minutes 12 --symbol BINANCE:BTCUSDT.P` / `... end`（`status` 可看 `remaining_seconds`）。
+- 跑卡前声明分析租约，跑完释放：`python scripts/tv_analysis_lease.py start --minutes 12 --symbol BINANCE:BTCUSDT.P` / `... end`（`status` 可看 `remaining_seconds`；顶层 `active:false` 只表示持有进程已退出，不代表租约失效，判据是 `lease.remaining_seconds > 0`）。
+- 衍生品方向票一次取齐：`python scripts/binance_deriv_bundle.py BTCUSDT` → `outputs/binance_<SYM>_<BJT时间>.json`（24h 价/高低/成交额 + OI 现值与 15m/4h 变化 + 费率与历史 + 全局与大户多空 + Taker 比值 + 前 5 档深度买卖比 + `_src` 逐项 live/unavailable），比手写多个 curl 稳，也自带状态契约。
 - **卡面「②关键位」只列最近 6 个**（`levels_prepared[:6]`），实测会全部落在现价 0.1% 的同簇里（VWAP/POC 挤在一起），读者拿不到结构。必须补读 `data_get_pine_lines` + `data_get_pine_labels`（`study_filter` 用主指标名）拿**具名**位（VAH/VAL/POC/会话高·低/前位/磁吸），用它们写关键位段。
 - 主观察位从指标里取：主指标「现位」行已给口径（如「待·反抽VWAP77xxx·等MSS↓」），不自己发明；上下目标用「磁吸↑/↓」行（带 ATR 距离与命中率）。
 
@@ -81,6 +100,7 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 - 本机有两个截图来源：跑卡链产出 `tools/tradingview-mcp/screenshots/<SYM>_15m_<BJT时间>.png`；MCP `capture_screenshot(region="full")` 产出 `screenshots/tv_full_<UTC ISO>.png`。选**本轮**那张，不拿旧图。
 - 截前/截后用 `chart_get_state` 核 `symbol` + `resolution`；必要时再看一眼图内容（品种、周期、右侧价格轴、底部副窗格都在）。
 - 底部副窗格在本机布局里标签是 **`AggVol`**（Volume Aggregated）+ 成交量直方图；描述时如实写副窗格名，不要笼统声称「有独立 CVD 窗格」。
+- 看图复核只用来确认身份元素（品种/周期/右侧价格轴/底部副窗格在画面内）；**图里的数字不是价格证据** —— 图像读数会把十字线所在 K 线的 OHLC 和可见区间内的历史极值说成「最右一根/最新价」，价格一律以 `quote_get` + Binance 端点为准。
 - 共享图表只有一张：验证另一个品种时优先跑当前已显示的那个，不要为验证把图切走。
 
 ## 情绪/检索类证据（x_search）
@@ -112,6 +132,7 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 - **本地情绪文件**：`data/x_sentiment_context.json` 可能被**部分刷新** —— mtime 新鲜而内嵌 `market_snapshot`
   仍是旧快照（实测 BTCUSDT 64,658 vs live 76,802、市占 58.73% vs CoinGecko 56.1%）。
   逐段核对量级/方向，任一段不过就整段丢弃，别只按文件龄放行。
+- **恐贪**：卡面「订单流」行的恐贪数同样会带错值（实测卡面 67，而同轮 live `alternative.me/fng` = 61，X 情绪侧也报 ~61）。恐贪一律现场取，不引卡面值。
 - 探针命令、完整实录与完整档耗时/审计典型形状见 `references/card-value-cross-check.md`。
 
 ## 工具纪律
@@ -123,7 +144,9 @@ MCP 工具通过 `tool_search` 找到后，用 `tool_call` 调用；不要凭记
 - `references/binance-verification-session-pattern.md`：本轮验证形成的最小调用集、状态写法与位置型跟踪模板。
 - `references/full-run-execution-and-level-evidence.md`：完整档（L3）实跑序列（租约 / `--mode-auto --message` / 后台 wait / 产物位置）、
   `--help` 会直接跑 quick 卡的坑、卡面「②关键位」只给最近 6 个同簇位而需补读 pine lines/labels 拿具名位的实证、
-  截图两来源与内容复核、以及 11/15 完成度审计的典型形状。
+  截图两来源与内容复核（含看图复核的边界：图里的数字不算价格证据）、截图前被后台切图的复位序列
+  （set_symbol→set_timeframe→复核→截图，复位后必须重读指标表）、行动格随新 K 线改写需重读的坑、
+  租约 `status` 的 `active:false` 语义、以及 11-14/15 完成度审计的典型形状。
 - `references/card-value-cross-check.md`：卡面数值反查清单 —— corr 行 yfinance 重算实录（卡面 0.0 vs 实际 0.65/0.85）、
   `x_sentiment_context.json` mtime 新鲜但内嵌快照过期/市占冲突的实测、可独立重算的探针命令、
   以及完整档 52s 实跑与 14/15 审计的典型形状。

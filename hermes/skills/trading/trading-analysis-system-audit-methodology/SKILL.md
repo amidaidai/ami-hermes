@@ -355,4 +355,4 @@ VIX 取数默认 20 + SPX 默认 0 → 全源失败时照样打印「中性 | VI
 - `references/external-search-evidence-and-freshness-gate-20260913.md` —— x_search degraded/无引用的幻觉实例、
   客观部分+叙述按需的分工实现、载荷键名冲突崩溃、全量回归的租约/全局状态干扰。
 
-（旧文里引用的 `references/current-audit-evidence-pattern.md` 并不存在，已改掉这个悬空指针。）
+（旧文里引用的 `references/current-audit-evidence-pattern.md`（未落地·勿引） 并不存在，已改掉这个悬空指针。）

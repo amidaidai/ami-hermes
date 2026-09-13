@@ -39,11 +39,14 @@
 
 | 源 | 原因 | 替代 |
 |-----|------|------|
-| Firecrawl (web_search) | 欠费 Payment Required | web_extract + DDGS |
-| gold-api.com/price/XAU | 无法连接 | 金十 + TV OANDA |
-| alternative.me/fng | 无法连接 | 跳过 |
-| FinanceKit MCP | 速率限制 | Yahoo Finance |
-| DXY Yahoo | 无数据 | Investing.com web_extract |
+| ~~Firecrawl (web_search)~~ | **已恢复**（2026-09-13 复测 scrape 成功） | — |
+| ~~gold-api.com~~ | **已恢复**；且正确端点是 `api.gold-api.com/price/XAU`（实测 200） | — |
+| ~~alternative.me/fng~~ | **已恢复**（2026-09-13 实测 200，恐贪 61） | — |
+| ~~FinanceKit MCP~~ | **已修**（根因=运行进程缺 HTTP_PROXY → Yahoo 403/429；reload 后恢复） | — |
+| DXY Yahoo | `DX-Y.NYB` 无数据 | Investing.com web_extract |
+
+> 本表上半部分曾是「不可用源」，2026-09-13 逐条复测后**四项全部恢复**。
+> 权威状态请跑 `python scripts/maintenance/api_source_health_probe.py`，不要以本文为准。
 
 ## XAU 引擎限制
 

@@ -37,6 +37,10 @@ if hasattr(sys.stderr, "reconfigure"):
 ROOT = "D:/Hermes agent"
 PORT = 9222
 LAUNCH_BAT = os.path.join(ROOT, "tools", "tradingview-mcp", "scripts", "launch_tv_debug.bat")
+# 双路径闭环：%LOCALAPPDATA%\TradingView 是 MCP/launch 的实际启动位，
+# 需与 Store(WindowsApps) 版本保持同步（见 tv_sync_appdir.py）。
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 TV_CANDIDATES = [
     os.path.expandvars(r"%LOCALAPPDATA%\TradingView\TradingView.exe"),
     r"C:\Program Files\TradingView\TradingView.exe",
@@ -78,6 +82,16 @@ def save_state(state: dict) -> None:
 
 def try_launch() -> bool:
     """尝试拉起 TV Desktop。成功返回 True，失败返回 False（静默）。"""
+    # 0) 双路径闭环：Store 自动更新只动 WindowsApps，本地启动目录会落后。
+    #    仅在版本确实落后（或无本地副本）时才清场并同步；已一致时零副作用。
+    try:
+        from tv_sync_appdir import sync_if_needed
+        res = sync_if_needed(kill=True)
+        if res.get("status") == "synced":
+            print(f"⬆ TV 启动目录已同步到 Store 版 {res.get('store_version')}", flush=True)
+    except Exception:
+        pass  # 同步模块不可用不阻塞启动，按原流程继续
+
     if os.path.exists(LAUNCH_BAT):
         try:
             subprocess.Popen(
@@ -85,7 +99,9 @@ def try_launch() -> bool:
                 cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
-            for _ in range(10):
+            # 给 launch 脚本等待时间：它内部可能还要跑 Store 版本同步（数百 MB，
+            # 首次同步可达 1 分钟）+ TV 冷启动，故给足 90 秒上限。
+            for _ in range(45):
                 time.sleep(2)
                 if port_open():
                     return True

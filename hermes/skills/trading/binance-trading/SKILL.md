@@ -123,7 +123,7 @@ curl -s "https://api.binance.com/api/v3/depth?symbol=GASUSDT&limit=20"
 6. 测试后恢复用户原代理选择；获得授权后再把Binance域名单独固定到已验证节点。
 7. 公开Ping均为200后，才调用**签名只读**账户接口验证Key、IP白名单、权限与时间戳；禁止用下单/撤单测试连通性。
 
-关键判读：TLS失败、超时、连接重置均发生在鉴权之前，不能据此判定Key错误；只有收到 Binance JSON业务错误码（如`-2015`、`-1021`）后才进入凭据排查。代理节点级复现方法见 `network-diagnostics` 的 `references/proxy-node-vs-proxy-path.md`。
+关键判读：TLS失败、超时、连接重置均发生在鉴权之前，不能据此判定Key错误；只有收到 Binance JSON业务错误码（如`-2015`、`-1021`）后才进入凭据排查。代理节点级复现方法见 `network-diagnostics` 的 `references/proxy-node-vs-proxy-path.md`（未落地·勿引）。
 
 ## 注意事项
 - BINANCE_API_KEY/BINANCE_SECRET_KEY 已配置在 Hermes .env 中

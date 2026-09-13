@@ -16,7 +16,7 @@ metadata:
 
 # Hermes Feishu Card Plugin
 
-Enable **interactive card** responses (instead of plain text/post) for Feishu/Lark in Hermes Agent. Uses the `hermes-feishu-streaming-card` Python package as a sidecar — patches `gateway/run.py` and runs an HTTP sidecar on port 8765.
+Enable **interactive card** responses (instead of plain text/post) for Feishu/Lark in Hermes Agent. Uses the `hermes-feishu-streaming-card` Python package as a sidecar — patches the gateway message handler (`gateway/run.py` on older Hermes, `gateway/run_turn.py` after the split) and runs an HTTP sidecar on port 8765.
 
 ## Prerequisites
 
@@ -98,11 +98,24 @@ The `hermes-dir` is the Hermes source code root, typically:
 - Linux/macOS (pip install): `<venv>/lib/python*/site-packages/../hermes/`
 - Git install: repo checkout root
 
-Verify the patch was applied:
+Verify the patch landed — and check the file the handler actually lives in, which MOVED on recent Hermes:
 ```bash
-grep -c 'HERMES_FEISHU_CARD_PATCH' <hermes-dir>/gateway/run.py
+# pre-split Hermes: gateway/run.py   |   current Hermes: gateway/run_turn.py
+grep -c 'HERMES_FEISHU_CARD_PATCH' <hermes-dir>/gateway/run_turn.py
 # Expected output: ≥ 2
 ```
+
+### Hermes-version coupling — upgrade the plugin, never hand-patch the AST
+The plugin anchors its patch to exact Hermes source shapes, so **any Hermes update that refactors `gateway/` can invalidate it**. Recent Hermes split `gateway/run.py`: the message handler moved to `gateway/run_turn.py`, final delivery was extracted into `_hmwa_deliver_turn_response`, and cron delivery split into `cron/scheduler_delivery.py`.
+
+A stale plugin shows up in `hermes-feishu-card doctor` as `Hermes: unsupported` + `gateway/run.py missing async anchor function: _handle_message_with_agent`. Fix in this order:
+1. `git fetch origin main` in the plugin clone **for real** — `git fetch --dry-run` does NOT advance `origin/main`, so `git log origin/main` still shows the stale tip and you will wrongly conclude the plugin is current.
+2. A new-enough upstream carries `patcher.DECOMPOSED_GATEWAY_TARGETS` (`run_turn.py`, `run_turn_runner.py`, `run_inbound.py`, `run_busy.py`, `run_startup.py`, `run_notifications.py`) plus `cron/scheduler_delivery.py` and `gateway/platforms/base.py`. If present: `git stash push -m … -- <locally modified files>` then `git merge --ff-only origin/main`.
+3. Re-run doctor. `compatibility full` means the moved anchors were found. A leftover `gateway/platforms/base.py exact delivery anchors are unsupported` means **upstream has not caught up with this Hermes build yet** — that is not a config error and nothing is misconfigured.
+4. **Never force a partial patch to "make it work".** On the split files `apply_patch` gets in only the *start* block, at the handler entry, where `locals()` still lacks `response`/`agent_result` — the card opens and never completes, which is worse than having no hook at all. Leave the hook uninstalled (direct sidecar sends need no hook) and re-test after the next plugin release.
+5. `hermes-feishu-card start` refuses to launch the sidecar while the hook is unhealthy (`hook.status: manual_review_required`, it exits printing only `hook.next:`). Relaunch the sidecar directly with the runner recipe below; `status` talks to the sidecar over HTTP and still reports correctly.
+
+The update-side procedure and the full post-update sweep live in the `hermes-windows-maintenance` skill.
 
 ### 4. Start the sidecar
 
@@ -139,7 +152,7 @@ cat ~/AppData/Local/hermes/gateway_state.json | python -m json.tool
 
 | Component | Check | Expected |
 |-----------|-------|----------|
-| Gateway patch | `grep -c HERMES_FEISHU_CARD_PATCH gateway/run.py` | ≥ 2 |
+| Gateway patch | `grep -c HERMES_FEISHU_CARD_PATCH gateway/run_turn.py` (pre-split Hermes: `gateway/run.py`) | ≥ 2 |
 | Sidecar | `hermes-feishu-card status` | `status: running` |
 | Gateway | `hermes gateway status` | Gateway running, feishu connected |
 | Streaming config | `grep -A5 '^streaming:' config.yaml` | `enabled: true` |

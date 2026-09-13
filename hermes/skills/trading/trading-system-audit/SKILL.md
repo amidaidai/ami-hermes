@@ -124,7 +124,7 @@ When the user asks to "联网社区，多个社区，全面的看一遍，提取
 - `references/2026-06-21-template-monitor-alert-format-audit.md` — 模板监控策略专项审计：移除"交易所"（监控警报/Feishu侧统一"平台"）、短卡周期逐行+无**、XAU get_close守卫扩展、watchdog调优、批量"全部一起"验证bundle+git锁定。
 - `references/2026-06-21-live-audit-evidence.md` — concrete live state from full 2026-06-21 audit run (template monitoring strategy check): exactly 3 no-agent crons confirmed healthy, watchdog rate-limit interpretation (blocking vs crash), XAU kline collector leakage despite get_price guards, card **bold** + cycle formatting drift (BTC vs XAU), 0 machine leaks + A/A- snapshots + git clean, executed verification bundle results.
 - `references/multi-asset-symbol-api-audit-2026-06-20.md` — multi-asset rendered symbol mapping, header fidelity checks, API live-readiness distinctions, and verification bundle for 棠溪 trading cards.
-- `references/template-slimming-v694-2026-06-20.md` — v6.9.4 template slimming rules: keep master template as 120–160 line output skeleton, move model/scoring/monitor/closure rules to dedicated references, preserve detailed operation section.
+- `references/template-slimming-v694-2026-06-20.md`（未落地·勿引） — v6.9.4 template slimming rules: keep master template as 120–160 line output skeleton, move model/scoring/monitor/closure rules to dedicated references, preserve detailed operation section.
 - `references/concise-multi-asset-card-1500.md` — 1500字左右多资产交易卡优化模式：只保留可执行字段，资产字段隔离，期权权利金目标不得为负；关键字段选择性加粗，禁止整卡满屏加粗，含验证 bundle。
 - `references/concise-multi-asset-card-800.md` — 800字多资产执行卡压缩模式：保留①-⑩锚点和五段正文，非操作段极简，操作段保留A/B预案，含字段隔离与长度/泄漏验证 bundle。
 - `references/card-legibility-preferences-2026-06-20.md` — 棠溪交易卡可读性偏好：1500字左右优先于800字过度压缩；Telegram正文禁用 Markdown `**` 加粗符号；回退排版时必须保留多资产字段隔离与期权权利金保护。
@@ -132,7 +132,7 @@ When the user asks to "联网社区，多个社区，全面的看一遍，提取
 
 ## Multi-Asset Card Audit Addendum
 
-- Always compare rendered card output against `references/master-template-v68.md`; a correct template file is not enough if `auto_card.py` drifts.
+- Always compare rendered card output against `references/master-template-v68.md`（未落地·勿引）; a correct template file is not enough if `auto_card.py` drifts.
 - Verify display symbols by asset class as separate fields: crypto perpetuals display `品种：BTCUSDT.P · BINANCE`; gold uses `品种：XAUUSD · OANDA` (final after user correction "TradingView不是交易所，是交易所的名字" + "我经常使用oanda的"; TradingView is charting tool only and must never be used as the platform value); forex `品种：EURUSD · OANDA`, stocks `品种：AAPL · NASDAQ`, options `品种：AAPL250117C · OPRA`. When user provides "品种已截图，你看到的" or explicit name correction, the last stated broker name is authoritative for 品种行. Leverage line may retain broker-specific text (OANDA 1000x). Screenshot + correction always overrides.
 
 ## 2026-06-21 Multi-Asset Strategy Extension (Community Optimization)
@@ -182,7 +182,7 @@ When the user asks to "联网社区，多个社区，全面的看一遍，提取
    - 调用 `asset_macro_enrich` 写入 `raw["_macro"]`（DXY + earnings flag）
 3. `hermes/scripts/multi_model_engine.py`：
    - 新增 `asset_weight_adapter(symbol, base_conf, model_name)` 实现资产特定信心乘数（gold 1.25、forex 1.15、crypto 1.1、stock 0.85）
-4. `references/master-template-v68.md`：
+4. `references/master-template-v68.md`（未落地·勿引）：
    - 标题更新为社区2026全面多资产优化版
    - 新增“时段门控”铁律段落（引用统一 session_filter）
 
@@ -394,8 +394,8 @@ cat data/orphan_signals_BTCUSDT.json | python -c "import sys,json; d=json.load(s
 When auditing or modifying 棠溪 trading cards, treat the card templates as part of system correctness:
 
 - **出卡/审计卡合规前第一步**：必须 `read_file("references/master-template-v68.md")` 加载当前锁定底板。**绝不能依赖记忆、旧会话、或 SKILL.md 中的格式示例**。当前锁定版本为 **v7.1**（2026-06-21 手机适配版：完整卡≤20行·极简卡≤8行·警报≤6行·每行≤38字符）。旧 v6.9.x / v7.0 格式已废弃。
-- **表格驱动偏好同步（2026-06-29）**：用户当前更偏好全表格驱动分析输出（多周期定位表 + 关键位矩阵 + 多源交叉验证表 + 执行预案表）。如果 `references/master-template-v68.md` 或渲染器仍写“禁止表格”/纯叙事风格，而当前用户偏好要求表格，判 P1 模板源头冲突，修复权威模板而不是临时改一条回复。细则见 `references/table-driven-analysis-template-sync-2026-06-29.md`。
-- **Analysis card v7.1** = `references/master-template-v68.md` v7.1 手机适配版。核心铁律：每行≤38字符Telegram手机不折行、完整卡①②③④四段结构+预案AB+闸门、VWAP/EMA/CVD拆行、价格用`_p()`剥离反引号。
+- **表格驱动偏好同步（2026-06-29）**：用户当前更偏好全表格驱动分析输出（多周期定位表 + 关键位矩阵 + 多源交叉验证表 + 执行预案表）。如果 `references/master-template-v68.md`（未落地·勿引） 或渲染器仍写“禁止表格”/纯叙事风格，而当前用户偏好要求表格，判 P1 模板源头冲突，修复权威模板而不是临时改一条回复。细则见 `references/table-driven-analysis-template-sync-2026-06-29.md`。
+- **Analysis card v7.1** = `references/master-template-v68.md`（未落地·勿引） v7.1 手机适配版。核心铁律：每行≤38字符Telegram手机不折行、完整卡①②③④四段结构+预案AB+闸门、VWAP/EMA/CVD拆行、价格用`_p()`剥离反引号。
 - **多资产操作完整性**（2026-06-20 新增）：操作段必须完整①-⑦（加密/贵金属/外汇/股票/期权）。环境/结构/博弈/风控允许精炼。详见 `tradingview-indicator-analysis/references/multi-asset-complete-operations.md` 和统一 asset_class 适配。
 - Analysis card body must be human-readable only. **No machine fields or machine enum labels may appear anywhere in the rendered card body**, including: `setup_id`, `model_id`, `entry_tag`, `exit_tag`, `monitor_write`, `critical`, `warning`, `info`, and their concrete values.
 - Human-readable strategy/model names such as `VWAP反抽` may appear, but never prefixed or described as `model_id`.
@@ -761,7 +761,7 @@ for e in events:
 
 **检测**：
 1. 列出所有 `no_agent` trading cron 任务的脚本名和频率
-2. 读 `references/tangxi-trading-cockpit.md` 的双指标裁决规则和各市场流程段
+2. 读 `references/tangxi-trading-cockpit.md`（未落地·勿引） 的双指标裁决规则和各市场流程段
 3. 对每个 cron 数据源，检查是否在驾驶舱规则中被引用
 4. 有 cron 采集但无规则引用 = P1 验证缺失
 
@@ -1076,7 +1076,7 @@ grep "400.*XAUUSD.*kline" data/monitor.log | tail -3
 - 让阻塞落在心跳容忍阈值（~15-20s）以下
 - 串行 request 改 Session 复用 + Retry + 并发 futures（不是本条修复范围）
 
-**手动救活**: 当 watchdog 冷却时，先 `taskkill` 杀旧进程 → `rm data/monitor.lock` → 清理 `watchdog_guard.json` 冷却时间戳 → 重新启动。详见 `references/watchdog-storm-recovery.md`。
+**手动救活**: 当 watchdog 冷却时，先 `taskkill` 杀旧进程 → `rm data/monitor.lock` → 清理 `watchdog_guard.json` 冷却时间戳 → 重新启动。详见 `references/watchdog-storm-recovery.md`（未落地·勿引）。
 
 ### 5.5 Hermes cron 管理陷阱（路径/语法/同步）
 
@@ -1170,11 +1170,11 @@ If this returns nothing, the system has no regression tests regardless of what m
 
 **铁律（2026-06-19 强化）**：
 - **出卡/审计卡合规前第一步**：必须 `read_file("references/master-template-v68.md")` 加载当前锁定底板。**绝不能依赖记忆、旧会话、或 SKILL.md 中的格式示例**（它们可能已滞后）。棠溪曾因未加载模板直接输出导致格式错误被纠正。
-- 分析卡 v6.9 = `references/master-template-v68.md` 完整内容底板 + 速读编号骨架。
+- 分析卡 v6.9 = `references/master-template-v68.md`（未落地·勿引） 完整内容底板 + 速读编号骨架。
 - 分析卡正文（头部 + 五段）**必须零机器字段泄漏**：禁止出现 `setup_id`、`model_id`、`entry_tag`、`exit_tag`、`critical`、`warning`、`info` 及其具体值。仅允许中文人读模型名（如 `VWAP反抽`）。
 - 机器字段只允许存在于本地 meta、trade_plans.jsonl、monitor_levels.json 的结构化存储中，绝不渲染进用户可见卡片。
 
-**`auto_card.py` 的 `render_card_locked()` 产出的卡片必须严格匹配 `references/master-template-v68.md` 底板。**
+**`auto_card.py` 的 `render_card_locked()` 产出的卡片必须严格匹配 `references/master-template-v68.md`（未落地·勿引） 底板。**
 
 **变更后验证铁律（v7.0）**：
 任何涉及 `auto_card.py`、渲染逻辑、价格数据桥、或 monitor 推送格式的改动后：
@@ -1196,7 +1196,7 @@ If this returns nothing, the system has no regression tests regardless of what m
 
 **源码回退/大 diff 陷阱（P0）**：全面审计时不能只看运行心跳和日志；必须同时看 `git diff --stat` 与针对性回归测试。若 `scripts/行情守望.py` 出现数百行 diff，且 `tests/test_push_async.py` 报缺 `_send_one` / `drain_push_queue`，或 `tests/test_monitor_setup_trace.py` 报缺 `enrich_event_with_setup`，说明监控核心从异步 v7.x 回退到同步旧版。判 P0：推送可能阻塞主循环、分品种话题路由失效、setup metadata 无法进入事件复盘。审计命令：`python -m pytest tests/test_push_async.py tests/test_monitor_setup_trace.py -q --tb=short`；修复前不要宣称监控链路健康。
 
-**模板源头冲突陷阱（P1）**：即使 `auto_card.py::render_card_locked()` 已经把机器字段从正文中剥离，也要检查 `references/master-template-v68.md` 自身是否仍示例化 `setup_id/model_id/entry_tag/exit_tag/机器字段`。若权威模板仍要求正文机器字段，而技能/记忆要求“正文零机器字段”，未来手排卡或跨渠道出卡会被模板误导。判 P1：模板源头与渲染实现不一致；修法是模板正文仅写中文人读字段，机器字段只作为本地 meta / trade_plans / monitor_levels 的结构化落盘说明。
+**模板源头冲突陷阱（P1）**：即使 `auto_card.py::render_card_locked()` 已经把机器字段从正文中剥离，也要检查 `references/master-template-v68.md`（未落地·勿引） 自身是否仍示例化 `setup_id/model_id/entry_tag/exit_tag/机器字段`。若权威模板仍要求正文机器字段，而技能/记忆要求“正文零机器字段”，未来手排卡或跨渠道出卡会被模板误导。判 P1：模板源头与渲染实现不一致；修法是模板正文仅写中文人读字段，机器字段只作为本地 meta / trade_plans / monitor_levels 的结构化落盘说明。
 
 ### 8. "锁定" = git commit + push，不是文件存盘
 

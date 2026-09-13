@@ -1,7 +1,7 @@
 ---
 name: api-dependency-audit
 version: 1.0.0
-description: "Systematic audit methodology for external API/service dependencies across a codebase: discovering hardcoded endpoints, identifying single-point-of-failure domains, detecting silent failure patterns, finding endpoint mismatches (e.g. spot vs futures), and producing severity-categorized executable fix checklists with file:line references and shared utility recommendations."
+description: "Systematic audit methodology for external API/service dependencies across a codebase: discovering hardcoded endpoints, identifying single-point-of-failure domains, detecting silent failure patterns, finding endpoint mismatches (e.g. spot vs futures), and producing severity-categorized executable fix checklists with file:line references and shared utility recommendations, and mapping vendored third-party tool forks against their upstream (drift, missing capabilities, non-destructive sync probing)."
 tags:
   - audit
   - api
@@ -125,6 +125,13 @@ def signed_fapi(path, params, api_key, secret, timeout=10):
 | Treating HTTP 200 as API success | Providers may return `200` with semantic errors such as `code=401`, plan restrictions, rate limits, or empty data | Validate provider-specific `code/msg/error/data`, not status alone |
 | API keys embedded as source fallbacks (`env or "literal-key"`) | Secrets leak into Git/history and source scans | Use environment first, then an ignored local credential store; never a literal fallback |
 | Testing new trading credentials by placing/cancelling an order | Verification creates unnecessary side effects | Use a signed read-only account endpoint; report auth as unverified if the network blocks it |
+| Hardcoded request window/params (`from_="<date>", to="<date>"`, `date.today() - 90` literals) | Returns valid-looking, well-formed, but **stale** data forever; the freshness watchdog and the card renderer both pass it | Compute the window from `now()` at call time; echo the resolved window back in the payload (`as_of`) |
+| `str(exc)[:N]` with a small `N` on provider errors | Truncation cuts off the diagnostic word (`You are not **entitled** to this data…upgrade your plan` → `{"status":"ERROR","error":"You a`) | Normalize known provider errors to a short reason code *before* any truncation |
+| A credential file that contains only comments / `PLACEHOLDER…` / prose | Non-empty string ⇒ truthy ⇒ passed downstream as a real token; request fails and gets swallowed as "source unavailable" instead of "never configured" | Validate placeholder shape in the shared credential reader; return empty so callers see the configured/unconfigured distinction |
+| A status table (docs/README/skill) listing provider health without a measurement date or re-run command | Freezes a past outage into a permanent false fact — the next reader trusts it and skips a working source | Stamp every status table with `measured_at` + the one-line command that re-measures it |
+| A healthy payload whose freshness timestamp is keyed under a name the status contract doesn't recognise | The source is permanently labelled `unavailable` while its data is actually consumed — inverted mislabeling, and it hides real degradations behind constant noise | Publish the instant under a contract-recognised key as well; when re-verifying, evict the cached payload first |
+| Renderer prints one warning for both "this tier deliberately skips the step" and "the upstream failed" | Readers learn to ignore the marker, so a genuine outage of that source becomes invisible | Reuse the pipeline's deliberate-skip convention (e.g. `⏭️ … skipped at this tier`); keep the warning icon for real failures only |
+| Accepting a green unit-test run as verification for a data-plane change | Tests assert construction logic, not that the contract can parse the payload or that the output text is honest — both real defects of this class were invisible to a fully passing suite | Run the real pipeline end-to-end and read its output lines; if you have not looked at the actual output, it is not verified |
 
 ## Quota-aware degradation and circuit breaking
 
@@ -163,6 +170,51 @@ When a user supplies multiple provider credentials, onboarding is not complete a
 
 For a reusable probe matrix and safe output contract, see `references/multi-provider-credential-onboarding.md`.
 
+## "Configured" ≠ "running with it": the three-layer availability check
+
+A dependency can be correctly configured and still be broken in production. Check all three layers
+separately, because each fails differently and the *diagnosis* differs even when the symptom is identical:
+
+| Layer | Question | Signature of failure |
+|---|---|---|
+| **Config** | Does the config/manifest carry the required env (proxy, base URL, credentials)? | Static read of the config file |
+| **Runtime** | Does the **process actually running** have that env? | Config edited after the process started ⇒ process is stale; config edits are not picked up without an explicit reload |
+| **Functional** | Does the upstream actually answer *through that path*? | A/B the same request with and without the env (e.g. direct vs proxy) to prove whether the setting is even necessary |
+
+Worked example (the exact bug class): a Yahoo-backed collector returned rate-limit errors. Config had the
+proxy; six *running* subprocesses did not, because they predated the config edit. An A/B proved the setting
+was load-bearing (direct `403`, via proxy `200`). The fix was reload + reaping the stale processes — not
+touching the collector code at all.
+
+**Corollary — instance multiplicity:** when several surfaces (CLI / gateway / desktop app) each spawn their
+own subprocess, some instances carry the env and some don't, and any caller may bind to either. The invariant
+to assert is **"no instance lacking the required env exists"**, not "at least one good instance exists".
+Aggregate the report per server (`with-env N / without-env M`) instead of emitting one warning per PID.
+
+**Corollary — multi-line file credentials:** reading a "comment header + value" file raw and using the whole
+content as a token corrupts the auth header. Strip comment lines and take the first meaningful line; keep the
+whole content only for structured formats (`.json`). See the silent-failure reference for the guard rules.
+
+## Auditing the auditor: validate the probe before trusting the finding
+
+A probe that reports a risk is itself untested code. Every false positive costs credibility and every false
+negative hides a real outage. **Confirm each `MISSING` / `BROKEN` / `unavailable` finding through a second
+independent channel before it enters the report.** Real probe bugs seen in one session:
+
+- Wrong credential field name (`api_secret` vs `secret_key`) reported the credential as *absent*.
+- An invented endpoint path reported `404` — the provider was fine; the probe was wrong.
+- Classifier ordering: `code=401` inside a `200` body was bucketed as `live` because the state check
+  compared a prefix the error string didn't have. Assert on parsed fields, not on string prefixes.
+- A CJK heuristic meant to reject prose credentials also rejected a valid JSON credential file.
+  Tighten guards until the real credentials in the tree all still pass — then keep that as a regression test.
+
+Two rules that follow: **separate the probe's own bugs from the system's bugs in the report**, and **make the
+probe re-runnable with a persisted baseline**, so "this used to work and now doesn't" is detected automatically
+instead of waiting for someone to ask again.
+
+For the detailed recipes, guard rules, and scanner shape, see
+`references/availability-verification-layers.md`.
+
 ## Trading and derivatives data contracts
 
 When auditing a multi-source trading pipeline, endpoint availability is not enough: verify that price, K-lines, OI, funding, taker flow, and TradingView all describe the same execution market. For Binance USD-M perpetual analysis, Futures price and `/fapi/v1/klines` are the primary contract; spot/CMC/CoinGecko are cross-checks or explicitly graded fallbacks, never silent replacements. Require structured `available/stale/timeout/invalid/missing/not_applicable` states and propagate them into the final gate instead of swallowing errors.
@@ -179,6 +231,53 @@ See `references/trading-data-source-contract.md` for source priority, semantic v
 3. **Fault injection test**: `tc qdisc add dev eth0 root netem loss 30%` → all collectors return `source: "data-api.binance.vision"` with non-empty key fields
 4. **Keyless mode**: `unset API_KEY` → collectors degrade gracefully (public endpoints only) with `quality: "public_fallback"` tags
 5. **Freshness watchdog** validates both mtime AND content (non-empty key fields) for each critical cache file
+
+## Vendored third-party tools: fingerprint before evaluating, probe before upgrading
+
+When the user shares an article/post/repo claiming a capability ("this MCP lets an AI drive charting — is it useful for us?"), do not evaluate it as something new. Fingerprint the install first: we may already run that exact tool as a local fork. The MCP servers under `D:/Hermes agent/tools/` are forks, not pristine upstream checkouts — the registered `tradingview` server is one such fork carrying owner patches.
+
+```bash
+# Which MCP servers exist and where do their entry points live
+grep -n -A5 '^  [a-z0-9-]*:$' ~/AppData/Local/hermes/config.yaml
+# Is the shared repo a fork we already carry
+cd "<tools-dir>/<tool>" && git remote -v && git status -sb | head -1
+```
+
+Report the delta only. A post describing a tool we already run has zero new capability; its value is the upstream repo it links, not the workflow it teaches.
+
+### Drift check: local fork vs upstream
+
+Measure three dimensions before recommending anything — commit drift alone does not say what is missing.
+
+| Dimension | Command | What it answers |
+|---|---|---|
+| Commits | `git fetch origin` then `git rev-list --count HEAD..origin/main` + `git log origin/main..HEAD --oneline` | How far behind, how many owner commits to preserve |
+| Entry surface | grep registrations on both sides, then `comm -13 ours.txt upstream.txt` | Which capabilities are actually missing locally (new tools often land inside existing files, so diff the registration names, not the file list) |
+| Collision risk | `git status --porcelain` + `git diff --stat` | Which files an upgrade would collide with — uncommitted owner work is the thing you must not clobber |
+
+Pull the upstream copy of a file with `git show origin/main:<path>` to compare without checking anything out. Never trust a README's tool count — count registrations.
+
+### Non-destructive sync probe
+
+Never trial-merge inside the live checkout. Probe each candidate commit in a throwaway detached worktree and report CLEAN vs CONFLICT per commit before touching anything:
+
+```bash
+bash <skill>/scripts/upstream_sync_probe.sh "D:/Hermes agent/tools/<tool>" <sha> [sha ...]
+```
+
+Decision rules:
+- A whole-repo `merge`/`pull` into a fork with uncommitted work in the same files is the wrong move: it collides with owner patches and can overwrite unfinished work. Never do it.
+- Cherry-pick only the commits whose fixes reach a live path we depend on, in dependency order, once the probe says CLEAN; resolve the conflicting ones by hand.
+- A conflict almost always means the owner already patched that same file. Treat it as "two authors touched one file", not as a failed upgrade.
+- Owner work always wins: back up / commit local edits to a branch before any sync, and never discard them to make the merge clean.
+
+### Closing the loop after a sync
+1. Run the project's own test suite (`npm test` / `pytest`) — a fork's tests may have been edited locally, so a green suite is only evidence if it ran the fork's suite.
+2. Clear bytecode/caches for anything a scheduler or plugin host holds open (`find . -name '*.pyc' -delete`). Source edits are not picked up by an already-running scheduler or MCP host process.
+3. Reload the MCP server (`POST /api/hermes/mcp/reload` with the profile header) and re-run its health tool. The reported tool count is the proof that a pinned/self-updating binary did not silently swap under you.
+4. Re-run the real pipeline entry point end-to-end, not just unit tests.
+
+See `references/vendored-fork-upstream-sync.md` for the worked fingerprint/drift/probe sequence and the release-check table used to report the result.
 
 ## Related Skills
 - `diagnose` — for root-causing specific failures found during audit

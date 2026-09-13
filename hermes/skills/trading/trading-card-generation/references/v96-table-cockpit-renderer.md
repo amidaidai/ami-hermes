@@ -12,7 +12,7 @@
 
 1. `references/master-template-v68.md` 是 v9.6 权威模板。
 2. `references/tangxi-trading-cockpit.md` 是 v9.6 流程总控。
-3. `scripts/render_v8.py` 保留旧函数名 `render_v8_card()`，但实际输出 v9.6 表格驾驶舱，避免大范围调用方改动。
+3. `scripts/render_v96.py`（2026-07-07 由 render_v8.py 更名）导出 `render_v96_card()`，输出 v9.6 表格驾驶舱。
 4. `hermes/scripts/auto_card.py` 手动标准出卡不再被旧极简卡覆盖；默认返回完整 v9.6 表格卡。
 5. `tests/test_card_render_locked.py` 的 marker 从 v8.0 叙事段落更新为 v9.6 五大区块。
 
@@ -30,7 +30,7 @@
 
 ```bash
 cd "D:/Hermes agent"
-python -m py_compile scripts/render_v8.py hermes/scripts/auto_card.py scripts/pipeline_router.py
+python -m py_compile scripts/render_v96.py hermes/scripts/auto_card.py scripts/pipeline_router.py
 python -m pytest tests/ -q --tb=short --disable-warnings
 python hermes/scripts/auto_card.py BTCUSDT
 python hermes/scripts/auto_card.py XAUUSD

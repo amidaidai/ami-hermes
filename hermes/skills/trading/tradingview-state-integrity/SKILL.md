@@ -170,6 +170,31 @@ return False
 
 复现细节与代码骨架见 `references/collector-chart-ratchet-and-cache-poisoning.md`。
 
+### ⚠️ 在 Pine 编辑器里试外来脚本会顶掉生产脚本（2026-09-13 实测，本类事故代价最高）
+
+想「只看一眼某个外来指标长什么样」时，直接 `pine_set_source(新源码)` + 编辑器「Update on chart」
+会同时做两件破坏性的事：
+
+1. 编辑器**当前绑定的保存脚本被改写**（实测：`Volume Aggregated Spot & Futures` 的源码被换成试验脚本，
+   标题一度变成 `Liquidity Hunter | Aligned`，`modified` 刷新 → 账号里的生产源码被覆盖）；
+2. 图上绑在编辑器上的那个 study 实例被换成试验脚本（实测 AggVol 实例被替换）。
+
+**规矩**：
+
+- 试验外来脚本前先 `pine_new` 另存新名，或确认编辑器当前指向的不是生产脚本；
+  绝不在「当前指向生产脚本」的状态下 `pine_set_source`。
+- 事后恢复：仓库源码 + `python scripts/install_pine_source_v2.py <file.pine> "<旧名>" "<旧名>"`，
+  再回读 `pine_open` 的 `lines` 与数据窗字段验收（本仓 AggVol fixed14 = 本地 966 行 / `lines_set` 967）。
+- 挂图前后都要记 `chart_get_state` 的 `studies`（id + name）并逐条比对，不能只看「数量还是三个」。
+- `pine_list_scripts` 可能留下多余的保存脚本条目（MCP 无删除工具，需人工在编辑器删）——必须在交付说明里写明。
+
+### ⚠️ 分析租约必须同进程长驻，否则等于没持有（2026-09-13 实测）
+
+`python scripts/tv_analysis_lease.py start --minutes 8; sleep 400` 这种写法**无效**：
+租约记的是那次短命 python 的 pid，`status` 立刻报「租约持有进程已退出」，
+后台任务照切图（实测分析期间图被 XAU 同步 / BTC 续航连切两次）。
+持有必须在**同一个进程**内 start 后长驻（同 pid 睡眠），或让分析脚本自己 start 完再干活。
+
 ## 并发注意事项
 
 - 恢复逻辑只能解决单个任务的尾部状态，不能解决另一个任务随后覆盖图表的问题。
@@ -244,13 +269,14 @@ return False
 - [ ] action grid 与目标品种数量级相符
 - [ ] quote 的身份字段与目标资产相符
 - [ ] 截图为最终状态生成，`region=full`，含价格轴和CVD窗格
+- [ ] 试验脚本后：`pine_list_scripts` 无多余脚本、编辑器当前脚本已还原、图上 studies 逐条比对一致
 - [ ] 后台采集完成后最终状态仍是用户目标品种/周期
 
 ## 参考资料
 
 - **多源交叉验证别把同一数据数两次（2026-09-11 实测）**：TV 副指标 DW 的 `LSR` 与 Binance `futures/data/globalLongShortAccountRatio` 是**同一数据**（本会话两者同为 `1.6575`）。它们只能算 **1 个源**，写成「TV 说 1.66 + Binance 说 1.66 → 双源确认」是自证。真正独立的是**大户** `topLongShortPositionRatio`（本次 2.13）与**全局账户**（1.6575）—— 两者背离才是有效证据。凡是「两个源数字一模一样」，先怀疑同源，再算独立源数。
 
-- 共享状态污染的复现、恢复和验收细节见 `references/shared-chart-state-recovery.md`。
+- 共享状态污染的复现、恢复和验收细节见 `references/shared-chart-state-recovery.md`（未落地·勿引）。
 - **MCP 静默空转的行为验收、主→副总线断线机理与重接 recipe、切换源普查与实测数字**
   见 `references/mcp-silent-noop-and-bus-wiring-20260911.md`（2026-09-11，含 CDP 验证命令）。
 - 加密分析的多源管线和主副指标裁决见 `crypto-multisource-analysis`。

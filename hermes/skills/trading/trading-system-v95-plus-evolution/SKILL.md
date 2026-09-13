@@ -67,7 +67,7 @@ description: 9.5+ 交易系统进化清单：v6.3.1模型扩展(31类)、v6.9双
 - 新增 `five_model_only` 检查：确保日内执行入口限定五类固定模型。
 
 #### 模板三合一
-- 六份独立模板文件已合并为 `references/master-analysis-template.md` v3.0（唯一权威源）。
+- 六份独立模板文件已合并为 `references/master-analysis-template.md`（未落地·勿引） v3.0（唯一权威源）。
 - 层级：核心卡（必跑·5段）→ 增强层（加权15→13评分/置信公式/量比/checklist）→ 锁定格式（⚠优先/R:R≥1:2/三源一致）。
 - 旧文件（`v51-analysis-card-core.md`/`template-v97-enhancements.md`/`template-locked-final.md`）不再独立使用。
 
@@ -201,7 +201,7 @@ DD>20% → paused  (0×)
 
 ### 模板变更
 
-- 模板 `references/master-template-v68.md` → **v6.9.15**：环境段 ①-⑧（+预测市场+对抗视角）、博弈段 ①-⑦（+对抗分歧）
+- 模板 `references/master-template-v68.md`（未落地·勿引） → **v6.9.15**：环境段 ①-⑧（+预测市场+对抗视角）、博弈段 ①-⑦（+对抗分歧）
 - 头部 `⑤ 识别信号` → `⑤ 模型`（对齐模板）
 
 ### 代码模式（可复用）
@@ -287,7 +287,7 @@ XAU专属(黄金特性):  M_VWAP磁吸·关联套利·突破接受
 共用(两边都行):     VWAP反抽·VAH回收·VAL回收·POC拒绝·EMA趋势·扫流动性
 ```
 
-**回测结论**：BTC-only回测覆盖率46-69%是正常的——7个模型中有4个需要futures数据（已接入），3个更适合黄金（待XAU回测验证）。详见 `references/model-coverage-btc-xau-split.md`。
+**回测结论**：BTC-only回测覆盖率46-69%是正常的——7个模型中有4个需要futures数据（已接入），3个更适合黄金（待XAU回测验证）。详见 `references/model-coverage-btc-xau-split.md`（未落地·勿引）。
 
 ### 时段过滤接入
 
@@ -525,7 +525,7 @@ CVD · Taker · Funding
 
 ### Fix patterns 详见
 
-`trading-system-audit` skill → `references/fix-patterns-catalog.md`（9个可复用修复模式）
+`trading-system-audit` skill → `references/fix-patterns-catalog.md`（未落地·勿引）（9个可复用修复模式）
 
 ## v7.4 监控警报卡格式对齐分析卡（2026-06-19）
 
@@ -578,7 +578,7 @@ CVD · Taker · Funding
 - `d8798ba` CVD趋势线+动态回撤 · `ca0a417` Cron静默+话题统一+Discord清理
 
 ### 详见
-`references/v625-discord-cleanup-cron-optimization.md`（完整会话记录+修复清单）
+`references/v625-discord-cleanup-cron-optimization.md`（未落地·勿引）（完整会话记录+修复清单）
 
 ## v10.5 R2 多资产管线实战（2026-06-30）
 
@@ -664,7 +664,7 @@ CVD · Taker · Funding
 - `risk_constitution.py::Protections` — Freqtrade-style StoplossGuard+Cooldown+MaxDrawdown
 - `hard_stop.py::position_size(atr_value=)` — ATR夹层止损0.5×～2.5×ATR
 - `scripts/readiness_report.py` — 48h就绪报告8维检查
-- 详见 `trading-system-audit` → `references/community-strategic-audit-methodology.md`
+- 详见 `trading-system-audit` → `references/community-strategic-audit-methodology.md`（未落地·勿引）
 
 ## v9.14 预测链路收敛 + 死代码清理（2026-06-21 第八次全系统审计）
 

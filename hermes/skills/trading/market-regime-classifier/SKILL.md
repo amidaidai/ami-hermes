@@ -109,9 +109,19 @@ regime = classify_market(adx, atr_ratio, cvd_status, price_vs_ema)
 - **未联动仓位乘数（2026-06-29 社区对标发现）** — 分类后只映射策略模型，不联动仓位大小。社区公式：`仓位 = 账户风险% ÷ (ATR × 体制乘数)`，乘数从 2.0(平静)到 4.0(爆发)。建议与 `risk-management-system` 联动，在 `risk_constitution.py` 中加体制乘数查表。
 - **缺 200MA 过滤** — 社区用 Price vs 200-day MA 定牛/熊方向，当前只用 ADX。ADX 测强度不测方向。可加 `get_klines(interval="1d", limit=200)` 计算 SMA200 作为方向维度。
 
-## vNext 架构集成点（2026-07-10 决策闭环架构落地）
+## vNext 架构集成点（2026-07-10 设计）
 
-在「决策闭环为中心」的 vNext 架构中，体制分类器作为 **独立 Python 模块** `scripts/regime_classifier_v2.py` 存在，**不再依赖 skill 运行时**，实现回测/实盘共用同一套代码。
+> ⚠ **落地状态（2026-09-13 实测核实）**：以下 **9 体制模型是设计稿，尚未落地**。
+> `scripts/regime_classifier_v2.py` 与 `data/regime_multipliers.json` **都不存在**，
+> 照抄 `from regime_classifier_v2 import classify_regime` 会直接 ImportError。
+>
+> **线上真实在跑的体制分类器**是 4 分类（趋势/平衡/收敛/扩张 + 耗尽风险叠加）：
+> - `scripts/decision_regime.py::classify_decision_regime(adx=, atr_ratio=, ema_spread_atr=, vwap_crosses_20=, va_stay_ratio_20=, displacement_atr=, rvol=, …) -> DecisionRegime`
+> - 消费方：`scripts/decision_loop.py`（`from decision_regime import DecisionRegime`）
+> - 回测侧分栏与过拟合体检：`scripts/regime_backtest.py`（`classify_regime` / `split_by_regime` / `overfit_health_check`）
+> - 特征构建：`scripts/feature_builder.py`
+>
+> 下面的 9 体制映射表 **可作为演进目标**参考，但不要当成现状。
 
 ### 字段契约（FeatureVector → RegimeOutput）
 
@@ -146,9 +156,11 @@ class RegimeOutput(TypedDict):
 ### 集成方式（vNext）
 
 ```python
+# 设计稿接法（勿直接使用：regime_classifier_v2 模块不存在）
 # scripts/decision_loop.py 中
-from regime_classifier_v2 import classify_regime
-from feature_builder import build_feature_vector
+# from regime_classifier_v2 import classify_regime   # ← 会 ImportError
+# 线上实际是：from decision_regime import classify_decision_regime
+from feature_builder import build_feature_vector  # ← 这个是真的
 
 def run_decision_loop(snapshot: MarketSnapshot) -> FinalVerdict:
     fv = build_feature_vector(snapshot)

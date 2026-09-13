@@ -168,8 +168,16 @@ class BacktestRunnerV2:
 
 ### Walk-Forward 验证接入
 
+> ⚠ **落地状态（2026-09-13 实测核实）**：本节是**设计稿**——`scripts/walk_forward_v2.py`
+> 与 `walk_forward_v2()` 从未落地（照本节直接跑会失败）。仓库里真实存在的是：
+> - `scripts/backtest_runner_v2.py` —— 现行回放器（`replay_shadow_records` / `_regime` / `_snapshot_parts`）
+> - `scripts/regime_backtest.py` —— 体制分栏回测 + 过拟合体检（`split_by_regime` / `overfit_health_check` / `classify_regime` / `format_regime_report`）
+> - `scripts/_disabled/walk_forward.py` —— 早期 Walk-Forward v1.0（三段 60/20/20），**已退役**；恢复前必须先验证可跑
+>
+> 下面保留设计原貌（三段分割口径与闸门通过率分析仍然有效），落地时按上述真实模块接线。
+
 ```python
-# scripts/walk_forward_v2.py
+# 目标形态（设计稿）——当前请用 scripts/regime_backtest.py + scripts/backtest_runner_v2.py
 
 def walk_forward_v2(runner: BacktestRunnerV2, klines: list, snapshots: list, 
                     train_pct=0.6, val_pct=0.2, test_pct=0.2) -> WFResult:

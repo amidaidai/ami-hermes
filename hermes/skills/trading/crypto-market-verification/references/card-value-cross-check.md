@@ -27,16 +27,27 @@ yfinance 重算（period=3mo，日收益）结果完全不同：
 并在失效源行里点名「卡面 corr 失效 → 已用 yfinance 重算」。
 不要因为卡面给了数就直接引用 —— 一个 0.0 会连带推翻「组合风险乘数」那一整段推理。
 
-重算探针：
+重算探针（**先做索引标准化**，否则对齐后是空集）：
 
 ```python
-import yfinance as yf
-d = yf.download(['BTC-USD','GC=F','^GSPC','DX-Y.NYB','^VIX'],
-                period='3mo', interval='1d', progress=False)['Close'].dropna()
-c = d.pct_change().dropna()
-print(c.corr().round(2))
-print('20d BTC-XAU', round(c['BTC-USD'].tail(20).corr(c['GC=F'].tail(20)), 2))
+import os, pandas as pd, yfinance as yf
+os.environ['HTTP_PROXY'] = os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:7897'  # Yahoo 封直连 IP
+series = {}
+for t in ['BTC-USD', 'GC=F', '^GSPC', '^VIX']:
+    h = yf.Ticker(t).history(period='4mo', interval='1d')['Close']
+    h.index = pd.to_datetime(h.index).tz_localize(None).normalize()   # ← 关键一步
+    series[t] = h
+df = pd.DataFrame(series).dropna()
+print('共同交易日', len(df), df.index[0].date(), '→', df.index[-1].date())  # 4mo 窗口约 84 天；为 0 就是没标准化
+c = df.pct_change().dropna()
+print(c.tail(60).corr().round(3))
+print(c.tail(20).corr().round(3))
 ```
+
+**坑**：`BTC-USD` 是 7×24 且有 tz-aware 日线索引，贵金属/股指/VIX 只有工作日。把两串索引直接塞进同一个
+DataFrame 再 `dropna()` 会得到 0 行共同交易日，随后任何 `df.index[0]` 都抛
+`IndexError: index 0 is out of bounds` —— 这不是「相关性数据不足」，是索引没对齐。
+标准化后 4mo 窗口稳定拿到约 84 个共同交易日；20d 与 3mo 两个窗口各报一次。
 
 ## 2. `data/x_sentiment_context.json`：mtime 新鲜 ≠ 内容新鲜
 
@@ -57,7 +68,8 @@ print('20d BTC-XAU', round(c['BTC-USD'].tail(20).corr(c['GC=F'].tail(20)), 2))
 
 ## 3. 其他可独立重算的探针（廉价、优先用）
 
-- 恐贪：`curl -s "https://api.alternative.me/fng/?limit=3"`
+- 恐贪：`curl -s "https://api.alternative.me/fng/?limit=3"` —— 卡面「订单流」行的恐贪同样会带错值
+  （实测卡面 67，同日 live = 61，X 情绪侧同期也报 ~61）：恐贪一律用现场值，不引卡面数。
 - 盘口买卖比（卡面 Depth 行的复核）：
   ```bash
   curl -s "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20"
@@ -71,7 +83,7 @@ print('20d BTC-XAU', round(c['BTC-USD'].tail(20).corr(c['GC=F'].tail(20)), 2))
 - **耗时不是 2-3 分钟**：2026-09-13 实测 `auto_card ... --mode-auto --message "分析 BTCUSDT"`
   在 52s 内跑完 15 步（`status: exited`, `uptime_seconds: 52`）。后台 + wait 即可，不必按 3 分钟预留，
   但也别改成前台阻塞 —— 慢的时候仍会到分钟级。
-- **完成度 14/15 是正常形状**：唯一 ⚠️ 是 `Cron缓存` 行，它逐源列出
+- **完成度 11-14/15 都是正常形状**（同一命令不同时段实测 11 / 13 / 14）：最常见 ⚠️ 是 `Cron缓存` 行，它逐源列出
   `dune_cache(stale_cache)` / `deribit_options(unavailable)` / `x_sentiment(stale_cache)` /
   `qlib_factors(stale_cache)` / `liquidation_pressure(stale_cache)`。
   实测这些文件分别陈旧 60 天 / 11 天 / 60 天 —— 如实写降级，不要写成 15/15，也不要当故障去修。

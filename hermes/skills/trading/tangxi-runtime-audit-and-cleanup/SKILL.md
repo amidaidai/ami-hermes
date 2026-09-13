@@ -88,6 +88,55 @@ tags: [audit, runtime, cleanup, script-management, tangxi]
 **推论**：脚本侧想做「自动修复」时，先确认底层写操作真的有写入能力；
 否则宁可**不写**那个自愈逻辑，把检查放到 Agent 侧（每次分析前用 MCP 做）。
 
+### ⚠️ 单元测试全绿 ≠ 链路对：改到分析平面必须实跑卡面（2026-09-13 自己打脸·第五次）
+
+本轮审计收尾时报了「1130 passed 全绿」就收工；下一轮实跑一次
+`python scripts/auto_card.py BTCUSDT`，立刻露出**两个单元测试覆盖不到的真缺陷**：
+
+| 缺陷 | 为什么单测抓不到 |
+|---|---|
+| CMC 两个采集器返回实时数据却被判 `unavailable`（时间戳键名错配） | 单测只验构造逻辑，不验「契约能否从载荷里解析出时间」；扫描器只看连通性，不看状态标签与数据是否一致 |
+| 卡面把「档位设计跳过」写成「本轮未采到有效字段（来源未路由或失败）」 | 输出文案不在任何单测的断言面上 |
+
+**铁律：任何改动落在分析平面的（采集器 / 契约接线 / 渲染器 / 卡面文案），
+验收必须包含「实跑一次分析卡并逐行读输出」，不能以全量单测通过代替。**
+判据一句话：**如果你这一轮没看过卡面的实际输出行，就还没验收。**
+
+```bash
+python scripts/auto_card.py BTCUSDT 2>&1 \
+  | grep -E "恐慌贪婪|CoinGecko|Trending|宏观|市占|风险快照|完成 [0-9]/"
+```
+
+要求：管线 `完成 N/N`，且**每一行 ⚠️ 都能追到一个真实失败源**
+—— 设计性跳过不该以 ⚠️ 形态出现（见下条）。
+
+### ⚠️ 通用审计项：状态标签与数据本身不一致（两类，都靠实跑卡面才暴露）
+
+**(a) 时间戳键名错配 → 活数据被判 unavailable。**
+采集器返回的数据完整且实时，但时间戳键不在契约的 `TIMESTAMP_KEYS`
+（`updated_epoch/updated_at/timestamp/ts/time/updated`）里 → `payload_timestamp()` 返 None
+→ 判 `missing_timestamp` → 多源验证表里常年显红。
+本轮实测：CMC 用的是 `last_updated`，两个采集器一直 `unavailable`；补一个 `updated_at` 后转 `live`。
+
+> **接入任何新采集器时先问一句：它的时间戳键在 `TIMESTAMP_KEYS` 里吗？**
+> 不在就一定被判 unavailable，而且因为数据看着是好的，极难被发现。
+> 复测前**必须先踢掉磁盘缓存**（`data/api_cache.json` 里对应键），否则读回的仍是旧载荷、
+> 会以为修复没生效。回归：`tests/test_source_contract_timestamps.py`。
+
+**(b) 设计性跳过被写成疑似故障 → 噪声即不可见。**
+旧文案把「本档位按设计不跑这步」和「采集真挂了」写成同一句
+（`⚠️ 恐慌贪婪: 本轮未采到有效字段（来源未路由或失败）`）。
+这与「失败必须可见」并不矛盾 —— **让正常降级看上去像故障，本身就是一种不可见**。
+修法：沿用系统已有的设计跳过约定（`⏭️ … 当前档位跳过（需 xx 步）`），
+仅在真失败时才用 ⚠️ 并加「需查源」。
+
+```bash
+# 动作：逐个问「这行是设计跳过还是失败」
+grep -n "未采到\|not_run" scripts/auto_card.py
+```
+
+本轮四处（恐慌贪婪 / CoinGecko Top10 / Trending / 宏观）已统一，管线仍 3/3。
+
 ### 交付约定：交付物是“文件”时，最终消息必须直接给可点链接
 
 实测教训：用户问「文件呢？」—— 报告.md 写了但只放在交付目录里、正文没给可点链接，
@@ -112,8 +161,8 @@ tags: [audit, runtime, cleanup, script-management, tangxi]
 
 核验方法：`pine_open(name)` 只返回行数、`pine_list_scripts` 有缓存、**都不能当源码凭证**；
 要用 `pine_open` 打开后 `pine_get_source` 读编辑器内容，做 sha 逐字节比对。
-（详见 `tradingview-pine-indicators` 的 `references/pine-na-aggregate-poisoning-20260910.md`
-与 `tradingview-indicator-analysis` 的 `references/pine-install-via-mcp-20260910.md`。）
+（详见 `tradingview-pine-indicators` 的 `references/pine-na-aggregate-poisoning-20260910.md`（未落地·勿引）
+与 `tradingview-indicator-analysis` 的 `references/pine-install-via-mcp-20260910.md`（未落地·勿引）。）
 
 ## 审计 8 步（Runtime）
 
@@ -147,7 +196,7 @@ pip install 'pydantic-core==2.46.4' --force-reinstall
 pip install 'pydantic==2.13.4' --force-reinstall
 ```
 
-**2026-09-02 扩展：双 Python 解释器陷阱。** 上面的 `python -c ...` 用的是 shell 里 `python` 解析到的解释器（hermes venv），但 `auto_card.py:4806` 与 cron `script` runner 实际用的是 uv 管理的 `cpython-3.11-windows-x86_64-none\python.exe`（Windows 短名路径）。如果 `python` 能 import pydantic 而 `auto_card` 跑 quick 仍 `ModuleNotFoundError`，**用错了解释器**。详细诊断 + `--break-system-packages` 装包 recipe 见 `hermes-windows-maintenance` skill 的 `references/uv-cpython-3-11-short-name-2026-09-02.md`。铁律：Step 0.5 必须用 cron 实际调用的解释器（不是 shell 里的 `python`）测试，审计完必跑一次 `auto_card BTCUSDT --quick` 用**同一解释器**确认 `ModuleNotFoundError` 彻底消除。
+**2026-09-02 扩展：双 Python 解释器陷阱。** 上面的 `python -c ...` 用的是 shell 里 `python` 解析到的解释器（hermes venv），但 `auto_card.py:4806` 与 cron `script` runner 实际用的是 uv 管理的 `cpython-3.11-windows-x86_64-none\python.exe`（Windows 短名路径）。如果 `python` 能 import pydantic 而 `auto_card` 跑 quick 仍 `ModuleNotFoundError`，**用错了解释器**。详细诊断 + `--break-system-packages` 装包 recipe 见 `hermes-windows-maintenance` skill 的 `references/uv-cpython-3-11-short-name-2026-09-02.md`（未落地·勿引）。铁律：Step 0.5 必须用 cron 实际调用的解释器（不是 shell 里的 `python`）测试，审计完必跑一次 `auto_card BTCUSDT --quick` 用**同一解释器**确认 `ModuleNotFoundError` 彻底消除。
 
 ## Step 1：心跳 + 守护进程存活 (P0)
 
@@ -195,7 +244,7 @@ assert len(real_pids) <= 2, f"多实例 P0: {real_pids}"
 对每个关键任务先做“能力唯一性”检查，再做状态修复：确认当前生产权威、脚本入口和数据输出，避免重新启用旧监控/旧推送控制器造成双重拉起、重复告警或越权外发。
 
 ```bash
-# 白名单 (来自 references/critical-cron-whitelist.md)
+# 白名单 (来自 references/critical-cron-whitelist.md —— 该文件未落地，勿引)
 python -m hermes_cli.main cron list | grep -E "BTC|XAU|TV|守护|看门狗|同步|推送"
 ```
 
@@ -657,12 +706,119 @@ find scripts -name "*.pyc" -path "*/_disabled*" -delete
 | data_gatherer | 采集 Binance | 保留 |
 | telegram_reliable | TG 推送 | 保留 |
 
+### 僵尸脚本退役：三查定性 → 就地注记 → 索引登记 → 归档孤儿输出（2026-09-13 落地）
+
+「还在 `scripts/` 里、看着像生产者」的脚本要定性为僵尸，**三查必须齐备**：
+
+```bash
+# ① cron 里还在吗（注意暂停任务可能已归档到 data/cron_paused_archive_*.json）
+grep -c "<name>.py" "$LOCALAPPDATA/hermes/cron/jobs.json"          # 0 = 无 cron
+# ② 有没有消费者（零消费者才是僵尸；排除归档区）
+grep -rn "<output>.json" --include="*.py" scripts/ | grep -v "_disabled\|_archive"
+# ③ 现行替代是谁 → 登记进 dead-script-index.md
+```
+
+本案例 `x_sentiment_collector.py`：无 cron（原任务「X情绪数据刷新」2026-09-10 已归档）、
+输出 `data/x_sentiment.json` 全仓**只有它自己的写入方**、卡面实际读的是
+`x_sentiment_context.json`（由 `x_sentiment_refresh.py` 生产）→ 判定僵尸。
+
+**退役四步**（对齐本技能既有的三态纪律：不删、标注、留索引）：
+
+1. **旧输出先归档，不要 `rm`**：`mv data/<f>.json data/_archive/<f>.json.<YYYYMMDD>`。
+   `data/` 被 gitignore —— 删掉没有任何版本记录可回滚。
+2. **脚本头 docstring 加停用注记**（零行为改动）：三条证据 + 现行替代 + **真实事故模式**。
+   本例写明「过期值被当实时值，卡面用 ✅ 打印两个多月前的恐贪/市占，比没有数据更容易误导」——
+   这行注记是阻止未来有人把它重新接回 cron 的唯一屏障。改完 `py_compile` 确认。
+3. **`dead-script-index.md` 第 2 节补登一行**（文件仍在 `scripts/` 但不在 cron/进程中）。
+4. 验收：`py_compile` + 漂移扫描 `LIVE 0` + 全量回归绿。
+
+**判据：僵尸脚本的危险不是「占地方」，而是它的输出会被人当成实时值。**
+所以退役的落点永远是「切断它的输出被消费的路径」，不是「把文件挪走」。
+
 ## Step 6：实测管线 (P0)
 
 ```bash
 timeout 90 python scripts/auto_card.py BTCUSDT 2>&1 | grep -iE "GO/NO-GO|VWAP/EMA|exit"
 timeout 90 python scripts/auto_card.py XAUUSD 2>&1 | grep -iE "GO/NO-GO|VWAP/EMA|exit"
 ```
+
+## ⚠️ 通用审计项：「手动命令行成功」不等于排除了服务失败的原因（2026-09-13 自己打脸·第四次）
+
+**症状形态**：某个后台服务/MCP 工具持续失败，但你在终端里手动跑同一个调用**成功** →
+极易得出「长命进程状态 stale」这种结论，然后发现重启几次都不管用。
+
+**真实案例（financekit / Yahoo 429）**——同一个 `get_quote('AAPL')`：
+
+| 走法 | 结果 |
+|---|---|
+| 直连（清掉 `HTTP_PROXY`） | ❌ `Too Many Requests. Rate limited.` |
+| 走代理 `127.0.0.1:7897` | ✅ `332.27` |
+
+Yahoo 封的是本机**直连 IP**；而 MCP stdio 子进程的环境变量在
+`tools/mcp_tool.py::_build_safe_env()` 里被**白名单过滤**（防密钥外泄），
+网关自己那份代理传不进去 → 代理必须在 `mcp_servers.<name>.env` 块里显式写。
+上一轮「杀进程重拉即修」是**误判**：终端诊断命令自带 `HTTP_PROXY`，所谓「新起的进程」
+走的其实是代理，当然成功 —— 于是表现为「重启一次好像好了」，下一轮又坏，真凶从未被碰到。
+
+**铁律一：当「服务里失败、手动却成功」时，第一件事是比对两者的运行环境**
+**（代理 / env / cwd / 解释器 / 工作目录），不要先归因「进程内部状态陈旧」。**
+
+```python
+# 比对本进程 env 与目标进程 env（psutil 可读同用户进程的 environ）
+import psutil, os
+KEYS = ('HTTP_PROXY','HTTPS_PROXY','NO_PROXY','ALL_PROXY')
+print('本进程:', {k: os.environ.get(k) for k in KEYS if os.environ.get(k)})
+for p in psutil.process_iter(['pid','name']):
+    if 'financekit' in (p.info['name'] or '').lower():
+        e = p.environ()
+        print(p.info['pid'], {k: e.get(k) for k in KEYS if e.get(k)} or '⚠️ 无代理')
+```
+
+**铁律二：「改了配置文件」≠「运行中的进程变了」。** 网关/长命进程只在启动或显式 reload
+时读配置 —— 改完必须**两层都验**，只验配置层的守卫会在「配置对了但没生效」时误报健康：
+
+| 层 | 验什么 | 本机做法 |
+|---|---|---|
+| 配置层 | `mcp_servers.<name>.env` 有代理 | `hermes config get mcp_servers.<name>.env` |
+| 运行层 | **在跑的进程** env 真有代理 | `python scripts/maintenance/mcp_proxy_check.py` |
+
+`mcp_proxy_check.py`（2026-09-13 落地，只读）两层都查，报 `live_process_without_proxy`
+就是「配置已改、网关没重读」。
+
+**修法（2026-09-13 晚实测生效的路径，比手敲命令可复现）**：
+
+1. `POST /api/hermes/mcp/reload` —— Hermes Studio Web UI 的 MCP 桥（端口 8748）。
+   直调 `curl` 会 401（认证在 MCP 服务器侧），走 `hermes_studio_api_request` 工具即可。
+   调用会触发会话重建（本次连接被中断并 rebuild，这正是它真的执行了的证据）。
+2. 跑 `python scripts/maintenance/mcp_stale_proxy_reaper.py` 清掉 reload **之前**启动的
+   无代理实例（客户端下次用时自动重连，拿到带代理的新实例）。
+3. 复测工具层：`stock_quote('AAPL')`=332.27、`market_overview` 四指数 + VIX 15.84。
+
+（`/reload-mcp` 交互命令仍可用，但网关**没有** mcp_servers 自动重载 watcher，只有 CLI 有；
+`/reload-mcp` 比 `hermes gateway restart` 安全，后者会打断正在进行的会话。）
+
+**两个修正过的事实（前几版的表述不准确）**：
+
+- **`config.yaml` 的 `env:` 块是「无条件合入」的**（`tools/mcp_tool.py::_build_safe_env`
+  先按白名单过滤**继承环境**，最后 `env.update(user_env)` 不看白名单）。所以写进 `env:` 块
+  一定生效 —— 运行时仍然缺代理的**唯一原因就是进程比配置改动更老**，不是「被过滤掉了」。
+  诊断时别往过滤逻辑上找，先比进程启动时间与配置改动时间。
+- **不变量是「不应存在无代理实例」，不是「至少有一个带的」**：多个表面（CLI / 网关 /
+  Studio）各 spawn 自己的实例，任何调用方都可能绑到任一个。含 `financekit` 字样的进程本轮
+  曾达 **35 个**（含 uv/uvx 链条）。报到报告里的形态应是「带代理 N / 无代理 M + M 的 pid」，
+  不是逐 pid 刷屏。
+- **这是会反复出现的维护项，不是一次性修复**：只要还有比配置改动更老的客户端在跑，
+  无代理实例就会不断冒出来。交付时必须当「需周期性处理」告知用户，不能包装成已根治。
+
+**顺带记住两个工具事实（都是可用的 fix，不是「工具坏了」）**：
+
+- `patch` 工具**拒绝写 `~/.hermes/config.yaml`**（安全护栏）→ 嵌套配置只能用
+  `hermes config set mcp_servers.<name>.env.HTTP_PROXY "http://127.0.0.1:7897"`（点号路径支持嵌套）。
+- 只有**境外源** MCP 需要代理；`binance` / `jin10` / `stock-api` / `tradingview` /
+  `hermes-studio-*` 目标可直连，别顺手给它们也加上。
+
+完整取证链（4 个被排除的错误假设、白名单源码、守卫设计、边界表）见
+`references/mcp-subprocess-env-and-diagnostic-environment-trap-20260913.md`。
 
 ## 修复优先级排序
 
@@ -873,6 +1029,38 @@ done
 完整 recipe（含根目录分类算法、模块遮蔽排查、抑制规则实现）见
 `references/doc-and-skill-drift-cleanup-20260911.md`。
 
+#### ⚠️ 设计稿冒充已落地（2026-09-13 一次性扫出 3 例）
+
+技能/文档里有一类比「名字写旧了」更危险的漂移：**东西从未落地，正文却写成现行**。
+照着做就是 ImportError / FileNotFoundError。本轮实测三例（均已在会话内就地修正）：
+
+| 形态 | 例子 | 正确措辞 |
+|---|---|---|
+| 正文直接让你 import 一个从未存在的模块 | `from regime_classifier_v2 import classify_regime`；`regime_multipliers.json` 也不存在 | 标注「设计稿，未落地」+ 指向**线上真实的**同类模块（本例 `decision_regime.py`） |
+| 正文写「实施顺序/目标结构」但无免责声明 | `backtesting-suite` 的 Walk-Forward 段写成可直接跑 | 加落地状态块，列出真实存在的文件（本例 `_disabled/walk_forward.py`=已退役） |
+| 引用了从未写过的 references/scripts | `scripts/black_scholes.py`（所属技能只有 SKILL.md） | 见下行「不编造」铁律 |
+
+**判据：任何「文件名 + 让你去跑/读」的句子，落笔前 `ls` 一次；**
+区分「设计稿 / 未落地 / 已退役 / 现行」四态，不要一律写成现行。
+
+#### ⚠️ 引用了但从未落地的 reference：就地标注，**不许代写**
+
+扫出「正文引用了但文件不存在」时，**不要编一份看似合理的文档补上** ——
+那是制造假的已落地记录，比缺文件更坏（下一任读者会当真）。
+两种正解：① 改名漂移就指向真身（`render_v8.py` → `render_v96.py`）；
+② 确实没写过就**就地标注「（未落地·勿引）」**。
+
+**范围边界**：只标注**我们自己的** `trading/` 技能。社区/内置技能（如 `huashu-design`
+一次命中 18 处）不归本系统维护，改了会被 `hermes skills update` 覆盖，也不属于「我方不可用资产」。
+
+**配套扫描器**：`scripts/maintenance/annotate_missing_refs.py`（幂等，默认预演，`--apply` 才落盘）
++ `skill_broken_ref_audit.py`（**三桶分类**：真缺失 / 已标注 / 文档占位示例，并跳过 `__pycache__`）。
+分桶是必需的 —— 否则 37 处已标注的会把 15 处真缺失淹没（与「报警疲劳」同构）。
+
+**历史 reference 的变体**：`references/*-2026-07-0x.md` 里的旧脚本名**只加作废横幅、不改正文**
+（同「不改写带日期的历史记录」铁律）；但要有可执行命令的那几行可以改（如 `py_compile` 的路径），
+否则读者照拄就错。
+
 #### ⚠️ 同级陷阱：根目录的同名副本会**遮蔽**模块（静默 ImportError）
 
 清根目录时发现一个真 bug：根目录有一份 113 行的 `fetch_tv_mcp.py`（**没有任何 `get_*` 函数**），
@@ -1000,6 +1188,9 @@ assert mod.REPO != Path("D:/Hermes agent"), "测试绝不能指向真仓库"
 
 ## 参考文件
 
+- `references/availability-audit-20260913.md` — **可用性审计三面清单（skill / MCP / API）**：「连上 ≠ 能用」的三类陷阱、**七个可重跑扫描器**（`api_source_health_probe` / `mcp_proxy_check` / `mcp_stale_proxy_reaper` / `skill_dependency_audit` / `skill_body_dependency_audit` / `skill_broken_ref_audit` / `annotate_missing_refs`）、2026-09-13 修复后基线（9 个 MCP、22 个数据源、343 个技能）、financekit 代理问题的完整因果链与施修路径、`massive_aggs()` 日期硬编码这类「有数据但陈旧」陷阱、凭据占位符守卫的判据与两个易错点
+- `references/mcp-subprocess-env-and-diagnostic-environment-trap-20260913.md` — **MCP 子进程 env 白名单 + 「诊断环境错配」陷阱**：Yahoo 429 的四假设排除对照实验、`_build_safe_env()` 源码、`hermes config set` 修法、`/reload-mcp` 生效路径、两层守卫脚本设计、只有境外源需要代理的边界表
+- `references/skill-family-consolidation-20260913.md` — **技能家族重叠整理**：先查 `.hub`/`.bundled` 索引决定能不能改（改 hub 技能会被 `skills update` 覆盖）、定入口标准、同族导航注记的形状、幂等插入脚本、frontmatter 四条验收、为什么必须镜像快照
 - `references/pydantic-version-compatibility.md` — pydantic 版本冲突完整修复记录
 - `references/script-lifecycle-management-20260829.md` — 2026-08-29 脚本评估清单（保留/归档/删除）
 - `references/disabled-archive-p0-scan-2026-08-31.md` — 8/29 迁移归档区 P0 扫描方法+已知 case 全表
@@ -1012,10 +1203,10 @@ assert mod.REPO != Path("D:/Hermes agent"), "测试绝不能指向真仓库"
 - `references/skills-backup-mechanism-20260911.md` — **技能目录的唯一备份路径**：单向镜像机制、四条必知、日常 `--status` 用法、fail-closed 阈值、备份洞自检命令
 - `references/lease-quote-idle-and-panel-export-20260912.md` — 死进程租约/让路假绿/idle/报价身份/风控文字≠执行导出/哨兵退役壳/上传指标三处对账
 - `references/repo-hygiene-and-guarded-push-20260911.md` — **仓库卫生与受护栏自动化**：自动推送护栏完整实现、fail-closed 快照阈值、内容级密钥扫描 vs 文件名级屏蔽、argparse 重复选项守卫、脚本化批改的自证与回读、测试沙箱隔离、git 坑、静默/出声约定
-- `references/2026-09-02-comprehensive-audit-closure.md` — 9/2 全面审计定稿（5 P0 全清零）
-- `references/2026-09-02-analysis-tiers-v2.md` — 分析档位 v2 定稿
-- `references/dual-python-interpreter-trap-2026-09-02.md` — 双解释器冲突 P0-5
-- `references/multi-asset-analysis-contract-20260902.md` — 多资产分析契约
+- `references/2026-09-02-comprehensive-audit-closure.md`（未落地·勿引） — 9/2 全面审计定稿（5 P0 全清零）
+- `references/2026-09-02-analysis-tiers-v2.md`（未落地·勿引） — 分析档位 v2 定稿
+- `references/dual-python-interpreter-trap-2026-09-02.md`（未落地·勿引） — 双解释器冲突 P0-5
+- `references/multi-asset-analysis-contract-20260902.md`（未落地·勿引） — 多资产分析契约
 
 ## 多渠道与模板审计（2026-09-12 新增维度）
 

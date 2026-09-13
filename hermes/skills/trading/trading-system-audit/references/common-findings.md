@@ -144,7 +144,11 @@ Catalog of previously observed issues. Update after each audit session.
 - **Fix**: `df = df.copy()` before feeding to SmartMoneyConcepts
 - **Data requirement**: ≥50 bars for structure detection (5-bar test always 0 results)
 
-### Firecrawl 搜索欠费（重复·未修复）
+### Firecrawl 搜索欠费（**已恢复，2026-09-13 复测**）
+
+> ⚠ 本节记录的是 2026-06 的状态。**2026-09-13 复测 Firecrawl `scrape` 返回 `success:true`，
+> 已恢复可用**。下方「修复方案（用 Brave/Exa 替代）」仅在它再次失效时才需要。
+
 - **Symptom**: `web_search` returns "Payment Required: Insufficient credits"
 - **Root cause**: Firecrawl API credits exhausted (新key也欠费)
 - **Impact**: web_search 内置 Firecrawl 后端不可用

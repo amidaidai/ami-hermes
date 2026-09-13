@@ -46,7 +46,7 @@ description: Generate BTC/XAU trading analysis cards (compact + full dual output
 - **禁止** `━━━━━━━━━━` 分隔线（用户明确要求）
 - **禁止** `—— 你来选方向 ——` 结尾（用户明确要求）
 - TV DMI 决策表实时注入 ③量价分析段，不再显示"需TV确认"占位符
-- 渲染引擎：`scripts/render_v8.py`，调用 `render_v8_card()`
+- 渲染引擎：`scripts/render_v96.py`，调用 `render_v96_card()`（原 render_v8.py/render_v8_card 已于 2026-07-07 更名）
 
 ## Chinese Localization Rules (Confirmed 2026-06-22)
 
@@ -102,9 +102,9 @@ All must return zero matches. If any appear, fix the source and regenerate.
 ```
 正文每个编号段下面再接真Markdown表格。普通 assistant 回复不要复制完整表格正文，只回 `MEDIA` 截图 + 一句裁决 + `rich_sent` 回执；否则Telegram会把复制版降级成项目符号/假表格并造成重复。
 
-渲染层落地记录见 `references/v96-table-cockpit-renderer.md`。关键经验：改模板不等于改渲染，必须同时跑 `python hermes/scripts/auto_card.py BTCUSDT` 和 `python hermes/scripts/auto_card.py XAUUSD`，并检查五大 marker 全存在。允许保留旧函数名（如 `render_v8_card()`）但内部输出 v9.6，以降低调用方迁移风险。
+渲染层落地记录见 `references/v96-table-cockpit-renderer.md`。关键经验：改模板不等于改渲染，必须同时跑 `python hermes/scripts/auto_card.py BTCUSDT` 和 `python hermes/scripts/auto_card.py XAUUSD`，并检查五大 marker 全存在。函数名已随文件一并更名（`render_v96_card()`），`auto_card.py` 走 `from render_v96 import render_v96_card`。
 
-**全周期BTC完整卡（手动"分析BTC"场景）**：完整五周期+D的RichMarkdown卡模板与15步审计已落到 `tradingview-execution-card` skill 的 `references/btc-full-card-template.md`，由该 skill 管辖。本 skill 保留 v9.6 五大表格区块权威；两者首屏"一、二、…①-⑥"版式须保持一致（用户2026-07-06确认）。
+**全周期BTC完整卡（手动"分析BTC"场景）**：完整五周期+D的RichMarkdown卡模板与15步审计已落到 `tradingview-execution-card` skill 的 `references/btc-full-card-template.md`（未落地·勿引），由该 skill 管辖。本 skill 保留 v9.6 五大表格区块权威；两者首屏"一、二、…①-⑥"版式须保持一致（用户2026-07-06确认）。
 
 **v9.6 GO/NO-GO 下单闸门（2026-06-29 新增）**：每张完整卡尾部自动追加七问硬闸门（数据新鲜度·TV现场·R:R·事件窗口·Protections·样本WFO·组合暴露）。任一红灯 → 卡片裁决 `✗ NO-GO`。闸门模块 `scripts/go_nogo_gate.py`，由 `auto_card.py` 在 `validate_card_rules()` 后自动调用。
 
@@ -256,7 +256,7 @@ VWAP/EMA/CVD由 `scripts/vwap_ema_cvd_engine.py` 本地计算（不依赖TV连�
 | **Full analysis card** (deep analysis) | **v8.0 叙事5段**·结构/关键位/量价/方案/评分 | 22-28 | When daemon score ≥8, or user asks for analysis |
 | **Standard alert card** (Telegram push) | v4.2 压缩·①②③编号·≤38字/行 | 8-10 | Legacy — avoid for new development |
 
-**当前canonical格式由master模板+实际渲染器共同定义。** v8.0仅是历史叙事格式；出卡前读取 `references/master-template-v68.md`，并以当前 `render_v96.py`/`render_tv_card.py` 实测输出为准。
+**当前canonical格式由master模板+实际渲染器共同定义。** v8.0仅是历史叙事格式；出卡前读取 `references/master-template-v68.md`（未落地·勿引），并以当前 `render_v96.py`/`render_tv_card.py` 实测输出为准。
 
 ## Format Iron Law (v4.2 — Telegram alert card, legacy)
 
@@ -481,7 +481,7 @@ python -m pytest tests/ -q --tb=short -k \"not test_watchdog_ratelimit\"
 18. **渲染用display_name不用name** — `monitor_levels.json`每层有`name`(内部ID如R1_reclaim_accept)和`display_name`(人读中文如阻1·近端收复)。所有渲染路径必须优先display_name。v7.5已全量修复(479d55f)。
 19. **双层前缀Bug** — 数据源(model_dir_text)已含"引擎判"时渲染器不得再加"引擎"→产生"引擎引擎"。直接使用数据源值即可。
 20. **N/A → 中文兜底** — `_sr_level/_chase_ok/_exec_line`等工具函数返回N/A→必须中文化(待确认/—)。用户看到的必须是中文。
-21. **模板多版本统一** — `references/master-template-v68.md`、`card-render-rules.md`、`monitor-template.md` 三份模板的版本号（文件头）必须一致。改一个时必须同步另外两个。版本号不一致会导致出卡路线冲突。进一步以 `pipeline_router` 和 card schema 的机器版本为准，历史技能中的步数/版本号不具备运行时证明力。
+21. **模板多版本统一** — `references/master-template-v68.md`（未落地·勿引）、`card-render-rules.md`、`monitor-template.md` 三份模板的版本号（文件头）必须一致。改一个时必须同步另外两个。版本号不一致会导致出卡路线冲突。进一步以 `pipeline_router` 和 card schema 的机器版本为准，历史技能中的步数/版本号不具备运行时证明力。
 22. **禁止 `━━━` 分隔线** — 用户2026-06-22明确反馈"不要这些"。v8.0叙事卡全删分隔线，用空行自然分段。
 23. **禁止 `—— 你来选方向 ——`** — 用户2026-06-22明确反馈"这个不要"。已从auto_card(2处)和行情守望(1处)全删。
 24. **TV数据必须实时注入，不可显示"需TV确认"** — 用户2026-06-22严厉反馈："我就是要你结合我的TV来一起分析，你居然要我自己看"。每次出卡前必须尝试读取TV MCP数据（DMI表+指标值），无法获取时才标注"TV暂不可用"。
@@ -496,11 +496,11 @@ python -m pytest tests/ -q --tb=short -k \"not test_watchdog_ratelimit\"
     | **完整版** | `render_v96_card()` (`scripts/render_v96.py`) | 2表+emoji叙事，约28-35行 | `auto_card.py --push` 手动调 |
     | **快速版** | `_render_push()` (`scripts/render_tv_card.py`) | 1表+3行，约10-11行 | cron 自动推 |
 
-    同步改动：`references/master-template-v68.md` 升级为 v9.7；`auto_card.py` 推送段从 `hermes_cli.main send` 切到 `telegram_reliable.send_telegram_reliable(parse_mode="RichMarkdown")`；截图仍先用 gateway MEDIA 发送，卡片走 RichMarkdown 真表格。实测 `BTCUSDT` 管线 10/10、`XAUUSD` 管线 7/8（TV降级预期），TG 回执 `True rich_sent`。
+    同步改动：`references/master-template-v68.md`（未落地·勿引） 升级为 v9.7；`auto_card.py` 推送段从 `hermes_cli.main send` 切到 `telegram_reliable.send_telegram_reliable(parse_mode="RichMarkdown")`；截图仍先用 gateway MEDIA 发送，卡片走 RichMarkdown 真表格。实测 `BTCUSDT` 管线 10/10、`XAUUSD` 管线 7/8（TV降级预期），TG 回执 `True rich_sent`。
 
 30. **唯一主推裁决，不要菜单式 A/B/X 平铺（2026-07-08 用户纠正·已落地 v9.8）** — 用户明确指出“裁决应该是最最适合的方案，最推荐1，前面一堆方案很有问题”。执行表必须改为 `| 优先级 | 条件/触发价 | 动作 | R:R |`：第一行 `⭐主推 {方向}` 或 `🔵主推 等` 或 `⚠️主推 禁做`，第二行 `🔁备选` 只作为主推失效后的路径，第三行 `⚠️禁止`。禁止把 A/B/X 渲染成同等可选菜单。已同步 `render_v96.py`、`render_tv_card.py`、`master-template-v68.md` 和相关测试；实测 `19 passed` + BTC/XAU `auto_card.py` exit 0。
 
-31. **v9.9 手机驾驶舱不能压掉能力（2026-07-08 用户纠正·已落地）** — 用户上传主/副指标源码后明确指出：不能为了好看丢掉主指标/副指标能力、结构位前置、多周期定位。新版权威模板 `references/master-template-v68.md` 升级为 v9.9：首屏必须 `【现在】{上方结构} · 现价 · {下方结构}`；完整卡固定 4表：`①周期体温/多周期定位`、`②关键位/结构关键位`、`③多源验证/双指标`、`④最推荐方案`；快速卡也必须含结构位夹层、D/4h/1h/15m/5m体温、SVP行、HALDRO行和订单流行。`render_v96.py` 与 `render_tv_card.py` 已同步，`auto_card.py` 将 klines + dual_indicator 透传给快速卡；实测 `19 passed` + BTC/XAU `auto_card.py` exit 0。
+31. **v9.9 手机驾驶舱不能压掉能力（2026-07-08 用户纠正·已落地）** — 用户上传主/副指标源码后明确指出：不能为了好看丢掉主指标/副指标能力、结构位前置、多周期定位。新版权威模板 `references/master-template-v68.md`（未落地·勿引） 升级为 v9.9：首屏必须 `【现在】{上方结构} · 现价 · {下方结构}`；完整卡固定 4表：`①周期体温/多周期定位`、`②关键位/结构关键位`、`③多源验证/双指标`、`④最推荐方案`；快速卡也必须含结构位夹层、D/4h/1h/15m/5m体温、SVP行、HALDRO行和订单流行。`render_v96.py` 与 `render_tv_card.py` 已同步，`auto_card.py` 将 klines + dual_indicator 透传给快速卡；实测 `19 passed` + BTC/XAU `auto_card.py` exit 0。
 
 32. **`auto_card.py` 推送段代码位置（2026-07-08 确认）** — `auto_card.py` Step 6 是 TG 推送段，必须位于主流程下，不能缩进到 `if is_compact:` 里；v9.9快速卡通常超过10行，若 push 被 compact 条件门控，`--push` 会静默不发。卡片必须调用 `telegram_reliable.send_telegram_reliable(parse_mode='RichMarkdown')`，并以 `rich_sent` 回执作为上线验证；截图可先走 `hermes_cli.main send MEDIA:`。Cron no-agent 模式的脚本（`btc_ref_levels_sync.py`、`monitor/btc_watchdog.py` 等）不能依赖 `hermes send`，必须自己调用 `telegram_reliable.send_telegram_reliable()` 并设 `deliver: local` 以阻止纯文本投递。
 
@@ -559,4 +559,4 @@ python -m pytest tests/ -q --tb=short -k \"not test_watchdog_ratelimit\"
 
     唯一主推行现在有**三种形态**：`⭐主推 多/空`（GO-A 且几何有效）、`⭐主推 等待`（WAIT，带候选时写「【人工候选，未授权】」）、`⭐主推 禁做`（NO-GO/X）。全卡只能有一条 `⭐主推`。
 
-    **授权标签判据**（别记错）：主指标「风控」行只有 **3 个标签**（`风控` / `风控·观察` / `风控·未授权`），`禁做·不出价` 是 `setupX` 时的**行值**而非标签；只有字面 `风控` 是授权出口。详见 `tradingview-indicator-analysis` -> `references/indicator-contract-drift-guard.md`。
+    **授权标签判据**（别记错）：主指标「风控」行只有 **3 个标签**（`风控` / `风控·观察` / `风控·未授权`），`禁做·不出价` 是 `setupX` 时的**行值**而非标签；只有字面 `风控` 是授权出口。详见 `tradingview-indicator-analysis` -> `references/indicator-contract-drift-guard.md`（未落地·勿引）。

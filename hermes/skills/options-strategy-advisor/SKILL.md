@@ -33,22 +33,30 @@ This skill provides comprehensive options strategy analysis and education using 
 
 **Installation:**
 ```bash
+# 本机已就绪（Hermes venv 内置 numpy/scipy/requests）；如需重建：
 pip install numpy scipy requests
 ```
 
 **Quick Start Examples:**
 ```bash
-# Basic call option pricing (no API key needed)
+# 最简（无需 API key）
 python3 scripts/black_scholes.py
 
-# With FMP API key for real-time data
-python3 scripts/black_scholes.py --ticker AAPL --api-key $FMP_API_KEY
+# 用 FMP 实时价（key 缺省读 secrets/fmp_api_key.txt）
+python3 scripts/black_scholes.py --ticker AAPL --strike 340 --days 45 --volatility 28
 
-# Custom option parameters
+# 手工参数
 python3 scripts/black_scholes.py --stock-price 180 --strike 185 --days 30 --volatility 0.25
 
-# Put option analysis
+# put
 python3 scripts/black_scholes.py --stock-price 180 --strike 175 --days 30 --option-type put
+
+# 多腿策略 P/L + payoff 图
+python3 scripts/strategy_analyzer.py --stock-price 180 --volatility 0.25 --days 30 \
+    --leg "buy 1 call 180" --leg "sell 1 call 185"
+
+# 财报期策略对比
+python3 scripts/earnings_strategy.py --ticker AAPL --iv 0.30
 ```
 
 ## When to Use This Skill
@@ -967,15 +975,21 @@ Workflow:
 ## Resources
 
 **References:**
-- `references/black_scholes_methodology.md` - Black-Scholes formulas, Greeks, and interpretation
+- `references/black_scholes_methodology.md` - Black-Scholes 公式、Greeks 口径与解读、IV 反解、局限与 IV crush（✅ 已落地）
 - `references/strategies_guide.md` - All 17+ strategies explained (future)
 - `references/greeks_explained.md` - Greeks deep dive (future)
 - `references/volatility_guide.md` - HV vs IV, when to trade (future)
 
-**Scripts:**
-- `scripts/black_scholes.py` - Pricing engine and Greeks
-- `scripts/strategy_analyzer.py` - Strategy simulation
-- `scripts/earnings_strategy.py` - Earnings-specific analysis
+**Scripts（✅ 2026-09-13 已落地，均在 `scripts/` 下可直接跑）:**
+- `scripts/black_scholes.py` - 定价引擎 + Greeks + IV 反解
+- `scripts/strategy_analyzer.py` - 多腿策略 P/L 模拟 + payoff 图 + 持仓 Greeks
+- `scripts/earnings_strategy.py` - 财报期策略对比（跨式/宽跨式/铁鹰）+ HV 判读
+
+**运行环境（2026-09-13 实测）:**
+- `python3` 指向 Hermes venv（`venv/Scripts/python3.exe`），numpy 2.4.3 / scipy 1.17.1 / requests 2.33.0 均可用
+- FMP key 解析顺序：`--api-key` → `FMP_API_KEY` 环境变量 → `D:/Hermes agent/hermes/secrets/fmp_api_key.txt`
+- FMP 取数先直连、失败退本地代理 `127.0.0.1:7897`（可用 `TANGXI_PROXY` 覆盖）
+- **端点陷阱**：算财报日时必须用 `/stable/earnings?symbol=X`；`/stable/earnings-calendar?symbol=X` **会忽略 symbol** 返回全市场，据此推算 DTE 会得到完全无关的日期（已被脚本硬拦截）
 
 **External Resources:**
 - Options Playbook: https://www.optionsplaybook.com/

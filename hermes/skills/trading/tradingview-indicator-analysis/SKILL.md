@@ -67,7 +67,7 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 > 「唯一总线」`input.source` → 必须重接并以「主副两行 S-code 一致」验收。
 
 > 🔎 **改指标、写断言、或核对别人交来的审计报告时**，读 `pine-indicator-audit` 技能的
-> `references/pine-na-semantics-and-external-audit-verification-20260910.md`：
+> `references/pine-na-semantics-and-external-audit-verification-20260910.md`（未落地·勿引）：
 > ① `array.sum` 只在**全 na** 时才返 na（有非 na 元素则忽略 na）—— 所以聚合类求和要
 > **逐元素 `nz`**，不能只在最外层套 `nz()`（会静默吞掉其他有效源）；
 > ② **三态 plot 落到设计外的值 ⇒ 先去找 na**（`X and A>0` / `X and A<=0` 在 X 为假时两个都假）；
@@ -101,6 +101,8 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 
 切换品种/周期后，主指标（SVP行动格/study values）需 15-30s 才重算渲染——拉取 Pine tables/指标前必须等 15-30s（可先读 OHLCV/截图，指标随后再读）。OHLCV/图表状态切周期 1-2s 即可用（xau_tv_sync 只读 OHLCV 故 3s 等待足够，勿改）。
 
+**主格解析铁律（P0）**：`data_get_pine_tables` 的 `studies[].tables[].rows` 是 `"行名 | 值"` **字符串数组**，不是 `{cells:[…]}`/`{label,value}` 对象。按对象取值会**静默返回空表、不报错**，卡面就会出现「主格(空)/副格(空)」——行动格是唯一文字真理源，空了等于整卡失去依据。解析用 `partition("|")`，并自检主格 13 行（位置/结论/方向/路径/风控/CVD/OI/协同/结构/磁吸↑/磁吸↓/前位/现位）、副格 6 行（信号/结论/流向/持仓/量能/操作）；行数不足先怀疑解析，不要写「指标未渲染」。已验证实现与一键五层采集命令见 `references/tv-five-tf-scan-toolkit.md`。
+
 **Binance MCP 直接工具调用铁律（2026-08-31 · 实战教训）**
 
 `mcp__binance__*` 系列工具（Binance MCP）在 tool_search 目录里是"deferred"（延迟加载），但它们实际上是**直接可调用的工具**，不是 deferred 类型。
@@ -110,6 +112,8 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 - **适用工具**：`mcp__binance__get_price`、`mcp__binance__get_funding_rate_history`、`mcp__binance__get_open_interest_history`、`mcp__binance__get_long_short_ratio`、`mcp__binance__get_taker_long_short_ratio` 等全部 Binance MCP 工具
 - **同时备用 curl**：`curl -s "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"` 等 REST 端点作为兜底，TV MCP 优先、Binance MCP 次之、curl 最终兜底
 - **本规则不影响 TV MCP**（TV MCP 工具正常走 tool_search 路径）
+- **一次 `tool_call` 只能带一个本地工具条目**：把 `chart_get_state` + `data_get_pine_tables` 之类批量塞进同一次 `tool_call` 会被直接拒绝（`Local tools require one entry per tool_call; mixed and multi-local batches are not supported`），整批不执行、白跑一轮。
+- **多周期读取不要逐个发 MCP 调用**（5 周期 × 4~7 类读取 = 20+ 轮往返）。改用 `python scripts/tv_full_scan.py <SYMBOL>` 一次终端调用取回 1D/4h/1h/15m/5m 全五层（study_values + 主/副 pine_tables + OHLCV summary + labels/lines/boxes）并落盘 `outputs/tv_scan_*.json`；衍生品方向票用 `python scripts/binance_deriv_bundle.py <SYMBOL>`；主周期复核与截图用 `python scripts/tv_shot.py <SYMBOL> 15`。解析契约（`pine_tables.rows` 是 `"行名 | 值"` 字符串数组，按对象解析会静默返回空表，需自检主格 13 行）、S-code 总线复读规则、数据面注意见 `references/tv-five-tf-scan-toolkit.md`。
 
 **skill 内容压缩恢复（2026-08-31 · 必须遵守）**
 
@@ -138,7 +142,7 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 - **采集完整性 vs 输出呈现性分离（2026-08-29 用户两次纠正「太繁琐太冗长」）**：含「分析」关键词 = **采集**走完整10步（五周期全采+Binance+宏观+情绪，不可跳步），但**输出呈现**默认收敛为**手机三表速读版**（①方向速览表→②关键位矩阵表→③一句触发/裁决），完整 8 表只在用户明确说「完整/深度/出完整卡」时才出。用户已两次纠正（「分析一次太繁琐」「太繁琐要简洁」），输出冗长= P0 格式错误。手机端一屏读完：现价方向裁决 + 五周期方向速览 + 关键位 + 一句触发。增量信息（数据明细/矛盾点/评分扣分）压到一句话或省略，不进表。
 - `MEDIA` 新截图首行；禁止无截图回复。
 - **Telegram RichMarkdown 真表格铁律（2026-07-03用户确认）**：用户要的是 Telegram 客户端内**直接渲染出来的表格**，不是图片表格、代码块伪表、普通管道符文字，也不是 bullet 列表。Telegram 正式推送必须通过 Bot API 10.1 `sendRichMessage` + `rich_message.markdown`；**表格前禁止任何 standalone 标题行**（不只 `表1 · xxx`，连 `**粗体**` 标题、`## 章节`、`<h3>` 都会打断表格块，使 Telegram 客户端把整段渲染成段落文本而非表格——2026-08-29 用户连续两次「不是表格」即此根因），必须让每张表直接从 `| 表头 |` 顶格开始，表格之间用空行分隔；标题语义交给表头列名承载，不要独立标题行。非完整卡/告警/cron 推送固定为首行结论 + 恰好3张≤3列表；完整驾驶舱如需发 Telegram，也优先压缩成手机三表版。若仍显示为段落/bullet，检查回执 `rich_message.blocks[type=table]`，并参考 `references/telegram-rich-message-tables.md`。
-- **真表格只经 push_tg_rich 渲染，agent 自己 final response 会变成 bullet 列表（2026-08-29 用户纠正「不是表格」）**：agent 的最终回复走 Hermes 自动 Markdown 投递，`| 管道表 |` 会被 Telegram 渲染成 bullet/列表条目，**不是**真表格。要让 Telegram 客户端渲染成原生表格块，必须用 `scripts/telegram_reliable.py` 的 `push_tg_rich(target, text)`（内部走 Bot API 10.1 `sendRichMessage` + `rich_message.markdown`）推到目标话题，回执 `rich_sent` 才算成功。分析/追踪卡的**表格内容一律走 push_tg_rich**，agent 回复只放 MEDIA 截图 + 一句结论。
+- **真表格渲染路径**：默认三表速读卡**直接内联**（网关已支持管道表真渲染：`| 表头 |` 顶格、表间空行）；卡面变大或用户说「不是表格」时改走 `push_tg_rich(target, text)`（见 `scripts/telegram_reliable.py`，回执 `rich_sent` + `rich_message.blocks[type=table]` 齐全才算成功），此时回复只放 MEDIA + 一句结论。档位/审计/引擎坑见 `references/analysis-tier-and-audit-pitfalls.md`。
 - **推了真表格后对话回复不要再重贴表（2026-08-29 用户「这个不要再发一次，前面表格不是有了吗？」）**：一旦 `push_tg_rich` 已把表格推到 386/385 话题，agent 的 final response 只给**一句话结论**（如「偏空未变性，反抽77,752回落放量→空，止损78,022目标76,853/3.1R」），不得再把整张表复制一遍进聊天回复——那不是「发到群里」，是刷屏。
 - 固定表序：驾驶舱流程 → 多周期定位 → 关键位矩阵 → 多源交叉验证 → 矛盾点 → 方案 → 评分/裁决 → 完整性备注。
 - 多周期定位表固定列：`周期 | SVP | 副指标 | Composite | 价 vs VWAP`。
@@ -225,7 +229,7 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 - 推送用 v4.2，手动分析用**驾驶舱表格卡**，互不冲突
 - **禁止输出**旧 V5.1 的80行长卡格式
 - **禁止输出** v8.0 叙事5段作为手动分析卡（2026-07-02 起已被驾驶舱表格卡取代）
-- **禁止** `references/master-analysis-template.md`（已废弃并删除）
+- **禁止** `references/master-analysis-template.md`（未落地·勿引）（已废弃并删除）
 - 若用户说「格式不对」，先确认场景再判断用哪个模板
 - 出卡前必须 `cat` 对应模板文件确认当前格式
 - 权威链审计与已修清单（周期写法统一 ✅ / pipeline_router docstring ✅ / 死步骤标注 ✅）见 `references/template-authority-audit-20260829.md`
@@ -393,7 +397,7 @@ v6.9.8(2026-06-21): ③现价期货/现货区分·_price_label()·Binance期货�
 - Exa API 备用 (1000次/月·Key在 secrets/exa_api_key.txt)
 - DDGS 最后 (不稳定·经常返回0结果)
 - 社区数据兜底：CoinGecko情绪 + CMC恐慌贪婪 + alt.me
-- Firecrawl 不可用（欠费）
+- Firecrawl 可用（2026-09-13 复测 `scrape` 成功；此前「欠费」记录已过期）
 - 金十快讯辅助机构观点
 
 详细数据源矩阵见 `references/data-pipeline-v68.md`
@@ -1074,7 +1078,7 @@ no-agent cron 的脚本解析为 `{workdir}/scripts/{script_path}`。脚本不�
   8. 输出用中文多周期决策卡：首行给明确偏多/偏空/观望，高周期给方向/结构，低周期给实时触发，结合右上角行动格原文；不要让用户“自己看TV确认”。
   9. **BTC默认手动卡优先用紧凑决策卡**：用户只说“分析BTC / [Tang Xi] 分析BTC”时，除非明确要求完整版，输出应先给一屏内方向判断 + 关键位 + 反抽/破位触发，不展开80行长报告；模板参考 `references/btc-analysis-compact-template.md`。仍必须先真实读取 4h/1h/15m/5m TV 数据并附 full 截图，不能用紧凑格式替代数据采集。
 
-- **⚠ Pine 指标多社区全面审计工作流（2026-06-25新增）**：当用户说"全面审计/联网社区对照/适应多社区多品种吗"时，必须执行跨平台并行搜索（TradingView·Reddit·GitHub·Medium·ICT社区），按8维度审计（结构·ICT·CVD·多市场·DMI·行动面板·性能·设置），输出✅/⚠️/🟢三级评分+多品种适应性矩阵。完整模板和工作流见 `tradingview-pine-indicators` 技能的 `references/multi-community-cross-audit-template.md`。
+- **⚠ Pine 指标多社区全面审计工作流（2026-06-25新增）**：当用户说"全面审计/联网社区对照/适应多社区多品种吗"时，必须执行跨平台并行搜索（TradingView·Reddit·GitHub·Medium·ICT社区），按8维度审计（结构·ICT·CVD·多市场·DMI·行动面板·性能·设置），输出✅/⚠️/🟢三级评分+多品种适应性矩阵。完整模板和工作流见 `tradingview-pine-indicators` 技能的 `references/multi-community-cross-audit-template.md`（未落地·勿引）。
 
 - **⚠ TV Pine 指标 DST/时区验证清单（2026-06-25新增）**：读取用户 Pine 源码的 ICT 会话时区时，必须验证：(1) `Asia/Shanghai`=UTC+8全年无夏令时，亚洲盘时间固定；(2) `Europe/London`/`America/New_York`=TradingView的`time()`通过IANA时区库自动处理DST，无需手动干预；(3) `f_cutoff_ms` 是否用 `timenow`（而非 `time`）避免实时K线cutoff偏移；(4) 会话重叠tooltip是否正确标注夏/冬令时转换。常见错误：以为"国外时区要手动处理夏令时"而做错误调整——实际上 `time()` 已内置处理。
 - **⚠ Patch工具f-string转义异常（2026-06-21 已验证）**：`patch` 在 Python f-string 含双引号时可能产生转义异常(如 `\"` 变成 `\\\\"` 或 `\\\"`)，且缩进可能错位。**安全方案**：用 `execute_code` (Python直接 read_file + str.replace + write_file)替代。也用 `read_file` 读→Python正则清理→`write_file` 回写修复被patch污染的文件。详见 `references/tv-dmi-implementation-pattern.md`。
@@ -1107,11 +1111,11 @@ no-agent cron 的脚本解析为 `{workdir}/scripts/{script_path}`。脚本不�
 - **X情绪验证规则**：X情绪如与结构矛盾⚠ → 博弈段必须标明「方向验证：X偏空但结构偏多·等待确认」。X情绪只作验证/挑战，不覆盖结构方向。
 - **Polymarket API搜索不可靠·用浏览器实查**：Gamma API标签/搜索返回垃圾。必须 `browser_navigate("https://polymarket.com/search?query=bitcoin")` 浏览器实查。Fed决议市场 `$152M`成交量·定价 `99.8%`不变。
 - **恐慌贪婪指数走REST API**：`https://api.alternative.me/fng/` 免费无认证·已集成到 `data_gatherer.py`。
-- **分层分析策略**：4h收线定方向→缓存继承·1h继承4h→15m/5m实时。见 `references/tiered-analysis-strategy.md`。
+- **分层分析策略**：4h收线定方向→缓存继承·1h继承4h→15m/5m实时。见 `references/tiered-analysis-strategy.md`（未落地·勿引）。
 - Windows 桌面运行时下裸 `hermes send` 可能报 uv trampoline canonicalize；脚本内用 `sys.executable -m hermes_cli.main send` 更稳
 - **叠加不替代**：棠溪的 V5.1 模板是基础框架。任何新功能（监控层、数据层、治理层）都必须在此之上叠加，不能替代、覆盖、或重命名原模板核心内容。保持 `v51-analysis-card-core.md` 为独立纯净文件，融合版通过引用指向它。
 - 监控脚本必须加单实例锁，避免多进程同时触发重复 Telegram 告警
-- **统一模板（master-analysis-template.md v3.0 · 2026-06-17 锁定）**：三套模板已合并为单一权威源 `references/master-analysis-template.md`。旧模板（`v51-analysis-card-core.md`、`template-v97-enhancements.md`、`template-locked-final.md`）不再独立使用，所有分析卡严格按 master v3.0 输出。层级：核心卡（必跑·5段）→ 增强层（加权15→13评分/置信公式/量价矩阵/模型checklist）→ 锁定格式（优先预案⚠标注/三源一致/R:R≥1:2）。五类固定模型为日内执行入口，31类扩展只作博弈段旁证。禁止再直接引用旧模板文件名。
+- **统一模板（master-analysis-template.md v3.0 · 2026-06-17 锁定）**：三套模板已合并为单一权威源 `references/master-analysis-template.md`（未落地·勿引）。旧模板（`v51-analysis-card-core.md`、`template-v97-enhancements.md`、`template-locked-final.md`）不再独立使用，所有分析卡严格按 master v3.0 输出。层级：核心卡（必跑·5段）→ 增强层（加权15→13评分/置信公式/量价矩阵/模型checklist）→ 锁定格式（优先预案⚠标注/三源一致/R:R≥1:2）。五类固定模型为日内执行入口，31类扩展只作博弈段旁证。禁止再直接引用旧模板文件名。
 - **Grok x_search + 情绪管道（2026-06-17 已框架就绪）**：`data_gatherer.py` v3.0 已包含 X情绪占位字段 + Polymarket REST 查询 + CoinDesk RSS 钩子 + XAU 三源价格。x_search 情绪需 agent 上下文执行（cron 脚本无法直接调 agent tool），所以 `data_gatherer` 在 `sentiment.x` 字段标记 `status: pending`，提示 agent 在分析时补跑 `x_search("BTC sentiment crypto today")` + `x_search("XAUUSD gold sentiment")`。参考 `references/data-pipeline-v3.md`。Polymarket 已通过 Gamma REST API 自动拉取。CoinDesk RSS 格式非 JSON，需通过 web_extract 在 agent 上下文补取。
 
 - **R:R 硬底线 < 1:2 → X禁做·立即中止**：`model_checklist.py` v1.1 已升级。`COMMON_CHECKS[0]` 新增 `rr_hard` 致命检查（`fatal: True`），`run_checklist()` 遇 R:R 不合格时立即 `return {"verdict": "X禁做 · R:R≥1:2硬底线·不合格→X禁做"}`，不进入模型特定检查。CVD C 级新增 `cvd_quality` 检查，不合格视作"自动降权半仓"。新增 `five_model_only` 检查确保日内执行入口限定五类固定模型。
@@ -1152,7 +1156,7 @@ no-agent cron 的脚本解析为 `{workdir}/scripts/{script_path}`。脚本不�
 - **禁止 `—— 你来选方向 ——`** — 已从 auto_card(2处)+行情守望(1处)全删。
 - **TV DMI实时注入** — ③量价分析下方嵌入📺 TV DMI行(等级·处理·背景·CVD·执行·风控)。数据从TradingView MCP实时读取，不可显示"需TV确认"占位符。用户严厉纠正："我就是要你结合我的TV来一起分析，你居然要我自己看"。
 - **5段结构** — ①今日结构(K线走势)→②关键位(R1/R2/S1/S2/S3)→③量价分析(CVD/Taker/Funding+TV DMI)→④交易方案(A/B双轨)→⑤综合评分(6项检查)
-- **渲染引擎** — `scripts/render_v8.py::render_v8_card()`，`auto_card.py` 通过 `from render_v8 import render_v8_card` 调用。
+- **渲染引擎** — `scripts/render_v96.py::render_v96_card()`，`auto_card.py` 通过 `from render_v96 import render_v96_card` 调用（2026-07-07 更名，旧名 render_v8 已废弃）。
 - **审计必须实测跑管线** — 静态扫描后必须 `python auto_card.py BTCUSDT && python auto_card.py XAUUSD` 确认无运行时崩溃。`_near_key_level`函数不存在+qty_unit未定义两处致命bug在静态审计中完全漏过。：符号切换后 `chart_get_state` 确认 symbol 已变，但 SVP+ICT+VWAP+CVD 等研究的 plot 值未自动重算，仍返回旧品种数值（如 BTC $64,592 显示为 ~$72 的 SOL 数据）。交叉验证方法——如果 study_values 返回的 VWAP/EMA 与 Binance MCP 价格差超过 10x 或数量级，说明 indicators 未刷新。尝试再调一次 `chart_set_timeframe`+`chart_set_symbol` 组合，或关闭 tab 重开。最佳实践：依赖 Binance MCP K线计算核心技术指标（EMA/VWAP/ATR/POC），TV 指标只作辅助验证和决策表参考。两者冲突时优先信托 Binance MCP 原始 K 线计算。
 - **Yahoo Finance 不支持现货黄金**。
 - **推送位信死循环（已修复v6.3.1→v2.2）**：智能结构更新自动生成的监控位，`level_confidence.missing` 固定包含"TradingView成交量复核"和"订单流确认" → 基础位信分 ≈ 66-74 → 可能与推送门槛冲突。**v2.2修复**：MIN_WARNING_LEVEL_SCORE 降至 65，breached_like 增加 near_or_breach，info 降至 68/60，expired 降至 65/高优先，invalidated 降至 65/60。预期推送率 ~50%正常日/~80%波动日。详见 `references/push-threshold-tuning.md`。
