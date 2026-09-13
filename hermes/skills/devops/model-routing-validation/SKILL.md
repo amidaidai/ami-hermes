@@ -80,6 +80,10 @@ for r in json.loads(urllib.request.urlopen(u, timeout=30).read()):
 - 单次「stream produced no SSE events / 零事件」失败先重跑一次再评分；MoA 参考层少一个成员不影响整体跑完。
 - 免费视觉候选可能在**真实图片请求**上 429（文本/工具探针却通过），所以视觉槽必须走 B 的真实图夹具。
 
+**E. 慢速多项读图探针必须落盘后台跑，不要塞进 `execute_code`**
+
+5 路并发视觉夹具（单品 18–200s）在 `execute_code` 里会撞 300s 单元上限：本轮一次 5-way 读图 fanout 被 kill，**中间结果连同内核变量一起丢光**。可靠形状：探针脚本写文件 → `terminal(background=True, notify=True)` 起 → **每完成一个模型就 append 一行 JSONL**（`open(OUT,"a")`）→ `process(action="poll"/"wait")` 读增量。这样超时/重起后已得结论仍留在盘上。可复跑脚本：`scripts/or_vision_fixture_probe.py`（含 `--image/--models/--out`，默认取 `tools/tradingview-mcp/screenshots/` 最新 PNG）。
+
 2026-09-10 完整横评结果、免费池重探清单、DeepSeek 价格与真实延迟表见 `references/model-head-to-head-and-vision-fixtures.md`。
 
 ## OpenRouter 免费池实测总表 (2026-08-29 全测18个)
@@ -133,10 +137,28 @@ for r in json.loads(urllib.request.urlopen(u, timeout=30).read()):
 - 保留 3 席：`nex-agi/nex-n2.5-pro:free`（1.7s，工具✅，能读图）· `nvidia/nemotron-3.5-lightning:free`（1M，工具✅，已在 MoA AMI 参考位）· `inclusionai/ling-3.0-flash-fin:free`（2.7s，金融专精）。
 - 摘掉：`nvidia/nemotron-3-ultra-550b-a55b:free`（端点坏，见上）。429 组：`poolside/laguna-xs-2.1` · `liquid/lfm-2.5-2.6b` · `google/gemma-4-31b-it`。`thinkingmachines/inkling*` 仍 403。
 - 慢但可用（只当最后兜底／禁出实盘卡）：`nvidia/nemotron-3-super-120b-a12b:free`（需 `max_tokens≥1500`；图 404 不支持图像输入、会话均值 32.6s）· `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`（真读图且准，但 67.6s）· `dots-studio/dots-3-note-preview:free`（真读图准，25s）。
-- 免费读图这条路**能用但不可日常**：最快的真读图免费模型也要 25s，且读回的是价格轴游标值（77,348.7）而非最新收盘，所以视觉槽仍应钉中转/订阅通道，免费只做最后一道。
+- 免费读图这条路**能用但不可日常**：最快的真读图免费模型 18–25s，所以视觉槽仍应钉中转/订阅通道，免费只做最后一道。（原先「读回的是价格轴游标值而非最新收盘」的判读已于当日下午更正，见下条。）
 - 本机 OpenRouter 仍是 `limit=1 / limit_remaining=0`（key 级限额用满，账户 `credits` 15），付费全 403，只有 `:free` 可打。
 
-**选型建议**: 想要"大且稳"固定用 nemotron-3-super-120b;想要最大Context用 nemotron-3.5-lightning（ultra 当时 tools=0，不当主）;接受动态路由用 /free 但需接受可能掉到小模型/踩坑模型(inkling/gemma/glm限速会白等)。
+**2026-09-13 下午 13:05 重探（免费池兜底选型；以本条为准）**
+
+19 个通用免费模型全打（工具 shape + 纯文本延迟 + 真图夹具），明细与可复跑脚本见 `references/free-pool-probe-20260913-1305.md`。用户问「哪几个免费模型适合兜底」时，**不要照下面这张 13:05 的表分层——它已被当日下午的能力审计推翻**（表内把金融窄域小模型排第 1、把能力最强的 ultra-550b 排除了）。以本文「兜底链选型：能力优先」和 `references/or-free-pool-audit-20260913.md` 为准。当日 13:05 快照仅作「工具 shape / 延迟 / 真图夹具」的取证记录保留：
+
+| 兜底槽位 | 选它 | 判据 |
+|---|---|---|
+| 第 1 位（常态落点） | `inclusionai/ling-3.0-flash-fin:free` | 2.5s 出文、工具✅、金融专精 |
+| 第 2 位 | `cohere/north-mini-code:free` / `nex-agi/nex-n2.5-pro:free` | 1.1–1.5s 工具✅、1.9–2.6s 出文 |
+| 第 3 位 | `nvidia/nemotron-3-super-120b-a12b:free` | 120B/262K、1.2s 工具✅、4.9s 出文；需 `max_tokens≥1500`；**禁出实盘卡** |
+| 免费视觉兜底 | `inclusionai/ling-3.0-flash-vl:free` → `dots-studio/dots-3-note-preview:free` | 真图 17.8s / 24.6s，品种·周期·价格·副图全对；≥18s 只能排最后一道 |
+
+- 工具 COMPLETE 13/19（1.1–2.2s）：north-mini-code(1.1) · lightning(1.2) · super-120b(1.2) · lfm-2.5-2.6b(1.2) · `openrouter/free`(1.2，落到 north-mini-code) · laguna-s-2.1(1.4) · nex-n2.5-pro(1.5) · ling-flash-fin(1.6) · ling-flash-sante(1.6) · dots-3-note(1.6) · ling-flash-vl(1.7) · nex-n2.5-mini(1.8) · ultra-550b(2.2)。
+- 不进链：`thinkingmachines/inkling(-small)` 403（agentic harness 专用）· `poolside/laguna-xs-2.1` / `google/gemma-4-31b-it` / `gemma-4-26b-a4b-it` 429 · `liquid/lfm-2.5-2.6b`（2.6B 撑不起工具链）· `openrouter/free`（动态路由不可控）· `nemotron-3-ultra-550b` 与 `nano-omni`（间歇上游过载，见「HTTP 200 + error body」）。
+- **纯文本延迟（无工具，中文档位复述）**：dots 1.9s · north-mini-code 2.0s · ling-flash-fin 2.5s · nex-n2.5-pro 2.6s · super-120b 4.9s · **lightning 9.4 / 62.2 / 114.5s（三次抖动 12 倍）**。⚠️ 工具探针里的 1–2s 只是「回 tool_call 首包」，真实体感看这一列——lightning 因此不能排第 1 位，哪怕它探针 1.2s、上下文 1M。
+- 真图夹具（13:04 BTCUSDT.P 15m 截图）：ling-flash-vl 17.8s 全对 · dots 24.6s 全对 · nano-omni 122.9s 全对（还认出窗格内 Signal 图例）· nex-n2.5-pro 131.8s **空输出**（reasoning 吃光 `max_tokens=4000`，需 ≥6000）· super-120b 404「No endpoints found that support image input」（当视觉探针的阴性对照很好用）。
+- **正上一条的更正**：免费读图读回的值**是准的**，别再写成「价格轴游标值」。本轮三个独立免费模型全给 77,194.2/77,194.3，主模型 `vision_analyze` 亲自核验同为 77,194.2 —— 就是 TV 上 BTCUSDT.P 当时的报价。之前判成「误读」是因为拿**币安现货 15m 收盘**（77,238.86）当真值：永续 vs 现货同波动维度微差，不构成否决（memory 报价校验条同理）。真值取法应为**截图分钟附近的 1m K 线**，并用主模型 `vision_analyze` 做一次人眼基准。
+- 现场其余通道：b.ai 中转 12:51 日志 `credit insufficient balance: balance=1746181 required=1855720`（**主模型 deepseek-v4.1-flash 所在中转也会挂**）；Codex 当天 429 `usage_limit_reached`；本机 `config.yaml` 当时**没有 `fallback_providers` 键**（09-12 21:13 备份里还有 super-120b → ultra-550b → ling-flash-fin 三项）——grep `:free` 命中 `moa.presets.*.reference_models`，别把它当成兜底链。
+
+**选型建议（已被当日下午的能力审计更正）**: 兜底第 1 位用 `nvidia/nemotron-3-ultra-550b-a55b:free`（能力最优、1M、非幻觉 70.3%），第 2 位 `nemotron-3-super-120b-a12b:free` 吃速度；「大且稳」= super-120b，最大 Context = ultra-550b 或 lightning，接受动态路由用 `/free` 但需接受可能掉到小模型/踩坑模型(inkling/gemma/glm 限速会白等)。**别按延迟排第 1 位**，见「兜底链选型：能力优先」。
 
 ## Weak-model档位保真 (prefill注入, 2026-08-29 验证)
 
@@ -389,13 +411,29 @@ When auditing or designing a MoA preset, distinguish “unset” from an explici
 - 判读顺序：`finish_reason` → `usage.completion_tokens_details.reasoning_tokens` → `content`；b.ai 还会回 `reasoning_content`，里面往往已有正确答案（本轮它把「左上角 BTCUSDT.P · 15 · Binance／开 77,366.8 高 77,383.5 低 77,340.1 收 77,348.7」写在 reasoning 里）。
 - 视觉槽挂在 reasoning 模型上时必须留足输出预算，否则分析卡首行截图识别会拿到空串。
 
-### 坏端点 vs 慢模型（200 也可能是死的）
+### 「HTTP 200 + error body」= 上游过载，不是端点坏（2026-09-13 更正）
 
-`HTTP 200 + ret_model=None + usage=null + finish_reason=None + 无 tool_calls`，且加大 `max_tokens` 后依旧如此 = **端点坏**，不是模型慢。实测 `nvidia/nemotron-3-ultra-550b-a55b:free` 连测两次都是这个形状（同 provider 其他模型正常），日志另见 `Upstream error from Nvidia: Service temporarily overloaded`。这类模型留在兜底链上只会白等一轮；报告里按「端点坏」写，别写成「免费大模型就是慢」。
+Nvidia 免费池会**用 HTTP 200 返回错误体**：
 
-### 兜底链按实测延迟排序
+```json
+{"id":"gen-…","error":{"message":"Upstream error from Nvidia: ResourceExhausted: Worker local total request limit reached (1843/16)","code":502,"metadata":{"error_type":"provider_unavailable"}}}
+```
 
-链上第一位是常态落点，最慢的不要排第一（实测：`nemotron-3.5-lightning:free` 探针 7.1s、会话均值 16.3s 却排第一，`nemotron-3-super-120b-a12b:free` 探针 2.1s 排第三）。改完读回 YAML 确认仍是 list 而非字符串（`hermes config set` 的已知陷阱）。
+- **解析侧铁律**：拿到响应先判 `"choices" not in d` / `"error" in d`，再取 `d["choices"][0]`。只看状态码或直接取 `choices` 的探针会抛 `KeyError: 'choices'`，把「上游过载」误报成「模型坏」。同一模型几分钟内可 200+正常、也可 200+error，**属间歇性**——单次失败必须重跑再判。
+- 2026-09-13 00:30 曾据此把 `nvidia/nemotron-3-ultra-550b-a55b:free` 判成「端点坏」。13:05 复测：**带工具 200 + tool_calls COMPLETE（2.7s / 4.2s）、不带工具 11.6s 正常**，同批 `nano-omni` 也命中同一过载。**更正：Nvidia 系免费模型不能因一次 200+error 就永久除名**，只能标「间歇过载、重试可用」。
+- 真正该除名的是**恒定形状**的坏端点：`HTTP 200 + ret_model=None + usage=null + finish_reason=None + 无 tool_calls`，且加大 `max_tokens` 后依旧如此（日志伴 `Service temporarily overloaded`）。这类留在兜底链上只会白等一轮。
+- 实践含义：兜底链把 Nvidia 免费模型放**后段**而不是第 1 位，避免常态落点反复吃到过载窗口。
+
+### 兜底链选型：能力优先，不是延迟优先（2026-09-13 用户更正）
+
+第一版把「最快的小模型」排第一位，用户当场否掉：**「识图可以使用其他的，但是这个备用的要最优解」**。兜底槽位的职责是接住主模型的活，判据顺序是 **非幻觉率 → 工具可靠性 → 能力 → 上下文 → 延迟**，不是反过来。拿「快」或「有没有视觉」当筛子等于把兜底槽当成轻量快答槽。
+
+- 免费池实测对照：`nemotron-3-ultra-550b-a55b:free`（AA Agentic 21.7、**非幻觉率 70.3%**、Tool Call Error 1.71%）对 `super-120b`（4.1 / **13.0%** / 3.97%）。13% 非幻觉率等于让它编数——兜底顶上来是要出分析结论的，**慢 60s 远比编造一个假关键位安全**。
+- 延迟仍要记录，但它是**代价项**而非判据：ultra 的代价是 E2E P50 60.7s、Availability 76.1%，所以链上第 2 位补一个快的（`super-120b`，93.3% / 10.3s）吃速度——**用链的深度解决质量与速度的矛盾，不要牺牲第 1 位的质量**。
+- 「快链尾」可以放小模型（`north-mini-code` p50 0.5s），但**不要把小模型放第 1 位**；窄域微调模型（`ling-3.0-flash-fin` 是 124B 总/5.1B 活的**金融专精**）当链尾可以，当唯一兜底不行——兜底要接任意任务。
+- 探针延迟 ≠ 真实延迟：`nemotron-3.5-lightning:free` 探针 1.2–7.1s，纯文本实测 9.4 / 62.2 / 114.5s（官方 p90 63.4s / p99 112s）——**低于三位数秒的探针数字不足以排除一个模型作兜底**，但反过来也不足以入选。
+- 视觉不进免费兜底槽，用别的通道（用户明示）。免费真读图 ≥18s 且多是最后一道。
+- 改完读回 YAML 确认仍是 list 而非字符串（`hermes config set` 的已知陷阱）。
 
 ## 「为什么不是 X 模型」问答路径（2026-09-13 实证）
 
@@ -428,6 +466,28 @@ When auditing or designing a MoA preset, distinguish “unset” from an explici
 
 **拿不到价目就别编。** 中转的价目与身份都不能程序化获取（见下一条），所以「哪几个免费/打折」只能**向用户要后台价目页**（截图或粘贴），拿到再按真实单价重排；在拿到之前只给「贵/便宜」分层，并写明这是分层假设而非价目事实。完整模板与探测形状见 `references/cost-tiered-routing-preference.md`。
 
+## 兜底链落地四步（选型 → 写入 → 端到端 → 降级实测）
+
+从「算出该选谁」到「确认真的会兜」，中间隔着四步，缺一步都可能只是纸上配置。2026-09-13 全流程实证：
+
+1. **选型必须三源交叉**，单源自证不成立：
+   - 本机裸 API 探针（工具 shape / 纯文本延迟 / 真图夹具）——只证可达与形状；
+   - **OpenRouter 端点 API（权威）**：`GET /api/v1/models/{author}/{slug}/endpoints` → `uptime_last_1d`、`latency_last_30m` 的 p50/p90/p99、`throughput_last_30m`、`supported_parameters`（判 tools）、`max_completion_tokens`。模型页另有 `Tool Call Error Rate` / `Structured Output Error Rate` / `Availability (3d)`——注意 OR 定义：**Availability 把错误和空回复都算失败**，比 uptime 严格；
+   - **第三方每日重测**（klymentiev.com/blog/openrouter-free-tier，附结构化 `openrouter-free-models.json`）——独立复现 429/403/空回复。但它只测「能不能答」（一道算术题），**能力绝不看它**。三源吻合才下结论。
+2. **能力数据只在模型页，不在 `/models` 列表**：AA Intelligence / Coding / Agentic、GPQA Diamond、IFBench、τ²-Bench、AA-LCR、Terminal-Bench Hard、**AA 非幻觉率** 都要 `web_extract` 模型页正文。非幻觉率是交易兜底的第一判据。
+3. **写入用 `hermes config set`**——`hermes fallback add` 只有交互式 picker，不能脚本化：
+   ```bash
+   hermes config set fallback_providers '[{"provider":"openrouter","model":"A:free"},{"provider":"openrouter","model":"B:free"}]'
+   hermes fallback list          # 读回 Primary / Fallback chain (N entries) / 顺序
+   ```
+4. **验收要打两次真实运行，不能只看 `list`**：
+   - 可达：`hermes -z "只回复一行：X-OK" -m "<链上模型>" --provider openrouter` → 证明完整系统提示 + 工具定义装得下、走现有 key 能通；
+   - **降级：把主模型设成一个不存在的 id**（`-m "cohere/definitely-not-a-real-model-xyz" --provider openrouter`）→ 仍返回正常文本即证明链真被触发（404 是 immediate trigger）。这是「链是活的」的唯一证据。
+
+**同轮必修的连带项：`auxiliary.free_only: true`。** 辅助任务（标题生成/压缩/分类）回退到 OpenRouter 时会去够**付费**模型——实测 `logs/errors.log` 6 次 `PAID lane engaged for auxiliary task — OpenRouter fallback model 'google/gemini-3.6-flash' is not a :free SKU`，而本机 key `limit_remaining=0`，所以这些辅助任务**实际全在失败**，不是「可能多花钱」。Hermes 日志自己给了修法：`auxiliary.free_only: true`，或 `auxiliary.openrouter_model` 指向一个 `:free` id。
+
+**Hermes 兜底语义（决定链怎么排）**：兜底是 **turn-scoped**——每条新用户消息先重试主模型，失败才在本轮降级；触发含 429/5xx/401/403/404 与 **「malformed or empty responses repeatedly」**（正好覆盖 OR 的「200 + error body」）。切换会**作废 prompt cache**，长会话跨 provider 会全量重读，这是保命的代价、不是 bug。
+
 ## Evidence format
 
 Report a compact table with: role, configured provider/model, credential state, live probe, tool probe, visual probe, actual route, and recommendation. Lead with one direct recommendation and clearly label unverified candidates.
@@ -455,3 +515,5 @@ See `references/model-head-to-head-and-vision-fixtures.md` for the 2026-09-10 he
 Templates/scripts: `templates/model_evidence_fixture_prompt.txt` (same-task fixture prompt) and `scripts/head2head_probe.sh` (batch runner across provider/model pairs).
 See `references/luna-main-model-speed-and-memory-2026-09-02.md` for Luna tool-call validation, persistent-memory boundaries, and speed-tuning evidence.
 See `references/free-pool-and-relay-capability-20260913.md` for the 2026-09-13 free-pool re-scan (19 models), the b.ai per-model tool matrix, the reasoning×tools 400 transcript, and free-vision fixture scores. Runner: `scripts/relay_capability_probe.py` (relay/model capability probe: existence, tool support, reasoning×tools conflict, broken-endpoint detection).
+See `references/free-pool-probe-20260913-1305.md` for the 2026-09-13 13:05 free-pool fallback-selection scan (19 models: tool shape, text latency, real-image fixture, the Nvidia 200+error-body shape) and the vision-read-accuracy correction. Runner: `scripts/or_vision_fixture_probe.py` (background JSONL vision fan-out probe).
+See `references/or-free-pool-audit-20260913.md` for the **three-source capability audit that superseded the 13:05 ranking**（capability-first 兜底结论、ultra-550b vs super-120b 基准对照表、inkling 403 = Ori OAuth 而非 HTTP 头、laguna 9.88% tool-error、`openrouter/free` 官方 at-random、免费池配额 50/1000 RPD 与训练数据红线）。Runner: `scripts/or_free_pool_capability_audit.py` (pull every `:free` model's endpoint metrics + tool-shape probe + 200-with-error-body detection, print a capability-oriented table).

@@ -26,6 +26,10 @@ tools_required:
   - x_search
 ---
 
+## Quick system audits
+
+For “快速过一下系统”, use a bounded read-only audit, not a full market refresh. Check actual cards as well as tests: available ≠ supportive, missing exposure ≠ zero, safe FinalVerdict ≠ accurate diagnostics. Re-evaluate saved health at audit time. Respect declined/retired features. Give concise Chinese conclusions, priorities and verification limits. See `references/quick-audit-card-consistency.md`.
+
 ## Capability Utilization Audit
 
 > ⚠ 2026-09-11 校正（**已实测核实**）：本文件部分段落把下列脚本当现行工具，实际状态是——

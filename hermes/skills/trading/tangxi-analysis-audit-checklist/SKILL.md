@@ -1,6 +1,6 @@
 ---
 name: tangxi-analysis-audit-checklist
-description: 棠溪分析系统审计清单 v1.2 — 分析策略流程、分析档位、API拉取能力、记忆读取、TV MCP集成、守护运行态、生产者调度与状态冻结七维全景扫描与优化建议。含「先取证后定级」纪律。触发词：全面盘点、审计、全方位、分析策略流程、分析档位、API拉取、记忆读取、全面扫描。
+description: 棠溪分析系统审计清单 v1.3 — 分析策略流程、分析档位、API拉取能力、记忆读取、TV MCP集成、守护运行态、生产者调度与状态冻结七维全景扫描 + 资产面三查（记忆/技能/MCP）与优化建议。含「先取证后定级」纪律。触发词：全面盘点、审计、全方位、分析策略流程、分析档位、API拉取、记忆读取、全面扫描、资产体检、记忆体检、技能体检。
 category: trading
 ---
 
@@ -193,7 +193,7 @@ mcp_tradingview_tv_health_check()
 | K线 | `data_get_ohlcv` | — |
 
 **关键陷阱**：
-- `study_filter` 必须明确指定，否则只返回副指标（Volume Aggregated）
+- `study_filter` 行为随版本漂移（旧注：不带 filter 只回副指标；2026-09-13 实测不带 filter 返回全部、而 filter="SVP" 对 `SVP+ICT+VWAP+CVD` 反而 0 命中）——**filter 空结果时改为不带 filter 重读再定位**
 - 切品种后必须 `chart_get_state` 确认 symbol，避免跨会话数据污染
 - **图表会被并发 cron 切走（2026-08-30 实测）**：XAU TV现场同步等任务会切共享标签页到 OANDA:XAUUSD/5m——读行动格/截图前必须 `chart_get_state` 核对 symbol+resolution（BTC=BINANCE:BTCUSDT.P+15m）；发现被切走先 `chart_set_symbol` + `chart_set_timeframe` 切回主执行周期，`chart_ready=true` 后再读/截，否则会截到错品种（违反复核铁律，旧截图冒充更新同罪）
 - `study_values` 大数被缩写(4.6K/1.1M) → 用 `pine_lines`/`pine_labels` 读精确价
@@ -753,6 +753,37 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 
 **报告核验铁律（同轮次实测）**：用户/子代理交来的审计报告，其「系统健康度 ✅」必须对着**卡面管线完成度表**逐项核 —— 实测当日卡面写「15步 · 完成 11/15」，CoinGecko Pro / 宏观 / X情绪 / Cron缓存 4 项 ⚠️，而报告summary却写「数据采集✅正常」。**跑了 15 步 ≠ 采到了数据**；提交前必查 `data/auto_card_<SYM>_full.md` 的管线完成度审计表。
 
+## ⚠️ 2026-09-13 全维度审计新增（已修复 + 已回归 1050 passed）
+
+1. **副指标 S3 双消费不同源（P1）** — S3（=CVD背离 或 OI背离，AggVol 源码 L737 `(cvdDivergeA or oiDivergeA) ? 3`）此前只进 `decision_loop`（hard → NO-GO），未进 `auto_card._dual_indicator_verdict` → 门7「双指标共振」在 usable=True 下显示「GREEN 副指标不足」，与同卡硬闸门 `haldro_state_conflict` 自相矛盾。已修：dual 合并 S3 → hard_conflict，文案「副S3冲突·CVD/OI背离」。审计检查：实跑后门7 红灯理由应含「副S3」，且 `dual.s3_conflict` 键存在。
+2. **CoinGecko 静默死亡 60+ 天（P1）** — `/coins/markets` 带 `price_change_percentage=1h,24h,7d` 已被 CG 拒绝 **HTTP 400**（api_cache 里 7 月的成功缓存含 1h/7d 真值，可证曾可用）；且成功抓取若无时间戳字段会被 `source_health.payload_timestamp` 标 `unavailable` → cg_pro 步骤永不完成。修复：去掉被拒参数（`price_change_percentage_24h` 为默认字段）+ 返回补 `updated_epoch`。审计检查：`python -c "import sys;sys.path.insert(0,'scripts');from multi_source_collector import cg_top_coins;print(cg_top_coins(10)['_source_status'])"` 应输出 live/cache。
+3. **影子校准链空转（P1 留观）** — `shadow_outcome_labeler` 按设计拒绝猜测订单类型 → 367 信号全部 `missing_order_model`（mature 142 / 可评估 0）。门6 已接真实统计（`shadow_sample_stats`，不再「样本0」假值），但「可评估 0」要等用户/设计为各模型定义 order_model（limit/market_next_open）才能闭环——审计时不要替其猜测。
+4. **门8 暴露 / 门5 快照（P1/P2）** — `_total_exposure_pct`、`_corr_high` 均无生产赋值（旧显示恒「暴露0.0%」绿灯、「相关≤0.7」）；已改「未接持仓·暴露未评估」黄灯 + corr 接线（解析失败→None→显示「相关未评估」）。protections 快照陈旧不再显示「全部通过」，改「无拦截记录·快照YYYY-MM-DD陈旧·未验证当前风控」黄灯。
+5. **测试对活跃分析租约敏感（并发假红）** — auto_card 长跑持租约时 `tests/test_xau_tv_sync_degradation.py` 3 例会走「让路」分支假红（同 ea1815e 类问题）。已加 autouse fixture mock `analysis_lease_defer_exit`。**回归铁律：全量 pytest 出现 xau_tv_sync 失败且输出含「让路」时，先查有无活跃分析租约再定性，先单跑复验。**
+
+6. **XAU 行动格阈值与同步节奇错配（P1）** — `xau_tv_sync._validate_live_payload` 的 live_max_age=10min < cron 同步间隔 15min（`*/15`）→ 每个周期尾部 5 分钟必判「行动格过期」→ XAU 卡 TV五层 ⚠️、门 tv_live 误红。修复：10→13（=间隔-2，对齐 btc_tv_refresh 18/20 模式）。审计检查：`grep "live_max_age_minutes: float" scripts/xau_tv_sync.py` 应为 13.0；注意契约测试构造值（11）已随之外移至 14。另注：XAU「CVD订单流」步骤是**设计性空转**（有意跳过 Binance 流防污染、无替代源）；Binance XAUUSDT aggTrades 采集能力已就绪（cvd_aggtrades 期货回退），是否接入为产品决策。
+7. **测试目录新基准** — 2026-09-13 后全量回归基线 = **1051 passed**；新增 `tests/test_audit_fixes_20260913.py`（13 例）覆盖 S3/门5-8/文案。
+
+### 2026-09-13 下午批次（用户批准五项推进；commits 8adcd59/1233ec9/3439cfb，最终回归 1074 passed）
+
+8. **影子校准环接线（order model）** — `shadow_calibration.PLAN_ORDER_MODEL`：全部「等触发价」计划（vwap_pullback/poc_rejection/breakout_acceptance/liquidity_sweep 等）统一限 limit（=触发价 GTC）；未定义模型保持 missing。labeler `_signal_projection` 回填 + auto_card 写入携带。兑现路径：新信号成熟（15m×16=4h）后 cron 自动产出可评估结果。审计检查：`grep PLAN_ORDER_MODEL scripts/shadow_calibration.py`；outcomes 中 filled 数应缓慢上升（此前恒 0）。
+9. **XAU 黄金合约 CVD（Binance XAUUSDT·非OANDA）** — 独立键 `gold_contract_cvd`（不进加密评分链）+ source 标记 + 渲染放行标记（`dual.gold_contract_cvd` 存在才保留显示，清空保险不撒）+ 来源矩阵独立辅助行。审计检查：XAU full 应见「✅ 黄金合约CVD(Binance XAUUSDT·非OANDA)」且订单流行带「·Binance黄金合约」。
+10. **XAU TV 读取链四层一致性（门二/步骤审计/新鲜度行 + 读取阈值 + 专属缓存 + None 防御）** — 2026-09-13 同日四轮生产实测剥出四层根因，全部修复（commit `3439cfb`，第四轮实测 7/8）：
+    - ① 同步阈值 10→13（`xau_tv_sync`，=cron 间隔 15−2）；② **读取侧 `_tv_cache_status` 对 XAU 必须传 `max_age_minutes=13`**——旧默认 10 与前置 13 判定互相矛盾（前置「新鲜跳过」、读取「过期拒用」，同卡自相矛盾）；③ XAU 只读专属缓存，不读 BTC 的 `tv_live.json`/`tv_dmi_cache.json`（噪声污染门2原因串）；④ 改 if 条件后 `else` 分支 `None.get()` 崩（自引入回归）→ 改 `elif tv_raw:`。
+    - `_tv_live_status`=注入最终结论，优先于 `_tv_cache_status`（输入管道）。防回退：`tests/test_dual_indicator_gate.py::test_tv_status_single_precedence_rule`。
+    - **判读要点**：门2 红灯 `TV禁做/结构冲突: X` 是真实数据判定（行动格 X），不是链路问题——只有 reason 含「缓存过期/品种不匹配」才是链路问题。
+    - 完整四层根因与四轮实测证据链：`references/xau-tv-chain-4layer-fix-20260913.md`。
+11. **卡面体验两改** — 首行时段标注（亚洲/伦敦/纽约/盘外，低波动→盘外）；等待条件具名化（`render_v96._nearest_trigger_names` 引用最近上下结构位名，只给名不给价）。
+
+### 修复实施纪律（2026-09-13 四轮实测沉淀，每次改动必守）
+
+1. **改 if 条件必须全链检查 else/elif 落点** — 本轮把 `if not tv_raw:` 改成 `if not tv_raw and ≠gold:` 后，XAU+None 掉进 `else` 的 `tv_raw.get()` 崩溃（自引入回归，靠下一轮生产实跑捕获）。改条件前先看清所有分支的落点。
+2. **同一数据链的多个校验器阈值必须一起对齐** — 一处阈值修复（xau_tv_sync 10→13）后必须 `grep -n` 同一数据的全部校验点（auto_card `_tv_cache_status` 调用、门2、步骤审计），只改一处 = 前后校验互相矛盾。
+3. **patch 模糊匹配会误伤** — 本轮 3 次事故（误删 docstring 行 / 把参数名 `payload` 改成 `live` / 误删 `parts = []`）。每处 patch 后 read-back 涉及行 + `py_compile`；跨函数签名的改动逐行核对原文。
+4. **多段流水线（TV 链类）修复必须生产实跑收尾** — 单测通过只证明所覆盖合同；四轮实跑各暴露一层，只有真跑才收敛。验收标志 = 卡日志出现组合：`♻缓存新鲜跳过 + ✅前置刷新 + 注入成功 + TV五层 ✅`。
+5. **巨型嵌套 $() 内联命令会被硬拦（BLOCKED: parser limit）** — 改用脚本文件（write_file 落 `outputs/audit_*/xxx.py`）再执行；被拦命令存于 `~/AppData/Local/hermes/cache/blocked-scripts/`。
+6. **多会话并行写入** — 工作树可能出现另一会话（用户多窗口）的未提交改动（本轮实测 `scripts/cot_collector.py`）。提交时 `git add` 只加自己的文件；外部改动保留未动并显式披露（承「并发写入方检测」节）。
+
 ## 参考文件
 
 - 技能主文档：`trading/tangxi-system-audit/SKILL.md`（完整审计Step 0-12）
@@ -764,4 +795,50 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 - TV缓存污染：`trading/tangxi-system-audit/references/2026-07-08-tv-cache-pollution-recurrence.md`
 - **完整图表证据（价格栏/ICT/截图与结构化读取一致性）**：本技能 `4.3`；审计时优先按该节执行
 - **生产者调度死亡 + 状态冻结扫描（2026-09-12 实测 · cron_read 五源四死 + 影子/风控/复盘三类冻结 + 两轮误判对比）**：`trading/tangxi-analysis-audit-checklist/references/audit-producer-death-and-freeze-sweep-20260912.md`
+- **XAU TV 读取链四层根因 + 四轮生产实测（2026-09-13 · 阈值错配/专属缓存/None防御/实跑收尾法）**：`trading/tangxi-analysis-audit-checklist/references/xau-tv-chain-4layer-fix-20260913.md`
+- **TV 指标实盘读回验收（面板签名表 + 全链 probe 法 · 2026-09-13 实证 fixed17/fixed14 已部署）**：`trading/tangxi-analysis-audit-checklist/references/tv-indicator-live-verification.md`
+- **资产面三查：记忆/技能/MCP（含记忆压缩律 · 2026-09-13 首检）**：`trading/tangxi-analysis-audit-checklist/references/asset-health-check-memory-skills-mcp.md`
 - 预检脚本：`D:/Hermes agent/scripts/audit_preflight.py`
+
+### 2026-09-13 下午批次 #12（FX 显示精度修复 + 档位实测基线）
+- **FX 价格显示精度**：EURUSD 卡曾显示「TV现场 POC 1 ／ VAH 1」「D·VAH `1.16`」——根因：`render_v96._num` / `render_tv_card._fmt_num` 对 |v|<1000 一律 `:.2f`（1.1638→1.16）；`auto_card` TV 单周期注入描述用 `:.0f`（1.1638→1）。已修：|v|∈[0.01,10) 保留 4 位小数、<0.01 用 6 位去尾零；注入描述 3 处复用 `_num`。测试：`tests/test_fx_display_precision.py`（8 例）。commit `42c694d`。
+- **档位实测基线**（2026-09-13 14:1x，缓存命中态）：BTC quick 31.4s/3步3/3 · BTC full 44.0s/15步14/15 · XAU quick 46.0s/2步2/2 · XAU full 21.2s/8步7/8 · EURUSD full 54.3s/7步6/7。耗时随 TV 缓存命中波动，冷启动（全切图）60~90s。standard 与 quick 同链（继承）。
+- **FX 五层链缺失**：EURUSD/AAPL/ES 无专属 TV 同步 cron（对比 XAU `*/15`），卡面①表恒「待刷新」——已如实标注「五周期背景=缓存不存在」（待增强项，非阻塞）。
+- **退役守护复核**：行情守望=只读兼容层（头部注明退役）、btc_daemon=退役测试覆盖（`tests/test_retired_monitor_entrypoints.py`）；心跳文件为历史残留，非 P0。keylevel_guard 唯一现行监控链（pid 存活+`*/2` 看门狗）。
+
+### 2026-09-13 下午批次 #13（XAU 结构位具名化 + 实时性口径）
+- **XAU 具名化根因**：XAU 无 keylevels 配置 → 走 klines 回退，回退名「15mVAH/5m高」无空格 → `_LEVEL_TF_RE` 的 \b 对中文紧邻不匹配 → 去重旧名优先入桶 → 卡面只见「阻/支」。修复：回退名统一「15m VAH / 15m 高」。实测②表「4h·VAH/15m·阻/15m·支/1h·阻」、等待「等 15m·阻 / 15m·支 方向确认」。commit `8d6c595`，回归 1085。
+- **实时性口径**（回答「缓存是否不实时」）：卡内 TV 数据年龄上限=读取阈值（XAU 13min / BTC 10min）**而非 cron 间隔**——超阈值出卡前自动现场切图刷新（前置刷新兜底）；到价提醒=keylevel_guard 亚秒级、现价=秒级。结构位属「区域」概念，10min 差异影响小。可选项：full 档强制现场刷新 / 阈值收紧，代价=每次多 30-60s 切图。
+
+### 2026-09-13 下午批次 #14（实时性收紧 5min + EMA 上卡 + 指标使用度基线）
+- **TV 复用窗口 13/10→5min**（用户批准）：xau_tv_sync 两处默认 + auto_card `_live_max_age`。语义「卡内 TV 结构最多滞后一根 5m K 线」，超窗口出卡前自动现场同步。commit `0f24d5c`。
+- **EMA 上卡（双 schema 兼容）**：修复三处断点——① Step1 引擎结果**回写** engine_data（此前不回写）② render_card_locked 优先**复用**（跳过本地重算防覆盖）③ render_v96._ema_disclosure_line 双 schema 兼容渲染（summary: vwap.vwap/available；TV MCP fallback: vwap.value/price_above/无 available——两 source 字段不同，回写与渲染都不得硬依赖 available）。行位=【做法】表后。commit `aa80409`。
+- **指标使用度基线**（SVP/ICT/VWAP/EMA/FVG/OB）：SVP=唯一执行授权；ICT 族（FVG/OB/吸收/流动性/扫荡）→「多周期共振 6 项」(HTF同向/吸收/CVD/ICT结构/VWAP位置/量能) 进执行门控（<4 否决）；VWAP=三路（TV DW 位置列/本地引擎±σ/关键位表）；EMA=展示层（本次接上）；五模型 five_model_matcher 仅回测链、实盘由 multi_model_engine+影子校准覆盖。
+
+### 2026-09-13 批次 #15（双指标消费矩阵全面揭露）
+- 用户上传定版两 pine == 仓库 fixed17/fixed14 **字节一致**（diff 空）；契约 v15 对齐检查通过。
+- 消费矩阵工具：`outputs/audit_20260913/consume_matrix.py`（字段×消费方）+ `consume_verify.py`（宽松复核+运行态抽查）。产出 `docs/指标字段消费矩阵_20260913.md`。
+- 未消费硬核清单：主=Execution Pack/OI Price Direction/Band1(实盘)/Setup Score(仅转存)/DO Price；副=OI Breadth/Dispersion/Freshness Pack/Contract Pack/Flow Pack/CVD Anchor/Coverage Spot·Perp/Exchange Dominance。冗余类=成分已被等效通道（Basic Bus/单独字段）覆盖。
+- **复核纪律**：NONE 判定必须二次宽松搜索（全 scripts/ 含变体+解码器路径+运行缓存值），防假阴性——初版曾把 W/M VWAP 误判 NONE（实际 multi_model_engine 在消费）；只被 tv_data_bridge 引用=仅桥接转存，不算消费。
+
+### 2026-09-13 批次 #16（OI 族字段接入实施 + 死逻辑修复）
+- 消费矩阵建议 1-3 全实施（commit `d9bbbbe`）：① Basic Bus 解包→dual[oi_present]（**修活死逻辑**：decision_loop oi_agreement_low 因该键无人写入从未生效）② CVD锚+背景码→③表订单流行「锚x·滚动卖」③ 离散/主导/广度→质量行 + decision_loop oi_dispersion_high（阈值 2.5=AggVol oiConsensusOk）④ 契约「消费状态标注」段。
+- **事实修正**：decision_loop 336-346 已有 OI 细节段（agreement/stale 已消费）——初版矩阵漏判；解码器矩阵有 **stub 假命中**（auto_card 75 行降级 stub 的 def 行），复核解码器调用必须排除 def/stub 行。真未接仅 decode_basic_bus（本次接上）/decode_oi_presence（备用）/ordered_*（行消费走 dict 直取）。
+- **接入模式**：字段全集经 `TVC.DW_ALIASES_*` 自动组装进 main["sub_*"]（_build_tv_main_data）——「接入新字段」=只在消费端写逻辑，数据管道无需改；dual 组装点=_dual_indicator_verdict。
+
+### 2026-09-13 批次 #17（指标实盘验收 + DO Price 接入）
+- **实盘验收**（TV 面板读回实证）：SVP「CVD行 ·子5 ·基差-0.05%」「前位 ·仍撑 ·↑1.8A」+ AggVol「滚动同向 ·前锚逆⚠ / 本锚近10K」= **fixed17/fixed14 已在 TV 实盘运行**——9-10 报告全部 P0/P1/P2 修复已闭环并部署。**P1-7 无需改 Pine**（fixed17 已接：cvdBgTag「·副滚动逆」在 CVD 行，我当时引用旧报告误判为待办）。
+- **DO Price 接入**（commit `b91a773`）：落点=VWAP/EMA 环境行（非位表——位表退出 _prepare_levels[:7] 竞争截断）；途中修正 render 容量不一致（_structure_table `[:6]`→`[:7]`，与 prepare 7 对齐）。产物：「VWAP/EMA/DO：… · DO `77,243`（+0.66%）」。
+- **教训**：①引用历史审计报告先核对最新源码/实盘（P1-7 误报「待办」）；②位表有 prepare(7)/render(6) 双层截断——第 7 位此前系统性被吞；③数据链断点诊断法：先写「全链 probe」（缓存→studies→tv_vals→main）定位在哪层丢，再修——避免静态推理绕圈。
+
+### 2026-09-13 批次 #18（收口：资产面三查 — 记忆/技能/MCP 新审计维度）
+「全面审计/资产体检/记忆技能MCP有什么问题」类请求：七维之外加做资产面三查，先报告再建议（整理类动作需用户点头）：
+
+1. **记忆**：两档用量——memory 满（100%）≠ 故障，但下次写入必被拒、需先压缩。压缩律：①**全批一次原子提交**（删旧+加新同批——限额按批后结果检查，单独 add 会先被拒）；②`old_text` 必须**唯一子串**——单字符/标点（如 "."）命中多条目报 `Multiple entries matched`，无法定位（纯 "." 垃圾条因此只能留观）；③压缩顺带**修正过时值**（本轮 13min→5min）与**迁移**（偏好类条目→user 档腾位）。
+2. **技能**：`skills_list` 全量扫重叠组——同族 ≥4 个即入报告；2026-09-13 实测：审计×6 / TG投递×5 / TV证据×5 / 卡片×4 / PPT×8（基线 205 个）。触发歧义风险，整理（定主从+互引注记，不删内容）需用户点头。
+3. **MCP 烟雾测试**：每 server 一个廉价调用入表——binance=`get_price`、jin10=`get_quote`、stock_api=`get_stock`、tradingview=`tv_health_check`；financekit 上游 Yahoo 会限流（`Too Many Requests`）——源侧节流，按降级契约处理（VIX/SPX 禁伪造）、稍后重试，**不要写成「工具坏了」**；x_search 不实测（成本），看卡面 x_sent 是否如实降级即可。
+
+**步数口径**：一律以 `route_pipeline` 实测为准（2026-09-13 实测 BTC full=15 步；本技能早期节段的「加密10」为历史快照，勿沿用）。
+**执行提示**：批量诊断命令写 `.py` 放 `outputs/` 再跑——长内联/嵌套 `$()` 命令会被终端 hardline block（恢复=`bash` 跑 blocked-scripts 保存脚本）。
+
+细节与首检结果表：`references/asset-health-check-memory-skills-mcp.md`；指标实盘读回验收法（面板签名表+全链 probe）：`references/tv-indicator-live-verification.md`。

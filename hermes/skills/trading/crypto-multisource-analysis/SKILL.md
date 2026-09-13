@@ -990,7 +990,7 @@ no_agent 脚本输出格式详见 `references/output-format.md`。
 
 **为什么不用 cron `update` 注入环境变量？** `cronjob update` 在 `no_agent=true` 任务上**无法设置环境变量**（沙箱白名单限制），必须改用代码/文件层开关。详见 `references/cron-update-toolset-pitfall.md`。
 
-**已应用**：XAU TV 五层现场（`data/xau_tv_no_push.json` 关闭 846 频道推送）；COT 报告（`cot_collector.py` 自身本就 `deliver: local`，无需开关）；行情守望重启（`monitor/market_watchdog.py` 已 `paused`）。
+**已应用**：XAU TV 五层现场（`data/xau_tv_no_push.json` 关闭 846 频道推送）；COT 报告（`data/cot_collector_no_push.json`，2026-09-13 用户要求「不要发了」后新增——`cot_collector.py` 的 `_push_suppressed()` 同时看 `COT_NO_PUSH=1` 与该标志文件，只屏蔽 `push_tg_rich`，采集/落盘/`--line` 照常；cron `b664f56f904c` 早已 paused，本次是手动/桥接调用触发推送，故必须在脚本层拦截）；行情守望重启（`monitor/market_watchdog.py` 已 `paused`）。
 
 ### X情绪LLM分析 cron 特殊格式（v2.0 · 2026-07-03）
 

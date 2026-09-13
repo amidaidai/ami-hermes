@@ -93,6 +93,45 @@ hermes mcp test finance
 hermes mcp list
 ```
 
+## Troubleshooting: Yahoo 腿 "Too Many Requests"（2026-09-13 二次定位 → 已修复）
+
+**症状**：Yahoo 类工具（stock_quote / market_overview / price_history）返回
+`Too Many Requests. Rate limited.`，而 crypto_price（CoinGecko 腿）正常。
+
+**真正根因（决定性对照实验）**：Yahoo 封的是**本机直连 IP**，而 financekit MCP
+子进程**没有代理**。同一个调用，直连 429、走代理 200：
+
+| 同一次 `get_quote('AAPL')` | 结果 |
+|:--|:--|
+| `env -u HTTP_PROXY -u HTTPS_PROXY uvx --from financekit-mcp …`（直连） | ❌ `Too Many Requests. Rate limited.` |
+| `HTTP_PROXY=http://127.0.0.1:7897 … uvx --from financekit-mcp …` | ✅ `332.27` |
+
+**为什么"杀进程"看起来管用（上一轮的误判，勿再沿用）**：在终端里跑诊断命令时
+shell 自带 `HTTP_PROXY`，所以"新进程"实际走的是代理、当然成功；而 MCP 子进程由
+网关生成、无代理，重启多少次仍是 429。**"长命进程 stale"是错误结论。**
+
+**为什么网关自己的代理传不进去**：`tools/mcp_tool.py::_build_safe_env()` 对 stdio
+子进程**白名单过滤**环境变量（防密钥泄漏），只有 `_SAFE_ENV_KEYS` / `XDG_*` /
+secret-source 变量能过。代理变量不在名单内 → 必须在**该 server 的 `env:` 块**
+显式写（`env.update(user_env)` 在过滤之后，优先级最高）。
+
+**修复（已落地 + 端到端验证）**：
+
+```bash
+hermes config set mcp_servers.financekit.env.HTTP_PROXY  "http://127.0.0.1:7897"
+hermes config set mcp_servers.financekit.env.HTTPS_PROXY "http://127.0.0.1:7897"
+hermes config set mcp_servers.financekit.env.NO_PROXY    "localhost,127.0.0.1"
+```
+
+改完要**重读配置**才生效：网关会话里发 `/reload-mcp`（或 `hermes gateway restart`）。
+验证方式：`hermes chat -q "用 financekit 查 AAPL"` → `AAPL=332.27` ✅
+
+**注意**：`patch` 工具**拒绝写 `~/.hermes/config.yaml`**（安全护栏），只能用 `hermes config set`。
+
+**只有境外源需要代理**：binance / jin10 / stock-api / tradingview / hermes-studio 目标
+可直连，别给它们加。杀 financekit 进程会断当前会话的 MCP 连接（ClosedResourceError），
+新会话自愈；期间美股/宏观用 FMP（/stable/quote）或 stock-api 兜底。
+
 ## Coverage Comparison
 
 | Feature | FinanceKit | akshatbindal/finance | Notes |
