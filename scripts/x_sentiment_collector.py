@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
 X情绪采集器 v1.1 — 表格化输出
+
+⚠️ 已停用（2026-09-13 审计确认）——**不要重新接进 cron**
+--------------------------------------------------------------------------
+证据：① 无 cron 任务（原任务 `X情绪数据刷新` 已于 2026-09-10 归档进
+`data/cron_paused_archive_20260910.json`）；② 无任何消费者——其输出
+`data/x_sentiment.json` 在全仓只有本文件第 133 行的写入方，零读取方，
+该文件已归档到 `data/_archive/`；③ 现行替代 = `scripts/x_sentiment_refresh.py`
+（写 `data/x_sentiment_context.json`，即 `auto_card.py` X情绪步骤实际读的那份）。
+
+⚠️ 停用理由（真实事故模式）：本脚本的输出一旦被误当实时值使用，会让卡面
+用 ✅ 打印过期的恐贪/市占（2026-07-15 那份曾打印恐贪 25 / 市占 56.3%），
+比没有数据更容易误导。要恢复 X 情绪，请用 refresh 脚本，不要复活本脚本。
 """
 import json, sys, os
 from datetime import datetime, timezone, timedelta
