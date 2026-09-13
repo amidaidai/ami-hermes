@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from shadow_calibration import label_outcome
+from shadow_calibration import label_outcome, order_model_for_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGNALS_PATH = ROOT / "data" / "shadow" / "decision_signals.jsonl"
@@ -42,14 +42,22 @@ def _signal_projection(record: dict[str, Any]) -> dict[str, Any]:
     main_raw = record.get("main")
     main: dict[str, Any] = dict(main_raw) if isinstance(main_raw, dict) else {}
     side = str(main.get("direction") or record.get("side") or "neutral").lower()
-    return {
+    model_id = str(main.get("model_id") or record.get("model_id") or "unknown")
+    projection: dict[str, Any] = {
         **record,
         "side": side,
         "entry": _num(main.get("entry", record.get("entry"))),
         "stop": _num(main.get("stop", record.get("stop"))),
         "target": _num(main.get("target", record.get("target"))),
-        "model_id": str(main.get("model_id") or record.get("model_id") or "unknown"),
+        "model_id": model_id,
     }
+    # 2026-09-13：信号未携带 order_model 时按计划语义回填（PLAN_ORDER_MODEL）；
+    # 未知模型保持缺失 → missing_order_model（禁止猜测订单类型）。
+    if not projection.get("order_model"):
+        backfill = order_model_for_plan(model_id)
+        if backfill:
+            projection["order_model"] = backfill
+    return projection
 
 
 def _bar_dict(raw: Any) -> dict[str, Any] | None:

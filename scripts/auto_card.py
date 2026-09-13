@@ -1098,7 +1098,7 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
     engine_data["_final_verdict"] = final
     engine_data["_final_verdict_locked"] = True
     if engine_data.get("_shadow_enabled"):
-        from shadow_calibration import append_shadow_signal
+        from shadow_calibration import append_shadow_signal, order_model_for_plan
         interval_ms = 900_000 if str(symbol).upper().endswith("USDT") else 300_000
         ts_ms = int(engine_data.get("_snapshot_ts") or time.time() * 1000)
         signal_id = f"{symbol}:{model_id}:{ts_ms // interval_ms}"
@@ -1122,6 +1122,8 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
                     "ts": ts_ms, "side": final.get("watch_side") or candidate.get("direction"),
                     "entry": shadow_entry, "stop": shadow_stop,
                     "target": shadow_target, "model_id": final.get("model_id"),
+                    # 2026-09-13：按计划语义写入执行订单模型（闭校准环）。
+                    "order_model": order_model_for_plan(final.get("model_id") or main_snapshot.get("model_id")),
                     "regime_code": regime.code if regime else "unknown", "grade": candidate.get("grade"),
                     "fvg_quality": candidate.get("mcp_fvg_quality_score"),
                     "ob_quality": candidate.get("mcp_ob_quality_score"),

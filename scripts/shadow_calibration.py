@@ -200,6 +200,34 @@ def shadow_sample_stats(path: str | Path) -> dict[str, int]:
     return {"total": total, "mature": mature, "evaluable": evaluable}
 
 
+# ── 计划执行模型（order model）定义 · 2026-09-13 用户批准接入 ──────────
+# 语义：影子信号记录的是「等触发」观察价（B等待/观察计划）——计划被批准执行
+# 时，执行方式=在触发价挂 GTC 限价/触价单，价格未触达则永不成交。
+# 因此全部「触发价」型计划统一按 limit 模拟；未定义模型返回 None，
+# 标注器保持 missing_order_model（禁止猜测订单类型）。
+PLAN_ORDER_MODEL = {
+    "vwap_pullback": "limit",
+    "vah_reclaim": "limit",
+    "val_reclaim": "limit",
+    "poc_rejection": "limit",
+    "fvg_pullback": "limit",
+    "ob_pullback": "limit",
+    "liquidity_sweep": "limit",
+    "liquidity_sweep_reclaim": "limit",
+    "breakout_acceptance": "limit",
+}
+
+
+def order_model_for_plan(model_id) -> dict[str, str] | None:
+    """把策略模型映射为影子标注所需的执行订单模型。
+
+    只映射语义明确的「等触发价」计划；未知模型返回 None（标注层保持
+    missing_order_model，绝不自造订单类型）。"""
+    key = str(model_id or "").strip().lower()
+    order_type = PLAN_ORDER_MODEL.get(key)
+    return {"type": order_type} if order_type else None
+
+
 def calibrate_groups(
     rows: Iterable[dict[str, Any]],
     *,
