@@ -132,8 +132,10 @@ def test_xau_and_btc_background_jobs_defer_when_analysis_is_running():
         assert "analysis_lease_status" in source, name
         assert "让路" in source, name
     btc = (ROOT / "scripts" / "btc_tv_refresh.py").read_text(encoding="utf-8")
-    # 阈值必须 < cron 间隔(20min)，否则每个周期都会留下 >30min 的合同空窗
-    assert "max_age_minutes=18.0" in btc
+    # 阈值必须 < cron 间隔(20min) − 采集耗时(~3.3min)，否则「下一 tick」会跳过，
+    # 留下 >30min 的合同空窗（2026-09-14 由 18.0 校正到 12.0；推导见
+    # tests/test_audit_fixes_20260914.py::test_btc_refresh_thresholds_respect_cadence_and_contract）。
+    assert "max_age_minutes=12.0" in btc
 
 
 def test_chart_owner_logic_has_one_implementation():

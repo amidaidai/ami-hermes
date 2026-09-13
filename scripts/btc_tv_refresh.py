@@ -15,17 +15,26 @@ sys.path.insert(0, str(ROOT / "scripts"))
 def btc_five_tf_status() -> dict:
     from tv_five_tf_contract import load_five_tf_snapshot
     # The job runs every 20 minutes; the production contract tolerates 30.
-    # Threshold must stay **below** the cron interval, otherwise the tick that
-    # should refresh sees age≈20 < 22 and skips, and the snapshot is left to
-    # expire past the 30-minute contract for ~10 minutes every cycle.
-    return load_five_tf_snapshot("BTCUSDT", data_dir=DATA, max_age_minutes=18.0)
+    #
+    # 2026-09-14 实测校正：原阈值 18 分假设「写入与 tick 对齐」，但采集本身
+    # 要 ~3 分钟，写入实际落在 tick 后 ~3 分钟 → 下一个 tick 看到 age≈13-17 < 18
+    # 就跳过 → 再下一个 tick 才刷 → 快照会跨过 30 分钟合同约 6 分钟（实测
+    # 04:44 出现 age=32min 的 FAIL，cron 却记 ok）。
+    # 正确关系：阈值 ≤ 间隔 − 采集耗时 − 余量 = 20 − 3.3 − 1 ≈ 15.7。
+    # 取 12 分：每个 tick 都会判定需要刷新，age 峰值 ≈ 23 分 < 30 分合同。
+    return load_five_tf_snapshot("BTCUSDT", data_dir=DATA, max_age_minutes=12.0)
 
 
 def source_snapshot_status() -> dict:
     from source_health import inspect_json_file
+    # 同上：触发阈值必须让「下一 tick」愿意刷新。
+    # 采集耗时 ~3.3 分 → 下一 tick 实测年龄 ≈ 16.7 分，故阈值必须 < 16.7。
+    # 原 0.75h=45 分（甚至 0.3h=18 分）都过松：会累积到 ~37-65 分，
+    # 前者超过 30 分钟合同、后者撞上看门狗 0.6h 阈值 → 都是自造噪声。
+    # 0.25h=15 分 → 每 tick 刷新，峰值 ≈ 23 分，三方口径（合同/看门狗/触发）一致。
     return inspect_json_file(
         DATA / "source_snapshot_BTCUSDT.json",
-        max_age_hours=0.75,
+        max_age_hours=0.25,
         expected_symbol="BTCUSDT",
     )
 

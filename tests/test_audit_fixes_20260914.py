@@ -283,7 +283,41 @@ def test_card_note_separates_design_paused_from_missing():
     assert "not cron_missing and not cron_paused" in src
 
 
-# ── 6. TV 复用窗口：前置决策必须比读取窗口更严 ──────────────────────────
+# ── 7. BTC 续航节奏不变量（阈值 / 采集耗时 / 合同 三者必须自洽） ─────────
+
+def test_btc_refresh_thresholds_respect_cadence_and_contract():
+    """触发阈值必须 <「下一 tick 实测年龄」，否则数据会跨过 30 分钟合同。
+
+    事故形态（2026-09-14 实测）：阈值 18 分、cron 间隔 20 分、采集耗时 ~3.3 分
+    → 写入落在 tick 后 3.3 分，下一 tick 年龄 16.7 < 18 → 跳过 → 再下一 tick
+    才刷 → 快照跨过 30 分钟合同约 6 分钟（preflight 报 FAIL 而 cron 记 ok）。
+    """
+    import btc_tv_refresh  # noqa: F401  确保模块可导入（真实生产模块）
+
+    interval_min = 20.0        # cron "7,27,47" = 每 20 分钟
+    collect_min = 3.3          # 实测采集中位耗时
+    contract_min = 30.0        # audit_preflight / tv_five_tf_contract 合同
+
+    src = (ROOT / "scripts" / "btc_tv_refresh.py").read_text(encoding="utf-8")
+    # 五个周期的触发阈值
+    assert "max_age_minutes=12.0" in src
+    five_threshold = 12.0
+    assert five_threshold < interval_min - collect_min, "阈值过松 → 下一 tick 会跳过"
+    # 数据源快照触发阈值（小时）
+    assert "max_age_hours=0.25" in src
+    source_threshold_min = 0.25 * 60
+    assert source_threshold_min < interval_min - collect_min, "阈值过松 → 下一 tick 会跳过"
+    # 峰值年龄必须仍在合同内
+    assert interval_min + collect_min < contract_min
+
+
+def test_watchdog_threshold_leaves_room_above_refresh_peak():
+    """看门狗阈值必须高于「正常峰值年龄」，否则每轮都误报。"""
+    src = (ROOT / "scripts" / "data_freshness_watchdog.py").read_text(encoding="utf-8")
+    assert '"source_snapshot_BTCUSDT.json": {"threshold": 0.6' in src
+    peak_min = 20.0 + 3.3           # 间隔 + 采集
+    assert 0.6 * 60 > peak_min, "看门狗会对着正常节奏误报"
+
 
 def test_tv_live_window_single_source_and_pre_sync_margin():
     """前置与读取必须共用同一常量，且前置留出出卡余量。
