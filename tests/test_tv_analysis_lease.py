@@ -156,9 +156,14 @@ def test_screenshot_helper_holds_the_lease():
 
 
 def test_dead_holder_pid_releases_the_lease(monkeypatch, tmp_path):
-    """崩溃/被杀的分析进程不能把后台续航锁到 TTL 结束。"""
+    """崩溃/被杀的分析进程不能把后台续航锁到 TTL 结束。
+
+    2026-09-14：租约默认 `liveness="ttl"`（CLI 写完即退，pid 不可信——见
+    tv_data_bridge.begin_analysis_lease 文档）；本用例显式声明 `liveness="pid"`
+    来验证 pid 模式下的「死持有者释放」路径。
+    """
     b = bridge(monkeypatch, tmp_path)
-    b.begin_analysis_lease(10.0, note="zombie")
+    b.begin_analysis_lease(10.0, note="zombie", liveness="pid")
     path = tmp_path / "tv_analysis_lease.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw["pid"] = 99999999

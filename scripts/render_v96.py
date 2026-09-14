@@ -295,7 +295,12 @@ def _klines_to_levels(klines: dict, price: float | None) -> list[dict]:
     return clean
 
 
-def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> list[dict]:
+def _prepare_levels(levels: list[dict], klines: dict, price: float | None, limit: int = 7) -> list[dict]:
+    """准备结构位（去重按显示精度 + 同周期价值区一致性 + 距离排序）。
+
+    ``limit`` 默认 7 保持既有调用方行为；v9.12 完整卡传 14，让并簇/远端注脚
+    有足够素材（并簇后再收敛到 ≤4 行角色表）。
+    """
     all_levels = list(levels or []) + _klines_to_levels(klines or {}, price)
     seen = set()
     clean = []
@@ -325,7 +330,7 @@ def _prepare_levels(levels: list[dict], klines: dict, price: float | None) -> li
         clean.append({"level": lvl, "side": side, "name": name, "kind": kind, "icon": icon, "dist": dist_txt, "use": use})
     clean.sort(key=lambda x: abs(x["level"] - float(price or 0)))
     clean = _demote_inconsistent_value_area(clean)
-    return clean[:7]
+    return clean[:limit]
 
 
 def _nearest_trigger_names(levels_prepared: list[dict], price: float | None) -> tuple[str | None, str | None]:
@@ -496,6 +501,178 @@ def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rat
     return " · ".join(parts) if parts else "待采集"
 
 
+def _compact_state(text: str) -> str:
+    """把逐层 SVP 描述压成体温条用的短读（保留状态 + BOS/摆点，其余丢弃）。
+
+    2026-09-14（用户批准 v9.12）：完整卡的五周期从 4 列表格降为一行体温条，
+    逐层语义保留在「状态 + BOS/守摆」两类词上，其余（平衡/看VA边等）不再占行。
+    """
+    segs = [s.strip() for s in str(text or "").split("·") if s.strip()]
+    keep: list[str] = []
+    if segs:
+        keep.append(segs[0])
+    for seg in segs[1:]:
+        if any(word in seg for word in ("BOS", "摆", "扫")) and len(keep) < 2:
+            keep.append(seg)
+    return "·".join(keep)[:12] or "—"
+
+
+def _sub_strip(tf_data: dict, dual_indicator: dict | None) -> str:
+    """体温条副读：只留 CVD 方向 emoji + 买/卖（数值留在 ③ 订单流行）。"""
+    if isinstance(dual_indicator, dict) and dual_indicator.get("asset_is_crypto") is False:
+        return "—"
+    if not isinstance(tf_data, dict):
+        return "—"
+    cvd = tf_data.get("cvd")
+    if isinstance(cvd, dict) and cvd.get("direction"):
+        direction = str(cvd.get("direction"))
+        emoji = "🟢" if direction == "买" else "🔴" if direction == "卖" else "🔵"
+        return f"{emoji}{direction}"
+    for key in ("sub_indicator", "sub", "volume_agg", "sub_composite", "composite"):
+        if tf_data.get(key):
+            return _cell(tf_data.get(key))[:6]
+    return "—"
+
+
+def _cluster_levels(rows: list[dict], price: float | None, tol_pct: float = 0.15) -> list[dict]:
+    """结构位并簇成带：相邻 <tol_pct% 的位合成一个区间。
+
+    2026-09-14（用户批准 v9.12）：② 不再平铺最近 7 个位，而是先并簇
+    （77,847 + 77,865 → 77,847–77,865 阻力簇），再按角色给 ≤4 行，
+    其余下沉「远端」注脚。位表只回答：上面卡哪 / 中间看什么 / 下面废哪。
+    """
+    if not rows or not price:
+        return []
+    try:
+        px = float(price)
+    except (TypeError, ValueError):
+        return []
+    tol = abs(px) * tol_pct / 100.0
+    ordered = sorted(rows, key=lambda x: float(x["level"]))
+    bands: list[dict] = []
+    for item in ordered:
+        lvl = float(item["level"])
+        if bands and abs(lvl - bands[-1]["hi"]) <= tol:
+            band = bands[-1]
+            band["hi"] = max(band["hi"], lvl)
+            band["lo"] = min(band["lo"], lvl)
+            band["items"].append(item)
+        else:
+            bands.append({"lo": lvl, "hi": lvl, "items": [item]})
+    for band in bands:
+        kinds: list[str] = []
+        for it in band["items"]:
+            kind = str(it.get("kind") or "位")
+            if kind not in kinds:
+                kinds.append(kind)
+        band["kinds"] = kinds
+        band["kind_txt"] = "–".join(kinds[:2]) + (f"+{len(kinds) - 2}" if len(kinds) > 2 else "")
+        d_lo = (band["lo"] - px) / px * 100
+        d_hi = (band["hi"] - px) / px * 100
+        if band["lo"] == band["hi"]:
+            band["dist_txt"] = f"{d_lo:+.2f}%"
+        elif band["lo"] >= px:
+            band["dist_txt"] = f"{d_lo:+.2f}%~{d_hi:+.2f}%"
+        elif band["hi"] <= px:
+            band["dist_txt"] = f"{d_hi:+.2f}%~{d_lo:+.2f}%"
+        else:
+            # 现价落在带内：按数值升序展示区间（-0.22%~+0.01%），不写成 +a%~-b%。
+            band["dist_txt"] = f"{min(d_lo, d_hi):+.2f}%~{max(d_lo, d_hi):+.2f}%"
+        band["price_txt"] = _num(band["lo"]) if band["lo"] == band["hi"] else f"{_num(band['lo'])}–{_num(band['hi'])}"
+        band["mid"] = (band["lo"] + band["hi"]) / 2
+    bands.sort(key=lambda b: abs(b["mid"] - px))
+    return bands
+
+
+_ANCHOR_RE = re.compile(r"POC|VAL|支|低")
+
+
+def _level_role_rows(bands: list[dict], price: float | None) -> tuple[list[dict], list[dict]]:
+    """角色制位表：上沿阻力簇 / 近端转撑 / 主观察 / 失效带；返回 (角色行, 其余带)。"""
+    if not bands or not price:
+        return [], list(bands or [])
+    try:
+        px = float(price)
+    except (TypeError, ValueError):
+        return [], list(bands)
+    above = [b for b in bands if b["lo"] > px]
+    below = [b for b in bands if b["hi"] < px]
+    rows: list[dict] = []
+    used: set[int] = set()
+    # 现价落在簇内（宽度较大的带）时先标出该带，避免它既不进上方也不进下方而消失。
+    contained = [b for b in bands if b["lo"] <= px <= b["hi"]]
+    if contained:
+        rows.append({"role": "⚖ 现价所在带", "band": contained[0]})
+        used.add(id(contained[0]))
+    if above:
+        rows.append({"role": "🔴 上沿阻力簇", "band": above[0]})
+        used.add(id(above[0]))
+    anchor = None
+    for band in below:
+        if _ANCHOR_RE.search(" ".join(band["kinds"])):
+            anchor = band
+            break
+    if anchor is None and below:
+        anchor = below[0]
+    if anchor is not None:
+        idx = below.index(anchor)
+        if idx > 0:
+            rows.append({"role": "🟢 近端转撑", "band": below[0]})
+            used.add(id(below[0]))
+        rows.append({"role": "🟢 主观察", "band": anchor})
+        used.add(id(anchor))
+        if idx + 1 < len(below):
+            rows.append({"role": "🟢 失效/支撑带", "band": below[idx + 1]})
+            used.add(id(below[idx + 1]))
+    rest = [b for b in bands if id(b) not in used]
+    return rows[:4], rest
+
+
+def _structure_line(rows: list[dict], price: float | None) -> str:
+    """首屏结构行（单行，替代【现在】三行表；夹层语义不变：上 / ⚖现价 / 下）。"""
+    try:
+        px = float(price or 0)
+    except (TypeError, ValueError):
+        px = 0.0
+    if px <= 0:
+        return "结构：待采集"
+    above = next((r for r in rows if float(r["level"]) > px), None)
+    below = next((r for r in rows if float(r["level"]) < px), None)
+    parts = [f"⚖现价 {_num(px)}"]
+    if above:
+        parts.append(f"🔴上 {_num(above['level'])}（{_cell(above.get('kind'))}）")
+    if below:
+        parts.append(f"🟢下 {_num(below['level'])}（{_cell(below.get('kind'))}）")
+    return "结构：" + " · ".join(parts)
+
+
+def _far_levels_note(rest: list[dict]) -> str:
+    """远端位注脚：角色表之外的结构位，压成一行（24h 极值只在快速卡出现）。"""
+    bits = [f"{b['kind_txt']} {b['price_txt']}" for b in (rest or [])[:3]]
+    return "远端：" + " ／ ".join(bits) if bits else ""
+
+
+def _source_footer(source_matrix) -> str:
+    """数据源状态压成一行：已入 FinalVerdict 与 仅展示/辅助 分组。"""
+    if not isinstance(source_matrix, list) or not source_matrix:
+        return ""
+    entered: list[str] = []
+    aux: list[str] = []
+    for source in source_matrix:
+        if not isinstance(source, dict):
+            continue
+        label = _cell(source.get("label") or source.get("id") or "来源")
+        status = _cell(source.get("status") or "not_run")
+        item = f"{label} {status}"
+        (entered if source.get("entered_final_verdict") else aux).append(item)
+    parts = []
+    if entered:
+        parts.append("已入FinalVerdict：" + " · ".join(entered))
+    if aux:
+        parts.append("仅展示/辅助：" + " · ".join(aux))
+    return "；".join(parts)
+
+
 def render_v96_card(
     symbol: str,
     status: str,
@@ -548,7 +725,7 @@ def render_v96_card(
     ac = _asset_cn(symbol)
     bias = _bias_label(direction, status)
     display = _display_symbol(symbol)
-    levels_prepared = _prepare_levels(levels or [], klines, price)
+    levels_prepared = _prepare_levels(levels or [], klines, price, limit=14)
     svp_short, haldro_short, dual_verdict = _dual_short(dual_indicator, ac)
     dual_verdict = _final_dual_verdict(dual_indicator, final_verdict)
 
@@ -689,53 +866,48 @@ def render_v96_card(
 
     lines: list[str] = []
     lines.append(_header_line(display, now, session_name, s_emoji, status, bias))
-    lines.append("【现在】结构位")
-    lines.append("")
-    lines.append(_structure_table(levels_prepared, price))
     rec_name_clean = recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')
-    lines.append("【做法】决策摘要")
-    lines.append("")
-    lines.append("| 维度 | 内容 |")
-    lines.append("|:---|:---|")
-    # 2026-09-13 审计修复：NO-GO/等待场景不得套「只执行」执行措辞。
-    if "禁做" in rec_name_clean:
-        _action_txt = "不做单"
-    elif rec_name_clean.startswith("等"):
-        _action_txt = rec_name_clean
-    else:
-        _action_txt = f"只执行{rec_name_clean}"
-    lines.append(f"| 做法 | {_action_txt} · {recommend_trigger} · {recommend_rr} |")
-    lines.append(f"| 依据 | SVP {svp_short} · HALDRO {haldro_short} · {dual_verdict} |")
-    lines.append("")
+    # v9.12（2026-09-14 用户批准）：首屏结论前置 —— 唯一主推行 + 结构夹层行，
+    # 替代旧的【现在】表（与 ② 重复）与【做法】表（与 ④/【裁决】重复）。
+    # ⭐ 只在真正可执行（GO-A）时点亮；等待/禁做沿用各自角色前缀，避免把
+    # 未授权卡渲染得像可下单卡（test_render_tv_card 同名契约）。
+    _lead = "⭐主推" if (final_state == "GO-A" and final_executable) else recommend_name
+    lines.append(f"{_lead}：{_cell(recommend_trigger)} · {_cell(recommend_exec)} · R:R {recommend_rr}")
+    lines.append(_structure_line(levels_prepared, price))
     # 2026-09-13：VWAP/EMA 环境行（EMA 此前只算不上卡——用户指标盘点的缺口修复）
     _ve_line = _ema_disclosure_line(vwap_ema, do_price=do_price, price=price)
     if _ve_line:
         lines.append(_ve_line)
-        lines.append("")
-
-    lines.append("① 周期体温 / 多周期定位（D→4h→1h→15m→5m）")
     lines.append("")
-    lines.append("| 周期 | SVP主指标 | HALDRO副指标 | 位置 |")
-    lines.append("|:---:|:---|:---|:---|")
+
+    # v9.12：五周期从 4 列表格降为一行体温条（+副读行）；逐层细节仍在 ③ 与截图上。
     main_tf = _main_tf(symbol)
+    strip_parts: list[str] = []
+    sub_parts: list[str] = []
     for tf in TF_ORDER:
         k = klines.get(tf, {}) if isinstance(klines, dict) else {}
-        mark = " ⭐主" if tf == main_tf else ""
-        lines.append(f"| {tf}{mark} | {_tf_emoji(k)} {_short_tf_text(k)} | {_sub_tf_text_for_asset(k, dual_indicator)} | {_vwap_pos(k, price)} |")
-    lines.append(f"→ 主执行{main_tf} · 自上而下确认（D背景→{main_tf}执行）")
+        star = "⭐" if tf == main_tf else ""
+        strip_parts.append(f"{tf}{star}{_tf_emoji(k)}{_compact_state(_short_tf_text(k))}")
+        sub_parts.append(f"{tf}{_sub_strip(k, dual_indicator)}")
+    lines.append("① 周期体温 " + " · ".join(strip_parts))
+    lines.append("副读 " + " · ".join(sub_parts))
     lines.append("")
 
     lines.append("② 关键位 / 结构关键位")
     lines.append("")
-    lines.append("| 结构位 | 价格 | 用法 | 距现价 |")
-    lines.append("|:---|:---:|:---|---:|")
-    # 2026-09-13：渲染上限与 _prepare_levels 的容量对齐（7）。此前 prepare 7 / render 6
-    # 的不一致会吞掉第 7 个候选位（DO Price 接入后恰排第 7 被截）。
-    for item in levels_prepared[:7]:
-        use = item.get("use") or item.get("name") or item.get("side") or "关键位"
-        lines.append(f"| {item['icon']}{item['kind']} | {_price(item['level'])} | {_cell(use)[:20]} | {item['dist']} |")
-    if not levels_prepared:
-        lines.append("| 待刷新 | `—` | TV结构位未注入，禁追 | — |")
+    bands = _cluster_levels(levels_prepared, price)
+    role_rows, rest_bands = _level_role_rows(bands, price)
+    lines.append("| 角色 | 价位 | 距现价 |")
+    lines.append("|:---|:---:|:---:|")
+    if role_rows:
+        for row in role_rows:
+            band = row["band"]
+            lines.append(f"| {row['role']}·{_cell(band['kind_txt'])[:20]} | `{band['price_txt']}` | {band['dist_txt']} |")
+    else:
+        lines.append("| 待刷新 | `—` | TV结构位未注入，禁追 |")
+    _far_note = _far_levels_note(rest_bands)
+    if _far_note:
+        lines.append(_far_note)
     lines.append("")
 
     lines.append("③ 多源验证 / 双指标")
@@ -747,25 +919,18 @@ def render_v96_card(
     lines.append(f"| 订单流 | {_cell(multi_src_line)} | CVD/OI不配则降级 |")
     if isinstance(dual_indicator, dict) and dual_indicator.get("haldro_quality"):
         lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:56]} | 覆盖不足不追 |")
-    if isinstance(source_matrix, list):
-        for source in source_matrix:
-            if not isinstance(source, dict):
-                continue
-            label = _cell(source.get("label") or source.get("id") or "来源")
-            status = _cell(source.get("status") or "not_run")
-            evidence = _cell(source.get("evidence") or "—")[:24]
-            usage = "已入FinalVerdict" if source.get("entered_final_verdict") else "仅展示/辅助"
-            impact = _cell(source.get("impact") or usage)[:28]
-            lines.append(f"| {label} | {status}·{evidence} | {usage}·{impact} |")
+    _src_footer = _source_footer(source_matrix)
+    if _src_footer:
+        lines.append(_src_footer)
     lines.append("")
 
     lines.append("④ 最推荐方案")
     lines.append("")
-    lines.append("| 优先级 | 条件 | 动作 | R:R |")
-    lines.append("|:---|:---|---|---:|")
-    lines.append(f"| {recommend_name} | {_cell(recommend_trigger)} | {_cell(recommend_exec)} | {recommend_rr} |")
-    lines.append(f"| {backup_name} | {_cell(backup_trigger)} | {_cell(backup_exec)} | {backup_rr} |")
-    lines.append("| ⚠️禁止（通用规则） | 不追单；数据或主副证据失效时不执行 | 执行须R:R≥2 | — |")
+    lines.append("| 优先级 | 条件 | 动作 |")
+    lines.append("|:---|:---|:---|")
+    lines.append(f"| {recommend_name} | {_cell(recommend_trigger)} | {_cell(recommend_exec)} · R:R {recommend_rr} |")
+    lines.append(f"| {backup_name} | {_cell(backup_trigger)} | {_cell(backup_exec)} · {backup_rr} |")
+    lines.append("| ⚠️禁止 | 不做单：不追单·主副不共振 | 数据失效不执行 |")
     lines.append("")
 
     # 风控额度必须标出来源：没接真实账户时不能把兜底默认值写成看似的真实额度。
@@ -773,10 +938,10 @@ def render_v96_card(
         _risk_txt = f"风控{_num(risk_amt, 2)}U"
     else:
         _risk_txt = "风控 —（未接账户余额·非真实额度）"
-    lines.append(f"【裁决】{action_summary} · {_risk_txt} · {leverage_text or ''}")
     # 未授权裁决不得展示计划失效价：失效价=止损价，与 Entry/Stop/Target 同一道闸。
     inv_display = _price(execution_stop) if final_executable else '`—`'
-    lines.append(f"失效 {inv_display} · 价格共识{data_grade}（非全源健康度） · 来源状态见多源验证")
+    lines.append(f"【裁决】{action_summary} · {_risk_txt} · {leverage_text or ''}")
+    lines.append(f"失效 {inv_display} · 价格共识{data_grade}（非全源健康度） · 源状态见③")
     return "\n".join(lines) + "\n"
 
 

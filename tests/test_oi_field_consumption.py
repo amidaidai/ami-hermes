@@ -85,9 +85,15 @@ def test_multi_source_line_renders_anchor():
 
 
 def test_structure_table_renders_full_capacity():
-    """②表渲染上限=prepare 容量 7（此前 [:6] 会吞第 7 个候选位）。"""
+    """v9.12：② 关键位改为「并簇 → 角色制 ≤4 行」，容量契约随之更新。
+
+    旧契约（prepare 7 / render [:7] / [:6] 会吞第 7 位）在角色制下不再适用：
+    现在 prepare 取 14 个候选 → 并簇成带 → 最多 4 行角色 → 其余下沉「远端」注脚，
+    远端位不会丢，只是不再逐行占卡面。
+    """
     src = (ROOT / "scripts" / "render_v96.py").read_text(encoding="utf-8")
-    assert "levels_prepared[:7]" in src
+    assert "_prepare_levels(levels or [], klines, price, limit=14)" in src
+    assert "levels_prepared[:7]" not in src
     assert "levels_prepared[:6]" not in src
 
 

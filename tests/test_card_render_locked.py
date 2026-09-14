@@ -50,13 +50,17 @@ def test_render_card_locked_has_phone_friendly_blocks():
     merged, results, meta, engine_data = _sample_ctx()
     card = auto_card.render_card_locked("BTCUSDT", merged, results, meta, engine_data,
                                         grok={}, search_sent="", community="")
-    # v9.9: 手机驾驶舱，结构位前置 + 多周期 + 双指标 + 唯一主推裁决
-    for marker in ["【现在】", "【做法】", "① 周期体温", "② 关键位", "③ 多源验证", "④ 最推荐方案", "【裁决】"]:
-        assert marker in card, f"v9.9卡缺少 {marker}"
-    assert "| 周期 | SVP主指标 | HALDRO副指标 | 位置 |" in card
-    assert "| 结构位 | 价格 | 用法 | 距现价 |" in card
+    # v9.12（2026-09-14 用户批准）：首屏结论前置 + 一行体温条 + 三窄表 + 裁决块。
+    # 旧【现在】结构位表与【做法】决策摘要表已删除（与 ② / ④ 重复）。
+    for marker in ["① 周期体温", "② 关键位", "③ 多源验证", "④ 最推荐方案", "【裁决】", "结构：", "副读 "]:
+        assert marker in card, f"v9.12卡缺少 {marker}"
+    assert "| 角色 | 价位 | 距现价 |" in card
     assert "| 能力 | 读数 | 裁决 |" in card
-    assert "| 优先级 | 条件 | 动作 | R:R |" in card
+    assert "| 优先级 | 条件 | 动作 |" in card
+    assert "【现在】" not in card and "【做法】" not in card
+    assert "| 维度 | 内容 |" not in card
+    # 手机一屏可读：完整卡正文（含表格）不超过 40 行。
+    assert len(card.rstrip("\n").splitlines()) <= 40, f"卡面过长: {len(card.splitlines())} 行"
 
 
 def test_render_card_locked_has_execution_elements():
