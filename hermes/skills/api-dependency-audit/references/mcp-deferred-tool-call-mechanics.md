@@ -28,6 +28,11 @@ A *different* error family is the bridge/server actually being down:
 
 ## Additional call-mechanics traps
 
+- `tool_call` **takes exactly one invocation**: passing two or more local tools in one `calls` array is rejected with
+  `Local tools require one entry per tool_call; mixed and multi-local batches are not supported`. To read several
+  deferred tools in one pass, emit **several parallel `tool_call` blocks** in the same assistant turn — the runtime
+  runs independent calls concurrently, and that is the supported way to batch. (Connector names are the only ones batchable
+  inside a single `calls` array.)
 - `tool_call` **cannot** invoke `tool_call` (a bridge tool). Error: `tool_call cannot invoke 'tool_call'`. The `name` argument must be a concrete tool name, never the bridge itself.
 - After relaunching the underlying app, re-check the specific chart/binding: the app may reset to a default symbol/state (e.g. TradingView relaunches back to whichever chart it was last on). Re-verify `chart_get_state` matches the target symbol before reading data.
 - Deferred tool schemas are re-available via `tool_describe`; the tool-search index (`tool_search`) is a separate lookup and may not be needed again once the exact name is known.

@@ -27,6 +27,8 @@ yfinance 重算（period=3mo，日收益）结果完全不同：
 并在失效源行里点名「卡面 corr 失效 → 已用 yfinance 重算」。
 不要因为卡面给了数就直接引用 —— 一个 0.0 会连带推翻「组合风险乘数」那一整段推理。
 
+**已修复（2026-09-14）**：`scripts/correlation_matrix.py` v1.1 改用 Binance fapi 日线（`XAUUSDT` 合约可用），不再依赖 `source_snapshots` 目录（从未产出）。实测 3mo corr ~0.29（弱正相关·趋势转正），20d corr ~0.92。
+
 重算探针（**先做索引标准化**，否则对齐后是空集）：
 
 ```python
@@ -66,6 +68,8 @@ DataFrame 再 `dropna()` 会得到 0 行共同交易日，随后任何 `df.index
 **规则**：对该文件的每个数值段分别核对量级与方向；任一段不通过就**整段丢弃**并注册 `stale_cache`，
 不要因为别段对就把整份文件标 ✅。恐贪这种能独立重算的字段优先现场取 `https://api.alternative.me/fng/?limit=3`。
 
+**新规则（2026-09-14）**：`auto_card.py` Step 5025-5061 已实现逐段语义时间戳校验；`source_health.inspect_json_file` 支持按字段检查。消费前务必调用，任一段过期 → 整段丢弃并注册 `stale_cache`。
+
 ## 3. 其他可独立重算的探针（廉价、优先用）
 
 - 恐贪：`curl -s "https://api.alternative.me/fng/?limit=3"` —— 卡面「订单流」行的恐贪同样会带错值
@@ -88,3 +92,13 @@ DataFrame 再 `dropna()` 会得到 0 行共同交易日，随后任何 `df.index
   `qlib_factors(stale_cache)` / `liquidation_pressure(stale_cache)`。
   实测这些文件分别陈旧 60 天 / 11 天 / 60 天 —— 如实写降级，不要写成 15/15，也不要当故障去修。
 - 卡面 `风险快照 | stale_cache·<旧日期>·stale` 是**有意保留的可见降级**，不是 bug。
+
+## 5. 关键修补记录（2026-09-14）
+
+| 问题 | 修正 | 验证 |
+|------|------|------|
+| Grok token 读取路径错误 | `_read_grok_token()` 改为 `providers.xai-oauth.tokens.access_token`（原 flat `access_token`） | `call_grok_validation` 返回 `agree`/`divergence` 而非 `skipped=无token` |
+| X情绪文件部分刷新 | `x_sentiment_context.json` 逐段校验语义时间戳，任一段过期 → 整段 `stale_cache` | `source_health.inspect_json_file` 按字段检查 |
+| 关停 cron 源免责 | `dune_cache`/`deribit_options`/`qlib_factors`/`liquidation_pressure` 属 `PAUSED_SOURCES`（有意停用），审计出现 `stale_cache` 属正常降级 | `data_freshness_watchdog.PAUSED_SOURCES` 列表 |
+| 相关性卡面 0.0 | `correlation_matrix.py` 改用 Binance fapi 日线（XAUUSDT 可用） | `python scripts/correlation_matrix.py` 返回 `status=ok` |
+| 输出顺序固化 | 证据在前、方案在后：截图 → 裁决 → 多周期 → 关键位 → 多源冲突 → 主方案 → 失效路径 | 实跑卡面目测 |

@@ -20,7 +20,7 @@ category: trading
 2. **报价身份必须验证**：TV CLI部分版本会忽略`quote --symbol`，返回当前图表报价。优先读取不带symbol的quote，并检查返回的symbol、exchange、type、description。BTC永续应匹配Binance、swap和Bitcoin描述；身份不符时整份报价丢弃。
 3. **保留同一次响应的价格栏**：缓存O/H/L/C/last；日高、日低必须来自独立的Binance 24h ticker，不能用当前15m K线高低冒充。
 4. **ICT对象不得凭价格猜类型**：box接口可能返回`boxes`或规范化的`zones`。兼容两种键；无label的区域只能叫通用zone，不能擅自标为FVG、OB、Breaker或流动性扫掠。
-5. **空读是争用/重算信号**：`study_count=0`或行动格暂空时，只在图表身份仍正确的前提下有界重试；身份变化立即停止并标记stale。不得用别的周期或旧缓存冒充当前周期。
+5. **空读是争用/重算信号**：`study_count=0`或行动格暂空时，只在图表身份仍正确的前提下有界重试；身份变化立即停止并标记stale。不得用别的周期或旧缓存冒充当前周期。实测切周期后指标常需 **8–12s** 才重算完（只等 2–3s 必然读到空表）；`pine_tables` 与 `study_values` 会同时空，两者都要重试；**读完仍空才写「继承高周」，不得把第一次空读直接当继承**。
 6. **证据等级与执行权限分离**：`verified`表示身份、周期、研究、价格栏和结构化证据通过，不表示每种ICT子类型都有分类结果。`partial`、`visual_only`、`unavailable`最多支持WAIT；identity mismatch必须NO-GO。只有SVP、AggVol和FinalVerdict决定执行权限。
 7. **独立源不可重复计数**：TV价格与Binance价格用于交叉校验；LSR等若是同源复制，不得写成两个独立确认。正常小价差不否决，品种错配、数量级异常、时间周期错配必须降级或硬阻断。
 

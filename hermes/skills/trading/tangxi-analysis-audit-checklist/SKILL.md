@@ -790,6 +790,22 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 5. **巨型嵌套 $() 内联命令会被硬拦（BLOCKED: parser limit）** — 改用脚本文件（write_file 落 `outputs/audit_*/xxx.py`）再执行；被拦命令存于 `~/AppData/Local/hermes/cache/blocked-scripts/`。
 6. **多会话并行写入** — 工作树可能出现另一会话（用户多窗口）的未提交改动（本轮实测 `scripts/cot_collector.py`）。提交时 `git add` 只加自己的文件；外部改动保留未动并显式披露（承「并发写入方检测」节）。
 
+## ⚠️ 2026-09-14 新增三类 P0/P1（阈值三口径 / 源名≠文件名 / 工具降级码）
+
+1. **定时刷新的阈值必须让「下一 tick」愿意刷新（P0）** — `btc_tv_refresh` 五周期阈值 18 分、cron 间隔 20 分、采集耗时 ~3.3 分。阈值看似 < 间隔，但**写入落在 tick 后 3.3 分**，下一 tick 实测 age≈16.7 < 18 → 跳过 → 再等一 tick → 峰值 ~36 分 > 30 分合同。症状极隐蔽：`audit_preflight` 报 `BTC TV五周期 FAIL age=1926s` 而同一时刻 cron `last_status=ok`。**关系式：触发阈值 ≤ 间隔 − 采集耗时 − 余量**（20−3.3−1≈15.7 → 取 12）。
+   - **审计检查**：`preflight 说 FAIL` 且 `cron 说 ok` 同时出现时，先量三者：cron 表达式间隔、脚本实测耗时（时间戳前后差）、脚本内触发阈值；再量数据文件的「两 tick 之间的最小年龄」。三者不自洽即 P0，改阈值**不要**改 cron 频率。
+   - **同源检查（三口径）**：触发阈值 / 合同阈值（preflight、`tv_five_tf_contract`）/ 看门狗阈值（`data_freshness_watchdog.WATCH_FILES`）必须满足 `触发 < 合同` 且 `看门狗 > 正常峰值`，否则不是漏报就是误报。
+2. **源名 ≠ 文件名会永久误判「缺失」（P1）** — `pipeline_router.CRON_SOURCES` 里 `x_sentiment` 的真实产物是 `data/x_sentiment_context.json`；按源名拼 `x_sentiment.json` → `status=not_run`，卡面每轮都像缺数据。**审计检查**：对每个 cron_read 源名 `ls data/<name>.json`，不存在就找 `grep -rl "<name>" scripts/ | grep 写盘`，用 `CRON_SOURCE_FILES` 建映射而不是改名。
+3. **维护工具的「工具不可用」不能复用「发现问题」的退出码（P1）** — `mcp_proxy_check.py` 在无 PyYAML 的解释器里抛错并返回 2（=发现代理问题），把「读不到配置」上报成「代理故障」。**规则：0=通过 / 2=真问题 / 3=工具不可用**；依赖缺失时改用缩进级最小回退解析（只还原本工具消费的字段，并在报告里标 `parser=minimal`），**不要**为了省事把缺依赖当通过或当故障。
+
+### 2026-09-14 傍晚自检批次（v9.12 卡片 + 租约自锁修复后的整体自检）
+
+12. **cron「零输出静默轮次」新症状类（P1·待定位）** — `XAU TV现场同步` 出现 `Status: silent (empty output)` + cron `ok`，但已发布 pair 不前进（state/live mtime 停滞）→ `audit_preflight` 严格契约 FAIL 而 cron 说 ok。**排查三步排除法**（本轮已跑通，值得照抄）：① 手动跑一次目标脚本（96s 全量发布 ✅ 证脚本本身好）；② 短租约下复跑（证让路路径**会打印**且不写状态）；③ `hermes cron run <job_id>` 走 harness 复跑（证 harness 会捕获 deferral 输出）。三步都排除后，加一行 `main()` 入口 diag 等下一轮样本——**不要在无样本时宣称根因**。判据：`silent (empty output)` = 脚本 stdout 真为空（harness 源码 `cron/scheduler.py` 明确分支）；成功发布路径必打印，零输出≠成功。
+13. **手动补跑前先查对侧车的时刻表（锁竞争自伤）** — 共享图表锁下，手工补跑 XAU 同步若撞上 `btc_tv_refresh`（`7,27,47 * * * *`）会让 BTC 采集拿锁后中断（实测 17:09 轮 error：`未发布新快照(第1次, rc=0)` + `TV五周期过期`）。**补跑前先看 jobs.json 两车时刻**，或等下一个空窗；撞车后下一轮自愈但要复核一次才算闭环。
+14. **审计脚本的资源口径要引权威元数据** — 首版自检把 `tv_five_tf_BTCUSDT.json` 当五周期快照（实际 BTC 落在 `keylevels_candidates.json`，由 `tv_five_tf_contract._candidate_paths` 定义）；写监控清单前先 `python -c "from tv_five_tf_contract import _candidate_paths; …"` 拿真名，避免把命名错当故障。
+15. **常驻门限与卡时门限必须分家（P1 修复，2026-09-14）** — 5min 门限挂在 15min 节奇上必然周期性假红（每周期约 2/3 时间，假红掩盖真故障）。修法：常驻=cadence-aware（`XAU_LIVE_MAX_AGE_CADENCE_MIN = 节奇 + 余量 = 17`），卡时=5min 由 `auto_card.TV_LIVE_READ_MAX_AGE_MIN` 显式传入（超窗即现场刷新）。两层都要测试钉住：中段 pair 过常驻、拒卡时；超一个节奇仍必须 FAIL（防「永不报警」）。
+16. **新增生产端文件写入必须同步隔离测试** — `xau_tv_sync._audit_marker` 上线后，lease/main 用例会往 `data/xau_tv_sync_runs.jsonl` 追加生产取证行（实测污染）；在根 `conftest.py` 加 autouse fixture 把该路径改写到 tmp_path。原则：**取证/日志类新写入点，上线同时加测试隔离**。
+
 ## 参考文件
 
 - 技能主文档：`trading/tangxi-system-audit/SKILL.md`（完整审计Step 0-12）

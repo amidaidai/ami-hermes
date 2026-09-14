@@ -22,6 +22,16 @@ The user is very sensitive to table legibility on Telegram. Do **not** rely on l
 - 这条规则与平台无关：CLI 会话里同样先出卡片图再给结论，不要因为「这次不是 Telegram」就退回文本表。
 - 卡片直接用 `scripts/render_table_card.py` 渲染（列宽自动归一到表宽、CJK 字体已内建），不要每次手搓。
 
+## 0 元优先：客户端类付费先查源码
+
+对「客户端 / 工作台 / App」类付费产品（例如 Ekko Studio 这类 Hermes 前端、桌面客户端订阅），**在给购买建议之前**先查它的源码与许可：
+
+1. 搜 GitHub 仓库（定价页通常不主动挂出来），取 `LICENSE` 读 `Additional Use Grant` 段落，确认个人使用是否免费。
+2. 源码开放且个人使用免费 → **先给「自托管 + 免费组网」的 0 元路径**，再谈要不要为官方托管 / 官方 App 付费。用户对订阅制敏感，0 元路径往往才是首选答案。
+3. 定价页按**功能边界**拆：买断档与订阅档各含什么、各**不**含什么，尤其是「订阅期内附带的软件权限在到期后是否一起消失」。
+4. 报价标明「一次性 / 每期」，并给回本点（一次买断 X 元 vs Y 元/月 → 几个月回本）。
+5. 自托管 / 手机访问的具体路径见 `hermes-remote-access` 技能。
+
 ## Research workflow
 
 1. **Define the target model/workflow first.** If the user states a preferred model (e.g. GLM-5.2), re-rank plans around that model instead of giving generic multi-model advice.

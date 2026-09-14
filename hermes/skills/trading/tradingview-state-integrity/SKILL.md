@@ -64,6 +64,8 @@ indicator_set_inputs(
 )   # → 等 15–30s 重算，再比 S-code 验收
 ```
 
+接线值必须是 `<副指标id>$49` 形式（`$49` = Basic Packed Bus 在本仓 AggVol 输出里的序号）；用「<id>_<plot名>」或中文 plot 名等其它字符串会静默空转/不生效——**写完必须回读核验**：等 15–30s 重算后，主指标结论行不再出现「副S0未接」且 `in_164` 不再是 `close` 才算接上；**重挂/重启恢复出的新实例同样回退 `close`**，重挂后立即重接。
+
 **主指标 fail-closed 显示「副S0未接·A禁」本身是对的**（宁可禁 A 也不能用错数据）——
 要修的是让它自愈，不是让它放行。**不要**为了自愈在同步脚本里加自动重接：
 脚本只能走 CLI，而 CLI 是静默空转 + 读回必然失败 → 每轮刷假告警。
@@ -188,12 +190,36 @@ return False
 - 挂图前后都要记 `chart_get_state` 的 `studies`（id + name）并逐条比对，不能只看「数量还是三个」。
 - `pine_list_scripts` 可能留下多余的保存脚本条目（MCP 无删除工具，需人工在编辑器删）——必须在交付说明里写明。
 
-### ⚠️ 分析租约必须同进程长驻，否则等于没持有（2026-09-13 实测）
+### ⚠️ 脚本层故障的恢复阶梯（红叹号 / 研究掉图）
+
+自定义脚本（SVP/AggVol）图例带**红色感叹号**、无输出、读表持续 `study_count:0`，而内置 Volume 正常 → 脚本层故障，**不要继续重读表**。阶梯（单级最多试一次，无效立即升级；在低级别手段间反复重试是本类故障最大的时间坑）：`Ctrl+R` 刷新 → 品种/周期往返（复位后必须重读表）→ `indicator_toggle_visibility` 关开 → **`tv_launch(kill_existing=true)` 重启 TV 桌面**（最后手段：重启有代价，确认无其他自动化在跑再执行；重启后图回到 owner 持久状态、常为 4h，需重设工作周期；自定义研究可能全部掉图，用「指标」对话框（aria-label `指标、衡量标准和策略`）→「我的脚本」重挂，比编辑器路线可靠；重复实例用 `chart_manage_indicator remove` 去重；**重挂后立即重接主副总线**）。分层诊断表、槽被覆盖判定（`pine_open` 成功≠内容已切换，读 Monaco 验证）与重装命令见 `references/chart-layer-recovery.md`。
+
+### ⚠️ 分析租约必须同进程长驻，否则等于没持有
 
 `python scripts/tv_analysis_lease.py start --minutes 8; sleep 400` 这种写法**无效**：
 租约记的是那次短命 python 的 pid，`status` 立刻报「租约持有进程已退出」，
-后台任务照切图（实测分析期间图被 XAU 同步 / BTC 续航连切两次）。
-持有必须在**同一个进程**内 start 后长驻（同 pid 睡眠），或让分析脚本自己 start 完再干活。
+后台任务照切图。持有必须在**同一个进程**内 start 后长驻（同 pid 睡眠），或让分析脚本自己 start 完再干活。
+
+**现在契约层已修**（`tv_data_bridge.begin_analysis_lease` 新增 `liveness` 字段）：
+
+| `liveness` | 语义 | 用途 |
+|---|---|---|
+| `ttl`（默认） | 只认 TTL，**不看 pid 存活** | CLI `start` / 交互式分析——短命进程写租约的正确语义 |
+| `pid` | 保留存活性判定 | 常驻守护进程自持租约 |
+
+**无论哪种模式，`start` 之后必须跑一次 `status` 确认 `active: true`。** 看到
+「租约持有进程已退出」就等于**根本没有租约**——此时多周期读数必然被抢，先修再读，
+不要硬读，更不要把抢到的数当成目标周期出卡。「返回 success 就是持有成功」和
+本文件其他静默空转是同一类错误。
+
+诊断一行（判断到底谁没让路）：
+
+```bash
+python -c "import sys,json;sys.path.insert(0,'scripts');from tv_data_bridge import analysis_lease_status;print(json.dumps(analysis_lease_status(),ensure_ascii=False))"
+grep -rln 'set_timeframe' scripts/ monitor/   # 谁在切图；再核对这些脚本是否读 analysis_lease_status()
+```
+
+另注：**租约是让路信号、不是硬锁**——`*/15` 的 XAU 同步等定时任务可能恰在租约生效前后启动、整轮压进分析窗口；别拿 `status` 字段当安全证明，分析全程按抢图协议复核＋复位。
 
 ## 并发注意事项
 
@@ -212,11 +238,21 @@ return False
 
 | 你以为 | 实际 | 判据 |
 |---|---|---|
-| 切周期已生效 | 图在另一个周期 | `chart_set_timeframe` 返回 `success:true, chart_ready:true`，但紧接着 `chart_get_state` 的 `resolution` 是 `1D`/`240`/`15` |
+| 切周期已生效 | 图在另一个周期 | `chart_set_timeframe` 返回 `success:true, chart_ready:true`，但紧接着 `chart_get_state` 的 `resolution` 不是目标周期 |
+| **`chart_get_state` 说的就是真的** | **它可能只是在回显你请求的值** | 请求 `240` → state 报 `240`，但读回来的 OHLCV 相邻 K 线间距是 **300s**（5m）；同一轮「1D」与「4h」两组数值完全一致。**state 是弱证据，数据间距才是硬证据** |
 | 该周期 SVP 不渲染 | 抢图瞬间读到空档 | `data_get_pine_tables` → `study_count: 0`（**这是争用信号，不是「无数据」，要重读**） |
 | 在看 5m 的副指标 | 读到的其实是 1D 的表 | 表内容格式正确但有**锚定词**：`月·单所1m…`=1D/4h 层，`日·单所1m…`=15m 层，`本锚` 指当前锚定周期 |
+| 报 4h 就是 4h | 静默读到 5m | `(period.to - period.from) / (bar_count - 1)` 应为 14400s，实为 300s |
 
-**协议**：切周期 → `chart_get_state` 复核 `resolution` → 不一致就重切一次再复核（实战第二次即稳）→ 才读表。`study_count: 0` 一律按争用处理并重读。
+**周期写法**：一律用 `"1D"` / `"240"` / `"60"` / `"15"` / `"5"`。带单位的 `"4h"` / `"5m"` 会出现「返回 success 但周期没切过去」；`"5m"` 另会被误解释成异常高周期（OHLCV 只剩极少根、标签蹦出跨年月日期）。`studies[].resolution` 字段会滞后一两拍，同样不能当判据。
+
+**协议**：切周期 → `chart_get_state` 复核 `resolution` → 不一致就重切一次再复核 → **再读 OHLCV 校验 K 线间距**（容差 5%：1D 86400 / 4h 14400 / 1h 3600 / 15m 900 / 5m 300）→ 两项都过才读表。`study_count: 0` 一律按争用处理并重读。
+
+**K 线间距校验是唯一能拦住静默污染的门**——`chart_get_state` 会回显请求值、`success` 恒为 true、`studies[].resolution` 会滞后，三者都拦不住「报 4h 实读 5m」。校验必须作用在**最终落盘的那批读数**上，不能只验一次就往下写。对不上就重锁重读，连试 4 次仍对不上就标注「该周期本次不可用」，**绝不把 5m 的数当 4h 写进卡里**。
+
+现成实现：`python <skill_dir>/scripts/tv_read_verified_tf.py --symbol BINANCE:BTCUSDT.P --out outputs/btc_5tf_verified.json`（逐周期锁定 + 间距校验 + 重试 + 落盘，末尾回主执行周期）。多周期分析优先跑它，不要手打几十次 MCP 调用——手打时极易漏掉校验。
+
+重读仍为 0 时换假设：图例带红叹号（截图＋vision 确认）＝脚本层故障，转恢复阶梯，继续重读不会有结果。
 
 **截图时机**：主执行周期截图**切好并复核后立刻拍**，不要等把所有周期表格都读完再回头拍——那正是 cron 最可能介入的窗口。（本次 15m 图就是趁 14:06 空档抢下的。）
 
@@ -264,7 +300,9 @@ return False
 
 - [ ] 目标 symbol 与实际 chart symbol 一致
 - [ ] 目标主周期与实际 resolution 一致（**切周期后必须复核过 `chart_get_state.resolution`，不能只看 `success:true`**）
-- [ ] `data_get_pine_tables` 的 `study_count` 不为 0（为 0 先按抢图重读，不要当成「该周期无数据」）
+- [ ] **每周期 OHLCV 的 K 线间距与目标一致**（容差5%：1D 86400 / 4h 14400 / 1h 3600 / 15m 900 / 5m 300）——防「报4h实读5m」；state 回显不算证据
+- [ ] 分析租约 `status` = `active: true`（否则后台抢图，多周期读数不可信）
+- [ ] `data_get_pine_tables` 的 `study_count` 不为 0（为 0 先按抢图重读；重读仍 0 且图例红叹号 → 走脚本层恢复阶梯）
 - [ ] studies 已加载且与目标分析匹配
 - [ ] action grid 与目标品种数量级相符
 - [ ] quote 的身份字段与目标资产相符
@@ -276,9 +314,11 @@ return False
 
 - **多源交叉验证别把同一数据数两次（2026-09-11 实测）**：TV 副指标 DW 的 `LSR` 与 Binance `futures/data/globalLongShortAccountRatio` 是**同一数据**（本会话两者同为 `1.6575`）。它们只能算 **1 个源**，写成「TV 说 1.66 + Binance 说 1.66 → 双源确认」是自证。真正独立的是**大户** `topLongShortPositionRatio`（本次 2.13）与**全局账户**（1.6575）—— 两者背离才是有效证据。凡是「两个源数字一模一样」，先怀疑同源，再算独立源数。
 
+- **`scripts/tv_read_verified_tf.py`** — 多周期读取器：逐周期「锁定 → 验 resolution → 读 OHLCV → 验 K 线间距 → 不符重试」才落盘，末尾回主执行周期。做五层分析时优先跑它，不要手打几十次 MCP 调用（手打必漏校验）。
 - 共享状态污染的复现、恢复和验收细节见 `references/shared-chart-state-recovery.md`（未落地·勿引）。
 - **MCP 静默空转的行为验收、主→副总线断线机理与重接 recipe、切换源普查与实测数字**
   见 `references/mcp-silent-noop-and-bus-wiring-20260911.md`（2026-09-11，含 CDP 验证命令）。
+- 脚本层故障（图例红叹号 / 自定义研究掉图 / 云端脚本槽被覆盖）的分层诊断、恢复阶梯（含 `tv_launch` 重启与对话框重挂）与重装流程见 `references/chart-layer-recovery.md`。
 - 加密分析的多源管线和主副指标裁决见 `crypto-multisource-analysis`。
 - 加密15m/黄金5m执行周期和执行卡格式见 `tradingview-execution-card`。
 - 主副指标字段映射与契约见 `tradingview-indicator-analysis`（内已含分析前置的总线检查）。

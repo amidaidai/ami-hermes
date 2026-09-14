@@ -1,6 +1,6 @@
 ---
 name: crypto-multisource-analysis
-description: 多资产驾驶舱 v9.6 — TV五层(1D/4h/1h/15m/5m)·Binance衍生品·CoinGecko Pro·宏观(SPX/VIX/DXY/金十/Poly/FG)·X实时情绪(x_search)·cron_read捷径(不重跑·读data/)·CVD/Depth·跨资产相关(corr)·黄金专属(gold_macro:GLD/GDX/TIP)·外汇专属(forex_rate:利差/央行)·GO/NO-GO下单七问闸门(go_nogo_gate)·QLib30因子·告警去重·IP-ban回退·17cron零token。步数:加密10/黄金8/外汇7/股票8/期货6。
+description: 多资产驾驶舱 v9.6 — TV五层(1D/4h/1h/15m/5m)·Binance衍生品·宏观(SPX/VIX/DXY/金十/Poly/FG)·X实时情绪(x_search)·cron_read捷径(不重跑·读data/)·CVD/Depth·跨资产相关(corr)·黄金专属(gold_macro:GLD/GDX/TIP)·外汇专属(forex_rate:利差/央行)·GO/NO-GO下单七问闸门(go_nogo_gate)·QLib30因子·告警去重·IP-ban回退·17cron零token。步数:加密14/黄金8/外汇7/股票8/期货6。
 category: trading
 ---
 
@@ -45,6 +45,12 @@ category: trading
 5. **歧义/会话开头无上下文** → 默认 **L1 轻量**，同时标注"如需完整请说 分析"；绝不默认上 L3 全管线
 规则口诀：**「分析」=重，「看下」=轻，无动词=轻量起步，带"为什么/为啥"先补 lines/labels 精确位再答**。
 
+**档位步数（唯一权威 · 2026-09-14 用 router 复算核过）**：
+- 加密：轻量/标准 **同为 3 步** `tv → binance → card`（标准档不增加步数，只在执行器叠加「继承高周期 + 相邻周期结论行 + 关键位/多源表」）；完整 **14 步**（`tv binance macro x_sent cron_read cvd depth corr engine regime dual advanced risk card`）；监控 1 步 `binance`。
+- **cg_pro 已退役（2026-09-14 用户决定，勿再恢复该步）**：真因不是「无 key」而是两个可修缺陷叠加——① 27 字符的 **Demo key（`CG-`）被当 Pro key** 发 `x-cg-pro-api-key` 给公共主机 → 每次 HTTP 400/10010；② `cg_top_coins` 里 `c.get("price_change_percentage_24h", 0)` 兜不住「值为 null」→ `sum()` TypeError，整源吞成 `request_failed`。两者均已修（唯一出口 `scripts/cg_auth.py`），所以「CG 想回来」只需把 `cg_pro` 加回 `CRYPTO_FULL_PIPELINE`；但**默认不加**，CoinGecko 免费信息（/global、/search/trending）由 `x_sent` 承载。步骤 ID 仍留在 `STEPS`（`assets=set()`）供历史卡解析标签，`tests/test_pipeline_router.py::test_retired_cg_pro_step_can_never_re_enter_a_route` 守着它不会自己回来。
+- 其他资产完整档：黄金 8（末段 `gold_macro`）· 外汇 7（`forex_rate`）· 股票 8（`fmp`+`options_chain`）· 期货 6 · 期权=跟随底层步骤 + `options_chain`。
+- 复算：`python -c "import sys;sys.path.insert(0,'scripts');import pipeline_router as r;print(r.route_pipeline('BTCUSDT','full'))"`。卡面「N步完成 X/N」里的 N 取本地实际路由长度，不足时逐条写清是「本轮无有效字段」还是「源设计性停用」（后者见 `CRON_SOURCES_PAUSED`），两类不得混写。
+
 **L1 轻量卡模板（默认 · 2026-08-28 固化）**：
 ```
 0. [防抢图·必做] 声明分析租约，让后台续航让路：
@@ -65,7 +71,7 @@ category: trading
 
 **完整模式（v9.5 补齐·2026-06-29）**：
 ```
-加密: tv→binance→cg_pro→macro→x_sent→cron_read→cvd→depth→corr→card (10步)
+加密: tv→binance→macro→x_sent→cron_read→cvd→depth→corr→engine→regime→dual→advanced→risk→card (14步)
 黄金: tv→macro→x_sent→cron_read→cvd→corr→gold_macro→card (8步)
 外汇: tv→macro→x_sent→cron_read→corr→forex_rate→card (7步)
 股票: tv→macro→x_sent→cron_read→corr→fmp→options_chain→card (8步)
@@ -92,7 +98,7 @@ category: trading
 1. `MEDIA:<新截图>` 必须首行；截图为TV full窗口，含价格轴与CVD/副指标窗格。
 2. 首句自然语言直给裁决：`↑/↓/○/× 品种 价格 · 结论 · 中文时间`。
 3. **当前基本情况首屏表**：在流程审计前先给手机端最需要的现状，表头固定为 `当前基本情况 | 数据`，至少包含 `刚发生什么`、`贴近结构`、`最大问题`、`明确推荐`、`禁做`。这是手动Telegram分析卡的首屏速读层，先让棠溪知道当前行情和动作，再看完整驾驶舱数据。
-4. `驾驶舱流程/管线完成情况` 表：步骤、模块、状态、备注；加密完整10步为 `tv → binance → cg_pro → macro → x_sent → cron_read → cvd → depth → corr → card`。
+4. `驾驶舱流程/管线完成情况` 表：步骤、模块、状态、备注；步骤序列**一律以 `route_pipeline(symbol, mode)` 返回值为准**（加密完整档 14 步，`cg_pro` 已于 2026-09-14 退役），不要照抄本节历史文字。
 5. `多周期定位` 表：列固定为 `周期 | SVP | 副指标 | Composite | 价 vs VWAP`；必须含 1D/4h/1h/15m/5m 五层。
 6. `关键位矩阵` 表：列固定为 `方向 | 价位 | 性质 | 距现价`。
 7. `多源交叉验证` 表：列固定为 `维度 | 数值 | 方向`。
@@ -124,7 +130,7 @@ category: trading
 用户覆盖6类资产：🪙加密 | 🥇贵金属 | 💱外汇 | 📈股票 | 📊期货 | 📋期权
 
 每次分析前必跑 `pipeline_router.route_pipeline(symbol, mode)` 确定应执行步骤：
-加密 BTC/ETH/SOL：10步（tv→binance→cg_pro→macro→x_sent→cron_read→cvd→depth→corr→card）
+加密 BTC/ETH/SOL：14步（tv→binance→macro→x_sent→cron_read→cvd→depth→corr→engine→regime→dual→advanced→risk→card）
 黄金 XAU/USD：8步（tv→macro→x_sent→cron_read→cvd→corr→gold_macro→card）
 外汇 EUR/USD等：7步（tv→macro→x_sent→cron_read→corr→forex_rate→card）
 股票 AAPL/TSLA：8步（tv→macro→x_sent→cron_read→corr→fmp→options_chain→card）
@@ -161,9 +167,9 @@ category: trading
 
 | 失败模式 | 表现 | 正确做法 |
 |---------|------|---------|
-| 跳步出卡 | TV→Binance→直接出卡，跳过cg_pro/dune/deribit/x_sent等10步 | 严格按router返回的步骤列表逐一执行 |
+| 跳步出卡 | TV→Binance→直接出卡，跳过cron_read/x_sent等采集步 | 严格按 `route_pipeline` 返回的步骤列表逐一执行（加密完整档 14 步） |
 | 含「分析」关键词走快速模式 | 用户刚看完全量卡，接着说「分析BTC」时降级为追踪更新 | 铁律：含「分析」二字=完整模式硬开关，不论时间间隔 |
-| 漏调CoinGecko Pro | Key在代码里但分析时不调cg_categories/cg_coin_detail | 加密分析Step 4必须调CG Pro。CG Pro Bridge stdin模式不便→直接用`python scripts/coingecko_collector.py` |
+| ~~漏调 CoinGecko Pro~~ | **该步 2026-09-14 已退役**，不再采集；CoinGecko 免费信息随 `x_sent` 取 | 不要为「补齐 CG」重新插入 `cg_pro`；真要恢复就先读本节的退役说明（两个已修的根因） |
 | 漏调x_search | cron有定时采集但手动分析时不调 | x_search已恢复为独立步骤(x_sent)。x_sentiment_collector.py双落盘，cron_read也可读data/x_sentiment.json |
 | **x_search一声放弃** | tool_call('x_search')失败后直接说不可用 web_search替代 | 先调用x_search一次再判断。在Telegram平台上x_search实际可用（2026-06-30验证），不要预判不可用。真的失败了再走排查协议；若返回 `personal-team-blocked:spending-limit`，属于额度/订阅阻断，不要重复调用，按 `references/x-search-quota-and-degraded-sentiment-2026-07-03.md` 降级为本地x_sent+web源并在审计表标⚠️ |
 | 重分析漏X情绪 | 用户纠正后重新分析时又跳过x_sent | 每次输出分析卡（包括重分析/跟踪更新）前做一次x_sent检查：若前次输出无X情绪行，必须补调x_search或web_search。在出卡验证清单最前加一项「x_sent已执行」。|
@@ -202,7 +208,7 @@ category: trading
 
 | 步骤 | 常见失败 | 降级/处理 |
 |:---|:---|:---|
-| CG Pro (Step 3) | web_extract 被网络策略阻断（private network） | 尝试 terminal+curl 直取 CoinGecko API；若curl也被阻断，跳过并标注「CG Pro: 网络阻断」 |
+| ~~CG Pro~~（步骤已退役） | 历史上表现为「网络阻断/未采到有效字段」 | 真因是认证头用错 + null 崩解析（均已修）；默认不再采集，无需处理 |
 | x_search (Step 5) | 工具在当前环境不可用 | **三层检查协议**：① `tool_search('x_search')` 搜不到 → ② `grep x_search config.yaml` 确认已配置 → ③ 检查 `platform_toolsets.{当前平台}` 是否包含 x_search。若配置了但当前平台没挂载，用 `delegate_task` 派到 CLI 工具集（CLI 通常有 x_search）尝试代理调用；若 delegate 也不行，最后回退 web_search 并标注「web源·非X实时」+ 附上排查过程说明 |
 | Correlation (Step 9) | FinanceKit 返回 "Could not fetch data for enough symbols" | 跳过并标注「FinanceKit相关性不可用」 |
 | Depth (Step 8) | web_extract 被阻断（Binance API私有网络） | 改用 `terminal('curl -s "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20"')` 直取 |
@@ -290,7 +296,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 
 **读取时效判断**：文件 mtime < 60min → 直接使用，标注「cron缓存·{时间}」。>60min → 重新运行脚本。
 
-优化后完整模式从 ~14步 缩减到 ~8步（tv→binance→cg_pro→macro+jin10+poly+fg→cron_read→cvd→card），不丢失任一数据维度。
+优化后完整模式从 ~14步 缩减到 ~8步（tv→binance→macro+jin10+poly+fg→cron_read→cvd→card），不丢失任一数据维度。
 
 ## 管线原则（不裁剪指标 · 分层治理 · 优先免费源）
 
@@ -319,7 +325,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 - Binance MCP：15工具，负责价格/K线/OI/Funding/Taker/多空/账户/下单能力；默认只分析，不自动交易。
 - FinanceKit MCP：17工具，负责 CoinGecko/股票/期权/市场概览/相关性/风险指标。
 - Jin10 MCP：8工具，负责金十行情、财经日历、快讯/新闻。
-- CoinGecko Pro Key：**已全面灌注**（2026-06-28，4个脚本）→ 全速500req/min + 板块轮动/流动性评分/交易所量验证
+- CoinGecko 凭据：`hermes/secrets/coingecko_api_key.txt` 是 **Demo key（`CG-` 前缀，约 30 req/min）**，不是 Pro；唯一认证出口 `scripts/cg_auth.py`（demo→`x-cg-demo-api-key`，pro 形态→`x-cg-pro-api-key`，空→不带头）。**禁止在别处手写这两个 header**（`tests/test_cg_auth.py` 扫全仓）。历史上的「全速 500req/min」说法是错的：那正是把 demo key 当 pro key 发、每次 400 的来源。
 - ETF Flow（SoSoValue）：**已接入**（`etf_flow_collector.py`）→ 免费抓取 BTC ETF 日净流入流出 + 信号判定
 - Dune Analytics（链上）：**已接入**（`dune_collector.py`）→ BTC全网流入/CEX净流/稳定币供应，免费 40req/min
 - CFTC COT 持仓：**已接入**（`cot_collector.py`）→ 外汇/金属/股指/能源投机持仓，每周五更新
@@ -384,7 +390,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 
 **声明虚挂（已全部闭合）**：
 - ~~`x_sent` X情绪~~：✅ 已闭合 — `x_sentiment_collector.py` + cron `d6247e06ac30` 每30min
-- `cg_pro` CoinGecko Pro：Orion 的 CG 交叉验证全部失败（CG Pro tickers 端点返回 400），非 Orion 场景可用但需确认端点兼容性。
+- `cg_pro` CoinGecko Pro：**2026-09-14 退役**。原记录的「Orion CG 交叉验证 400」已定位为认证头用错（demo key 发 pro 头），代码已修（`scripts/cg_auth.py`）；步骤本身按用户决定不再进管线。
 
 **免费数据源尚未接入**：
 - **爆仓/强平数据**：Binance `GET /fapi/v1/forceOrders` 需认证（已有Key）。清算集群是最强支撑/阻力位（社区共识），当前驾驶舱完全缺失。**期货强制平仓需认证，现货无公开端点。**
@@ -757,7 +763,7 @@ print(f"{symbol} [{tfinfo['main']}] {len(steps)}步: {steps}")
 ```
 
 Router 自动根据资产类别跳过不适用步骤：
-加密 BTC/ETH/SOL：10步（tv→binance→cg_pro→macro→x_sent→cron_read→cvd→depth→corr→card）
+加密 BTC/ETH/SOL：14步（tv→binance→macro→x_sent→cron_read→cvd→depth→corr→engine→regime→dual→advanced→risk→card）
 黄金 XAU/USD：8步（tv→macro→x_sent→cron_read→cvd→corr→gold_macro→card）
 外汇 EUR/USD等：7步（tv→macro→x_sent→cron_read→corr→forex_rate→card）
 股票 AAPL/TSLA：8步（tv→macro→x_sent→cron_read→corr→fmp→options_chain→card）

@@ -132,6 +132,8 @@ def signed_fapi(path, params, api_key, secret, timeout=10):
 | A healthy payload whose freshness timestamp is keyed under a name the status contract doesn't recognise | The source is permanently labelled `unavailable` while its data is actually consumed — inverted mislabeling, and it hides real degradations behind constant noise | Publish the instant under a contract-recognised key as well; when re-verifying, evict the cached payload first |
 | Renderer prints one warning for both "this tier deliberately skips the step" and "the upstream failed" | Readers learn to ignore the marker, so a genuine outage of that source becomes invisible | Reuse the pipeline's deliberate-skip convention (e.g. `⏭️ … skipped at this tier`); keep the warning icon for real failures only |
 | Accepting a green unit-test run as verification for a data-plane change | Tests assert construction logic, not that the contract can parse the payload or that the output text is honest — both real defects of this class were invisible to a fully passing suite | Run the real pipeline end-to-end and read its output lines; if you have not looked at the actual output, it is not verified |
+| `dict.get(key, default)` guarding a provider field that can be **present and `null`** | The default only covers a *missing* key; one null in a list makes a downstream `sum()`/comparison raise, and the collector reports a generic `request_failed` — indistinguishable from a network outage | Normalize nulls explicitly (drop before aggregating, or coerce to a sentinel) and add a unit test that feeds a null-bearing payload through the real parser |
+| Guessing the auth header / host pair instead of deriving it from the credential's tier | Every call returns the provider's own "you are using the wrong API" code (4xx + provider `error_code`), which is consistently read as "source unavailable" — a perfectly good credential looks permanently dead | Probe the matrix (public host × pro header / × tier-correct header / × no key, paid host × paid header) printing only status + `error_code`; map tier→header→host in ONE module and forbid hand-written auth headers with a repo-scanning test |
 
 ## Quota-aware degradation and circuit breaking
 
@@ -162,7 +164,9 @@ When a user supplies multiple provider credentials, onboarding is not complete a
 
 1. Store them under a repository-ignored credentials directory; verify `.gitignore` covers the directory and naming patterns.
 2. Use one class-level credential reader: environment variables first, local credential files second. Give the **code module** a neutral filename such as `credential_store.py`; broad rules like `*secret*` can accidentally ignore a module named `secret_loader.py`.
-3. Scan the full source tree for literal key fragments and remove all hardcoded fallbacks.
+3. Scan the full source tree — **including docs, skills, READMEs and code comments** — for literal key fragments and
+   remove all hardcoded fallbacks. A key pasted into a guide does not merely leak: it freezes whatever usage was
+   current at the time as the documented standard, so the next reader re-introduces the exact bug.
 4. Probe each provider without printing keys or sensitive payloads. Output only provider, HTTP status, semantic result class, and whether required data exists.
 5. Distinguish `authenticated`, `public-only`, `plan-restricted`, `network-unverified`, and `invalid`. Never label `HTTP 200 + code 401` as healthy.
 6. For multi-part authentication, verify completeness before enabling private operations. A lone API key may be insufficient when secret/passphrase/wallet signing are also required.
@@ -214,6 +218,47 @@ instead of waiting for someone to ask again.
 
 For the detailed recipes, guard rules, and scanner shape, see
 `references/availability-verification-layers.md`.
+
+## Retiring a dependency is a lifecycle operation, not a deletion
+
+When the user says a source/step "is useless, remove it", triage before retiring. A source that has failed for
+weeks is usually **two stacked, fixable defects** (auth-scheme mismatch + a parser crash); deleting the step
+just buries the bug until the next source repeats it. Prove the death cause first, then retire with a checklist.
+
+**Step 1 — prove why it dies (probe matrix).** Print only HTTP status + provider `error_code`, never the key:
+public host × the header the code currently sends / public host × the header the credential's *tier* requires /
+public host × no key / paid host × paid header. A demo-tier key sent under the paid header on the public host
+returns 4xx with a provider error code **on every call** — the most common disguise for "this source is dead".
+
+**Step 2 — get the real exception.** The recorded error is a *classified code* (`request_failed`,
+`quota_or_rate_limited`, `credential_or_plan_blocked`, `timeout`), not the message, so a parser crash reads as
+"request failed" and sends you chasing the network. To see the traceback, monkeypatch the collector's own
+module-level cache helper to call the fetcher directly and `traceback.print_exc()` (collectors look that name up
+as a module global, so the patch applies); patch the HTTP helper too — **HTTP succeeding while the source still
+errors means the parser broke, not the request**.
+
+**Step 3 — retirement checklist** (every missed item leaves a ghost):
+1. Remove the step from the canonical pipeline tuple **and** from any `ordered`/routing list.
+2. Keep the step id in the step table with an **empty asset set** (+ reason in its description) so historical
+   cards/artifacts still resolve labels; add a guard test asserting it cannot re-enter a route for any
+   `(symbol, mode)`.
+3. Delete the executor's collection code, its completion marking, and its audit-label mapping — otherwise the
+   completion table keeps a row that is permanently `⚠️` or silently absent.
+4. Delete its row from the source/verification matrix: a retired-but-still-listed source emits a permanent
+   degradation warning, which trains both readers and downstream gates to ignore that field.
+5. Sync the hardcoded fallback step list and every "N-stage" comment and doc string.
+6. `grep` the test tree for the step id **and for hand-written assertions that pin the old code text** — those
+   break the build until updated, and they are invisible if you only run the tests you thought were relevant.
+7. Re-run the real pipeline once and confirm the printed route length and the audit row count agree; then run the
+   full suite.
+
+**Step 4 — leave a restore path.** Keep the collector functions (still library-callable) and write the retirement
+reason plus the fixed root causes next to the step definition, so "bring it back" costs one line instead of a
+re-investigation. Never re-add a retired step — or quietly call its collector from another step — without
+reading that note.
+
+Worked recipe (probe script shape, monkeypatch snippets, acceptance checks):
+`references/dead-source-triage-and-retirement.md`.
 
 ## Trading and derivatives data contracts
 
