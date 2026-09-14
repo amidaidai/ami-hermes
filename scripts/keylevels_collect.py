@@ -98,6 +98,21 @@ def _diagnostic(stage: str, *, status: str = "running", error: str | None = None
     print(f"[BTC关键位] {status} stage={stage} collected={payload['collected_timeframes']}", flush=True)
 
 
+ANALYSIS_OWNER_ENV = "TANGXI_ANALYSIS_OWNER"
+
+
+def _is_analysis_owner() -> bool:
+    """本采集是否由「分析管线自己」发起（自持租约的持有者）。
+
+    2026-09-14 修「租约自锁」：租约把「分析进行中」变成后台可见的事实（防抢图），
+    但同一个租约会把分析自己的五周期采集判 deferred —— 快照超 30 分钟契约后
+    完整档五层证据降级成 unavailable（实测 diagnostic status=deferred）。
+    分析管线（auto_card）调用本采集器时置 TANGXI_ANALYSIS_OWNER=1；外部后台
+    （btc_tv_refresh / xau_tv_sync / cron）不会置该变量，照旧让路。
+    """
+    return str(os.environ.get(ANALYSIS_OWNER_ENV) or "").strip() == "1"
+
+
 def _require_no_analysis_lease() -> None:
     """交互式分析进行中 → 本轮让路（抛 AnalysisLeaseActive，由调用方按成功处理）。
 
@@ -105,7 +120,16 @@ def _require_no_analysis_lease() -> None:
     分析是直接读行动格 + 截图、不持 tv_collection_lock，于是续航会在读图中途把图
     切走（实测 14:07 读 5m 被连抢两次，行动格读成空表）。租约把「分析进行中」
     变成后台任务看得见的事实：让路一轮不丢数据，比硬闯读出一张空表划算。
+
+    20260914：分析管线自己的采集带 TANGXI_ANALYSIS_OWNER=1（见 _is_analysis_owner），
+    不判让路 —— 否则分析会挡住自己的五周期证据刷新。
     """
+    if _is_analysis_owner():
+        _diagnostic(
+            "analysis_owner:proceed", status="proceed",
+            error="分析管线自持租约（TANGXI_ANALYSIS_OWNER=1）：本采集放行，不判让路",
+        )
+        return
     from tv_data_bridge import AnalysisLeaseActive, analysis_lease_status
     status = analysis_lease_status()
     if status.get("active"):

@@ -3238,6 +3238,53 @@ def _load_tv_five_tf_snapshot(symbol: str, *, mode: str = "quick", context: dict
     return direct
 
 
+ANALYSIS_OWNER_ENV = "TANGXI_ANALYSIS_OWNER"
+ANALYSIS_LEASE_MINUTES = 15.0
+
+
+def _analysis_owner_env() -> dict:
+    """给「分析自己的」子采集带上所有者标记。
+
+    外部后台（btc_tv_refresh / xau_tv_sync / cron）不会置这个变量，照旧让路；
+    只有分析管线自己发起的采集会放行（2026-09-14 修租约自锁）。
+    """
+    env = os.environ.copy()
+    env[ANALYSIS_OWNER_ENV] = "1"
+    return env
+
+
+def _begin_analysis_lease_if_idle(symbol: str, minutes: float = ANALYSIS_LEASE_MINUTES) -> bool:
+    """分析管线自持租约：让外部后台续航让路，同时给自己的采集放行。
+
+    已有人在分析（交互式租约在生效）时不覆盖、不接管，返回 False —— 谁声明谁 end，
+    避免把别人的租约提前释放。返回 True 表示租约为本进程声明，收尾必须 end。
+    """
+    try:
+        from tv_data_bridge import analysis_lease_status, begin_analysis_lease
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠ 分析租约不可用: {exc}")
+        return False
+    try:
+        status = analysis_lease_status()
+        if status.get("active"):
+            print(f"  ℹ️ 已有分析租约生效（剩 {status.get('remaining_seconds')}s）→ 沿用，不覆盖")
+            return False
+        begin_analysis_lease(minutes, note="auto_card 分析管线", symbol=str(symbol or ""))
+        print(f"  ✅ 分析租约已声明 {minutes:.0f} 分钟（后台续航让路；自有采集放行）")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠ 分析租约声明失败: {exc}")
+        return False
+
+
+def _end_analysis_lease_quiet() -> None:
+    try:
+        from tv_data_bridge import end_analysis_lease
+        end_analysis_lease()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠ 分析租约释放失败: {exc}")
+
+
 def _refresh_btc_tv_five_tf_snapshot(symbol: str) -> bool:
     """Refresh the active BTC TV collector once when a full run lacks evidence."""
     raw = str(symbol or "").upper().split(":")[-1].replace(".P", "")
@@ -3251,6 +3298,7 @@ def _refresh_btc_tv_five_tf_snapshot(symbol: str) -> bool:
             [sys.executable, str(collector)],
             cwd=str(ROOT), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=420,
+            env=_analysis_owner_env(),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "collector failed").strip()
@@ -6356,4 +6404,9 @@ if __name__ == "__main__":
             print(f"🎛 --mode-auto: 消息={_msg[:40]!r} → 档位={_mode}")
         except Exception as _me:
             print(f"⚠ --mode-auto 解析失败({_me}) → 保留 {_mode}")
-    auto_card(sym, push=do_push, mode=_mode)
+    _lease_owned = _begin_analysis_lease_if_idle(sym)
+    try:
+        auto_card(sym, push=do_push, mode=_mode)
+    finally:
+        if _lease_owned:
+            _end_analysis_lease_quiet()
