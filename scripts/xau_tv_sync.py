@@ -305,6 +305,23 @@ def validate_xau_outputs(
     }
 
 
+AUDIT_MARKER_FILE = ROOT / "data" / "xau_tv_sync_runs.jsonl"
+
+
+def _audit_marker(reason: str, **extra) -> None:
+    """每轮同步留一行现场（2026-09-14 自检：定位「零输出静默轮次」）。
+
+    只在文件里追加一行 JSONL；任何异常都不影响主流程——取证不能变成新的故障面。
+    """
+    try:
+        payload = {"ts": datetime.now(TZ).isoformat(), "pid": os.getpid(), "reason": reason}
+        payload.update(extra)
+        with AUDIT_MARKER_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def published_xau_cache_usable() -> dict[str, Any]:
     """Read the last published pair without touching the shared chart."""
     try:
@@ -328,11 +345,13 @@ def analysis_lease_defer_exit() -> int | None:
     cache = published_xau_cache_usable()
     if cache.get("usable"):
         print(f"↷ XAU同步本轮让路：交互式分析进行中（剩 {remain}s）")
+        _audit_marker("defer:cache_usable", remaining=remain)
         return 0
     print(
         f"↷ XAU同步让路但已发布缓存不可用：交互式分析进行中（剩 {remain}s）"
         f"·{cache.get('reason')}"
     )
+    _audit_marker("defer:cache_stale", remaining=remain, cache_reason=str(cache.get("reason"))[:120])
     return 1
 
 
@@ -453,8 +472,10 @@ async def _run(sync_id: str):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if s.connect_ex(("127.0.0.1", 9222)) != 0:
                 print("⚠ TV Desktop(9222)未运行，XAU同步跳过")
+                _audit_marker("cdp_closed")
                 return 0
     except Exception:
+        _audit_marker("cdp_probe_error")
         return 0
     # 交互式分析租约：分析期间不切用户正在看的图。缓存仍可用才静默让路。
     defer = analysis_lease_defer_exit()
@@ -721,6 +742,7 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str, *, expected_tf: str | None = 
 def main() -> int:
     """Run the TV sync with a cron-safe three-level degradation path."""
     global _PREVIOUS_CHART
+    _audit_marker("enter", argv=sys.argv[1:])
     # Check before touching staged output or acquiring the collection lock.
     # `_run()` also checks after the CDP probe, but returning 0 from that inner
     # path must not let the outer publication/validation path reinterpret a
@@ -774,9 +796,11 @@ def main() -> int:
         if all(isinstance(staged.get("timeframes", {}).get(tf), dict)
                for tf in ("1D", "4h", "1h", "15m", "5m")):
             _push_committed_xau_report(staged)
+        _audit_marker("published")
         _write_sync_status(True)
         return 0
     except Exception as e:
+        _audit_marker("error", error=str(e)[:200])
         try:
             STAGED_OUT.unlink()
         except FileNotFoundError:
