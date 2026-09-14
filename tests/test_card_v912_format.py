@@ -164,3 +164,66 @@ def test_source_footer_groups_verdict_and_aux_sources():
     assert "已入FinalVerdict：TV五周期 live" in footer
     assert "仅展示/辅助：X情绪 stale_cache" in footer
     assert "｜" not in footer
+
+
+# ── 优化回合（同日第二遍）：去重 / 防吞并 / 占位清理 / 24h ──────────────
+
+def test_lead_line_does_not_repeat_plan_row():
+    """首屏主推行只给「结论 + 理由」；触发/动作只在 ④ 出现一次。"""
+    card = _card()
+    lines = card.splitlines()
+    lead = lines[1]
+    plan_row = next(
+        l for l in lines
+        if l.startswith("| ⚠️主推") or l.startswith("| 🔵主推") or l.startswith("| ⭐主推")
+    )
+    cells = [c.strip() for c in plan_row.strip("|").split("|")]
+    cond, action = cells[1], cells[2]
+    assert cond and action
+    assert cond not in lead and action not in lead, f"首屏与 ④ 重复: {lead}"
+    assert "⭐主推" not in lead  # NO-GO 不点亮星标
+
+
+def test_header_carries_24h_change():
+    assert _card().splitlines()[0].endswith("24h +0.73%")
+
+
+def test_missing_readings_are_omitted_not_placeholded():
+    from render_v96 import _multi_source_line
+    line = _multi_source_line("买", "A", "N/A", None, "", "", "", None)
+    assert line.startswith("CVD🟢买"), line
+    for token in ("主动", "N/A", "恐贪", "费"):
+        assert token not in line, line
+
+
+def test_band_span_cap_prevents_chain_merge():
+    """A~B、B~C 各自在容差内，但整体跨度超 0.30% 时必须断开（防链式吞并）。"""
+    px = 100000.0
+    levels = [{"level": v, "kind": k} for v, k in (
+        (99000.0, "15m·VAL"), (99120.0, "15m·POC"), (99240.0, "1h·VAL"), (99360.0, "4h·VAL"),
+    )]
+    bands = _cluster_levels(levels, px)
+    assert len(bands) == 2, [b["price_txt"] for b in bands]
+    assert sorted(b["price_txt"] for b in bands) == ["99,000–99,240", "99,360"]
+
+
+def test_far_note_flags_truncated_bands():
+    from render_v96 import _far_levels_note
+    rest = [{"kind_txt": f"F{i}·VAL", "price_txt": f"{i}0,000"} for i in range(5)]
+    note = _far_levels_note(rest)
+    assert "另2带" in note, note
+
+
+def test_health_strip_readings_never_cut_numbers():
+    """实测缺陷：回退描述被 [:12] 切成「TV现场 POC 77,」半截数字。"""
+    from render_v96 import _compact_state, _sub_strip
+    assert _compact_state("TV现场 POC 77,609") == "TV现场POC77,609"
+    assert _compact_state("TV现场 POC 77,609／VAH 77,852") == "TV现场POC77,609"
+    assert _compact_state("下跌-2.4% — 缩量") == "下跌-2.4%·缩量"
+    assert _compact_state("转多·CHoCH↑·等BOS·平衡·") == "转多·等BOS"
+    assert _compact_state("空趋势·BOS↓·守摆高·平衡·看V") == "空趋势·BOS↓"
+    assert _compact_state("") == "—"
+    # 副读回退不得把「CVD」念两遍，只留方向
+    assert _sub_strip({"sub_composite": "CVD 中性"}, {"asset_is_crypto": True}) == "🔵中性"
+    assert _sub_strip({}, {"asset_is_crypto": True}) == "—"
+    assert _sub_strip({"cvd": {"direction": "卖"}}, {"asset_is_crypto": True}) == "🔴卖"

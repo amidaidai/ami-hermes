@@ -474,14 +474,28 @@ def _final_dual_verdict(dual: dict | None, final: dict | None) -> str:
     return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "待裁决")
 
 
-def _header_line(display, now, session_name, s_emoji, status, bias) -> str:
-    """卡片首行（2026-09-13：支持时段标注；空值不显示）。"""
+def _header_line(display, now, session_name, s_emoji, status, bias, chg_txt: str = "") -> str:
+    """卡片首行（2026-09-13：支持时段标注；2026-09-14：追加 24h 涨跌幅；空值不显示）。"""
     _sess_seg = f" · {session_name}时段" if session_name else ""
-    return f"📊 {display} · {now}{_sess_seg} · {s_emoji}{status} · {bias}"
+    _chg_seg = f" · 24h {chg_txt}" if chg_txt else ""
+    return f"📊 {display} · {now}{_sess_seg} · {s_emoji}{status} · {bias}{_chg_seg}"
+
+
+_FILLER_VALUES = ("", "n/a", "na", "none", "null", "—", "-", "待采集", "待刷新")
+
+
+def _seg_clean(value) -> str:
+    """过滤占位值：缺失读数不写成「主动N/A」占位（2026-09-14 卡面清理）。"""
+    text = str(value or "").strip()
+    return "" if text.lower() in _FILLER_VALUES else text
 
 
 def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual: dict | None) -> str:
     parts = []
+    cvd_dir = _seg_clean(cvd_dir)
+    taker_dir = _seg_clean(taker_dir)
+    funding_rate = _seg_clean(funding_rate)
+    fg_v = _seg_clean(fg_v)
     if cvd_dir:
         cvd_emoji = "🟢" if cvd_dir in ("买", "buy", "多", "long") else "🔴" if cvd_dir in ("卖", "sell", "空", "short") else "🔵"
         # 2026-09-13：XAU 非加密场景必须标明数据来源（Binance XAUUSDT 黄金合约，
@@ -501,20 +515,41 @@ def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rat
     return " · ".join(parts) if parts else "待采集"
 
 
-def _compact_state(text: str) -> str:
-    """把逐层 SVP 描述压成体温条用的短读（保留状态 + BOS/摆点，其余丢弃）。
+def _soft_cut(text: str, limit: int) -> str:
+    """按分隔符就近截断，宁短勿切半截数字（2026-09-14 实测「POC 77,」）。"""
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    for sep in (" ", "·", "—", "，", ","):
+        idx = head.rfind(sep)
+        if idx >= max(3, limit // 2):
+            return head[:idx].rstrip(" ·—，,") + "…"
+    return head.rstrip(" ·—，,") + "…"
 
-    2026-09-14（用户批准 v9.12）：完整卡的五周期从 4 列表格降为一行体温条，
-    逐层语义保留在「状态 + BOS/守摆」两类词上，其余（平衡/看VA边等）不再占行。
+
+def _compact_state(text: str, limit: int = 16) -> str:
+    """体温条短读：保留「状态 + BOS/守摆」，其余（平衡/看VA边等）不占位。
+
+    2026-09-14：只按 ·/— 分句，段内去空格；超限走 _soft_cut，绝不把
+    「TV现场 POC 77,609」切成「TV现场 POC 77,」这种半截数字。
     """
-    segs = [s.strip() for s in str(text or "").split("·") if s.strip()]
-    keep: list[str] = []
-    if segs:
-        keep.append(segs[0])
+    segs = [s.strip(" ·—、／/") for s in re.split(r"[·—／/]+", str(text or ""))]
+    segs = [s for s in segs if s and s not in ("平衡", "看V", "看VA边")]
+    if not segs:
+        return "—"
+    keep = [segs[0]]
     for seg in segs[1:]:
-        if any(word in seg for word in ("BOS", "摆", "扫")) and len(keep) < 2:
+        if any(word in seg for word in ("BOS", "摆", "扫")):
             keep.append(seg)
-    return "·".join(keep)[:12] or "—"
+            break
+    if len(keep) == 1:
+        if len(segs) > 1:
+            keep.append(segs[1])
+    joined = "·".join(seg.replace(" ", "") for seg in keep)
+    if len(joined) <= limit:
+        return joined
+    return _soft_cut(keep[0].replace(" ", ""), limit)
 
 
 def _sub_strip(tf_data: dict, dual_indicator: dict | None) -> str:
@@ -529,17 +564,29 @@ def _sub_strip(tf_data: dict, dual_indicator: dict | None) -> str:
         emoji = "🟢" if direction == "买" else "🔴" if direction == "卖" else "🔵"
         return f"{emoji}{direction}"
     for key in ("sub_indicator", "sub", "volume_agg", "sub_composite", "composite"):
-        if tf_data.get(key):
-            return _cell(tf_data.get(key))[:6]
+        raw = _cell(tf_data.get(key) or "")
+        if not raw or raw == "—":
+            continue
+        # 回退字段常写成「CVD 中性」「CVD 买 1,234」——去掉词头只留方向，避免
+        # 副读行出现「DCVD 中性」这种把「CVD」念两遍的占位。
+        text = raw.replace("CVD", "").strip()
+        for token, emoji in (("买", "🟢"), ("卖", "🔴"), ("中性", "🔵"), ("平", "🔵")):
+            if token in text:
+                return f"{emoji}{token}"
+        return _soft_cut(text, 6)
     return "—"
 
 
-def _cluster_levels(rows: list[dict], price: float | None, tol_pct: float = 0.15) -> list[dict]:
+def _cluster_levels(rows: list[dict], price: float | None, tol_pct: float = 0.15,
+                    max_span_pct: float = 0.30) -> list[dict]:
     """结构位并簇成带：相邻 <tol_pct% 的位合成一个区间。
 
     2026-09-14（用户批准 v9.12）：② 不再平铺最近 7 个位，而是先并簇
     （77,847 + 77,865 → 77,847–77,865 阻力簇），再按角色给 ≤4 行，
     其余下沉「远端」注脚。位表只回答：上面卡哪 / 中间看什么 / 下面废哪。
+
+    ``max_span_pct`` 防链式吞并：A~B、B~C 各自在容差内不代表 A~C 还是一个位
+    （实测曾把 6 个位并成 0.19% 宽的「带」，再宽就失去触发意义）。
     """
     if not rows or not price:
         return []
@@ -548,11 +595,13 @@ def _cluster_levels(rows: list[dict], price: float | None, tol_pct: float = 0.15
     except (TypeError, ValueError):
         return []
     tol = abs(px) * tol_pct / 100.0
+    max_span = abs(px) * max_span_pct / 100.0
     ordered = sorted(rows, key=lambda x: float(x["level"]))
     bands: list[dict] = []
     for item in ordered:
         lvl = float(item["level"])
-        if bands and abs(lvl - bands[-1]["hi"]) <= tol:
+        if (bands and abs(lvl - bands[-1]["hi"]) <= tol
+                and (lvl - bands[-1]["lo"]) <= max_span):
             band = bands[-1]
             band["hi"] = max(band["hi"], lvl)
             band["lo"] = min(band["lo"], lvl)
@@ -566,7 +615,9 @@ def _cluster_levels(rows: list[dict], price: float | None, tol_pct: float = 0.15
             if kind not in kinds:
                 kinds.append(kind)
         band["kinds"] = kinds
-        band["kind_txt"] = "–".join(kinds[:2]) + (f"+{len(kinds) - 2}" if len(kinds) > 2 else "")
+        # 角色行标签只带前两个周期·类型（如 `15m·VAH–1h·VAH`）；同类目过多时
+        # 不再堆 `+N` 尾缀——手机上一行读得完比列全更重要。
+        band["kind_txt"] = "–".join(kinds[:2]) if kinds else "位"
         d_lo = (band["lo"] - px) / px * 100
         d_hi = (band["hi"] - px) / px * 100
         if band["lo"] == band["hi"]:
@@ -646,10 +697,20 @@ def _structure_line(rows: list[dict], price: float | None) -> str:
     return "结构：" + " · ".join(parts)
 
 
-def _far_levels_note(rest: list[dict]) -> str:
-    """远端位注脚：角色表之外的结构位，压成一行（24h 极值只在快速卡出现）。"""
-    bits = [f"{b['kind_txt']} {b['price_txt']}" for b in (rest or [])[:3]]
-    return "远端：" + " ／ ".join(bits) if bits else ""
+def _far_levels_note(rest: list[dict], max_items: int = 3) -> str:
+    """远端位注脚：角色表之外的结构位，压成一行（24h 极值只在快速卡出现）。
+
+    截断时显式写「另 N 带」——远端位可以被折叠，但不能被静默吞掉。
+    """
+    rest = list(rest or [])
+    bits = [f"{b['kind_txt']} {b['price_txt']}" for b in rest[:max_items]]
+    if not bits:
+        return ""
+    note = "远端：" + " ／ ".join(bits)
+    extra = len(rest) - len(bits)
+    if extra > 0:
+        note += f" ／ 另{extra}带"
+    return note
 
 
 def _source_footer(source_matrix) -> str:
@@ -865,19 +926,24 @@ def render_v96_card(
     multi_src_line = _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rate, fg_v, kill_zone, dual_indicator)
 
     lines: list[str] = []
-    lines.append(_header_line(display, now, session_name, s_emoji, status, bias))
-    rec_name_clean = recommend_name.replace('⭐主推 ', '').replace('⚠️主推 ', '').replace('🔵主推 ', '')
+    try:
+        _chg_txt = f"{float(chg):+.2f}%" if chg not in (None, "") else ""
+    except (TypeError, ValueError):
+        _chg_txt = ""
+    lines.append(_header_line(display, now, session_name, s_emoji, status, bias, chg_txt=_chg_txt))
     # v9.12（2026-09-14 用户批准）：首屏结论前置 —— 唯一主推行 + 结构夹层行，
     # 替代旧的【现在】表（与 ② 重复）与【做法】表（与 ④/【裁决】重复）。
-    # ⭐ 只在真正可执行（GO-A）时点亮；等待/禁做沿用各自角色前缀，避免把
-    # 未授权卡渲染得像可下单卡（test_render_tv_card 同名契约）。
-    _lead = "⭐主推" if (final_state == "GO-A" and final_executable) else recommend_name
-    lines.append(f"{_lead}：{_cell(recommend_trigger)} · {_cell(recommend_exec)} · R:R {recommend_rr}")
+    # 主推行只给「结论 + 理由」（触发/动作留在 ④），同一句话不写两遍；
+    # ⭐ 只在真正可执行（GO-A）时点亮，等待/禁做沿用角色前缀，避免未授权卡
+    # 渲染得像可下单卡（test_render_tv_card 同名契约）。
+    _reason = _cell(dual_verdict) if dual_verdict and dual_verdict != "待裁决" else ""
+    if final_state == "GO-A" and final_executable:
+        lines.append(f"⭐主推 {dir_a} — {_reason or '主副同向'}·可执行")
+    elif _reason:
+        lines.append(f"{recommend_name} — {_reason}")
+    else:
+        lines.append(recommend_name)
     lines.append(_structure_line(levels_prepared, price))
-    # 2026-09-13：VWAP/EMA 环境行（EMA 此前只算不上卡——用户指标盘点的缺口修复）
-    _ve_line = _ema_disclosure_line(vwap_ema, do_price=do_price, price=price)
-    if _ve_line:
-        lines.append(_ve_line)
     lines.append("")
 
     # v9.12：五周期从 4 列表格降为一行体温条（+副读行）；逐层细节仍在 ③ 与截图上。
@@ -933,6 +999,11 @@ def render_v96_card(
     lines.append("| ⚠️禁止 | 不做单：不追单·主副不共振 | 数据失效不执行 |")
     lines.append("")
 
+    # 环境行（VWAP/EMA/DO，2026-09-13 接入）：属于「现在在哪」的注脚，
+    # 不占首屏决策位（首屏留给 主推 + 结构 两行）。
+    _ve_line = _ema_disclosure_line(vwap_ema, do_price=do_price, price=price)
+    if _ve_line:
+        lines.append(_ve_line)
     # 风控额度必须标出来源：没接真实账户时不能把兜底默认值写成看似的真实额度。
     if risk_backed:
         _risk_txt = f"风控{_num(risk_amt, 2)}U"
