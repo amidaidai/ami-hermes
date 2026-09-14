@@ -14,22 +14,68 @@ import xau_tv_sync
 
 
 @pytest.fixture(autouse=True)
-def _no_active_analysis_lease(monkeypatch):
+def _no_active_analysis_lease(monkeypatch, tmp_path):
     """隔离活跃分析租约：长跑分析（如 auto_card）持租约期间，
     xau_tv_sync 会走「让路」分支并跳过主逻辑，导致本文件断言在并发下假红
     （2026-09-13 实测 3 例）。测试固定为「无租约」环境；让路路径由
-    xau_tv_sync 自身逻辑与运维观察覆盖。"""
+    xau_tv_sync 自身逻辑与运维观察覆盖。
+
+    2026-09-14：同时把轮次取证标记隔离到 tmp_path —— main() 会在真实
+    data/xau_tv_sync_runs.jsonl 追加 enter/error/published，跑测试不能污染
+    生产取证文件。
+    """
     monkeypatch.setattr(xau_tv_sync, "analysis_lease_defer_exit", lambda: None)
+    monkeypatch.setattr(xau_tv_sync, "AUDIT_MARKER_FILE", tmp_path / "xau_tv_sync_runs.jsonl")
 
 
-def test_live_threshold_aligned_below_cron_interval():
-    """2026-09-13 二审：阈值统一收紧到 5min（「最多滞后一根 5m K 线」）。
+def test_standing_gate_is_cadence_aware_and_card_gate_stays_five():
+    """2026-09-14 自检 P1-②：两层门限分家 —— 常驻 cadence-aware / 卡时 5min。
 
-    历史沿革：10 → 13（修复 15min 周期尾部误判）→ 5（用户批准，加实时性）。
-    必须 < cron 间隔（15min）；超窗口由出卡前现场同步兜底。"""
+    历史沿革：10 → 13（修 15min 周期尾部误判）→ 5（用户批准的卡时效）→
+    分家：常驻 17 = 节奇 15 + 余量 2；卡时 5 = auto_card 显式传入（超窗即现场刷新）。
+    关系式：常驻门限必须 ≥ cron 间隔 + 边际，否则每周期尾部必然假 FAIL。
+    """
     src = (ROOT / "scripts" / "xau_tv_sync.py").read_text(encoding="utf-8")
-    assert "live_max_age_minutes: float = 5.0" in src
-    assert "max_age_minutes: float = 5.0" in src
+    assert "XAU_LIVE_MAX_AGE_CADENCE_MIN = 17.0" in src
+    assert "live_max_age_minutes: float = XAU_LIVE_MAX_AGE_CADENCE_MIN" in src
+    assert "max_age_minutes: float = XAU_LIVE_MAX_AGE_CADENCE_MIN" in src
+    auto = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert "TV_LIVE_READ_MAX_AGE_MIN = 5.0" in auto
+
+
+def _pair(minutes_old: float):
+    from datetime import timedelta
+    stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes_old)).isoformat()
+    state = {
+        "symbol": "OANDA:XAUUSD",
+        "batch_id": "batch-1",
+        "updated_at": stamp,
+        "timeframes": {
+            tf: {"open": 4300.0, "high": 4310.0, "low": 4290.0, "close": 4305.0}
+            for tf in ("1D", "4h", "1h", "15m", "5m")
+        },
+    }
+    live = {
+        "symbol": "OANDA:XAUUSD",
+        "batch_id": "batch-1",
+        "timestamp": stamp,
+        "fresh": True,
+        "stale": False,
+        "identity_valid": True,
+        "action_table_complete": True,
+        "decision_table": {key: "通过" for key in ("结论", "方向", "路径", "风控", "操作")},
+    }
+    return state, live
+
+
+def test_midcycle_pair_passes_standing_gate_but_card_gate_rejects_it():
+    """发布后 10 分钟（节奇中段）：常驻门限 OK；卡时 5min 拒用 → 出卡前现场刷新。"""
+    state, live = _pair(10)
+    assert xau_tv_sync.validate_xau_outputs(state, live)["usable"] is True
+    assert xau_tv_sync.validate_xau_outputs(state, live, live_max_age_minutes=5.0)["usable"] is False
+    # 超过一个节奇仍必须 FAIL（常驻门限不能变成「永不报警」）
+    state2, live2 = _pair(20)
+    assert xau_tv_sync.validate_xau_outputs(state2, live2)["usable"] is False
 
 
 def test_main_degrades_nonzero_sync_result_to_stale_cache(monkeypatch, tmp_path):

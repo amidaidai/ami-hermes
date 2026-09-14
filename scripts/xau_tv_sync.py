@@ -27,6 +27,13 @@ OUT = ROOT / "data" / "xau_tv_state.json"
 LIVE_OUT = ROOT / "data" / "tv_live_XAUUSD.json"
 STAGED_OUT = OUT.with_name(f"{OUT.name}.tmp")
 STATUS_OUT = ROOT / "data" / "xau_tv_sync_status.json"
+# 常驻门限（cadence-aware）= 同步节奇 15min + 2min 余量。
+# 2026-09-14 自检 P1-②：5min 门限 < 15min 节奇 ⇒ 发布后约 5 分钟起必 FAIL，
+# 每周期约 2/3 时间在报红（假红会掩盖真故障）。用户批准的「卡内 TV 结构最多
+# 滞后一根 5m K」口径由 auto_card 出卡前显式传入的 5min（TV_LIVE_READ_MAX_AGE_MIN
+# 「超窗即现场刷新」）兑现 —— 两层语义分家：常驻看「生产者是否在节奇内交卷」，
+# 卡时看「要不要现在刷一次」。
+XAU_LIVE_MAX_AGE_CADENCE_MIN = 17.0
 NO_PUSH_FLAG = ROOT / "data" / "xau_tv_no_push.json"
 SYMBOL = "OANDA:XAUUSD"
 # v9.7: 补 D 层日线，使"自上而下确认"有大背景（原只同步 5m/15m/1h/4h）
@@ -171,13 +178,14 @@ def _validate_live_payload(
     payload: dict[str, Any] | None,
     *,
     now: datetime | None = None,
-    max_age_minutes: float = 5.0,
+    max_age_minutes: float = XAU_LIVE_MAX_AGE_CADENCE_MIN,
 ) -> dict[str, Any]:
     """Validate XAU's 5m action-grid cache independently from five-TF OHLCV.
 
-    2026-09-13 二审（用户批准）: 阈值 13→5 分钟——「卡内 TV 结构最多滞后一根
-    5m K 线」；超出窗口由出卡前现场同步（auto_card 前置 subprocess）兜底。
-    历史沿革：10→13 曾修复 15min 周期尾部误判过期；本次 13→5 收紧实时性。
+    2026-09-14 起默认门限 = `XAU_LIVE_MAX_AGE_CADENCE_MIN`（常驻/cadence-aware，
+    15min 节奇 + 2min 余量）；卡时「最多滞后一根 5m K」由 auto_card 调用时显式传
+    5min 兑现。历史沿革：10→13（修 15min 周期尾部误判）→ 5（用户批准的卡时效）→
+    分家：常驻 17 / 卡时 5（2026-09-14 自检 P1-②，5min 常驻会周期性假红）。
     """
     data = payload if isinstance(payload, dict) else {}
     actual_symbol = str(data.get("symbol") or data.get("ticker") or "")
@@ -235,7 +243,7 @@ def validate_xau_outputs(
     *,
     now: datetime | None = None,
     state_max_age_minutes: float = 30.0,
-    live_max_age_minutes: float = 5.0,
+    live_max_age_minutes: float = XAU_LIVE_MAX_AGE_CADENCE_MIN,
     require_batch_id: bool = True,
     max_pair_skew_seconds: float = 120.0,
 ) -> dict[str, Any]:

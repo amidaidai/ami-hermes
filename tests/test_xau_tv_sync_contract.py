@@ -59,7 +59,10 @@ def test_xau_five_tf_success_cannot_hide_stale_main_action_cache():
     now = datetime.now(TZ)
     # 2026-09-13：live 阈值 10→13 分钟（对齐 btc_tv_refresh 18/20 模式，
     # 阈值 < 15min cron 间隔）。构造值随之外移到 14 分钟，保持「超阈值=陈旧」语义。
-    stale = (now - timedelta(minutes=14)).isoformat()
+    # 2026-09-14：门限分家（常驻 cadence-aware 17min / 卡时 5min，见
+    # test_xau_tv_sync_degradation），本用例改引用常驻门限常量 + 3 分钟，
+    # 语义不变：超常驻门限的主周期缓存，五周期再新也不能把它抬成可用。
+    stale = (now - timedelta(minutes=xau_tv_sync.XAU_LIVE_MAX_AGE_CADENCE_MIN + 3)).isoformat()
     result = xau_tv_sync.validate_xau_outputs(
         _state(now.isoformat()),
         _live(stale),
