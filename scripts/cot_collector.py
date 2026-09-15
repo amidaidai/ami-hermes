@@ -213,6 +213,19 @@ def _build_detail(data: dict) -> list:
         return lines
 
 
+def _push_suppressed() -> bool:
+    """推送静默开关（2026-09-13 用户要求「COT报告不要发了」）。
+
+    优先级：环境变量 COT_NO_PUSH=1 > 标志文件 data/cot_collector_no_push.json。
+    命中时脚本照常采集/落盘/打印，仅跳过 telegram push。
+    恢复方式：删除 data/cot_collector_no_push.json 或取消环境变量。
+    """
+    import os
+    if os.environ.get("COT_NO_PUSH") == "1":
+        return True
+    return (ts.DATA_DIR / "cot_collector_no_push.json").exists()
+
+
 def _load_cache():
     if not CACHE_FILE.exists():
         return None
@@ -247,12 +260,15 @@ if __name__ == "__main__":
             lines = _build_detail(cached)
             output = "\n".join(lines)
             print(output)
-            try:
-                sys.path.insert(0, str(SCRIPT_DIR))
-                from telegram_reliable import push_tg_rich
-                push_tg_rich("telegram:-1003733144325:846", output)
-            except Exception as _te:
-                print(f"⚠ COT RichMarkdown推送失败: {_te}", file=sys.stderr)
+            if _push_suppressed():
+                print("⏸ COT推送已关闭（COT_NO_PUSH / cot_collector_no_push.json）", file=sys.stderr)
+            else:
+                try:
+                    sys.path.insert(0, str(SCRIPT_DIR))
+                    from telegram_reliable import push_tg_rich
+                    push_tg_rich("telegram:-1003733144325:846", output)
+                except Exception as _te:
+                    print(f"⚠ COT RichMarkdown推送失败: {_te}", file=sys.stderr)
             sys.exit(0)
 
     print("拉取 CFTC COT...", file=sys.stderr)
@@ -268,9 +284,12 @@ if __name__ == "__main__":
         lines = _build_detail(data)
         output = "\n".join(lines)
         print(output)
-        try:
-            sys.path.insert(0, str(SCRIPT_DIR))
-            from telegram_reliable import push_tg_rich
-            push_tg_rich("telegram:-1003733144325:846", output)
-        except Exception as _te:
-            print(f"⚠ COT RichMarkdown推送失败: {_te}", file=sys.stderr)
+        if _push_suppressed():
+            print("⏸ COT推送已关闭（COT_NO_PUSH / cot_collector_no_push.json）", file=sys.stderr)
+        else:
+            try:
+                sys.path.insert(0, str(SCRIPT_DIR))
+                from telegram_reliable import push_tg_rich
+                push_tg_rich("telegram:-1003733144325:846", output)
+            except Exception as _te:
+                print(f"⚠ COT RichMarkdown推送失败: {_te}", file=sys.stderr)

@@ -106,10 +106,18 @@ ANALYSIS_LEASE_MAX_MINUTES = 30.0
 
 
 def begin_analysis_lease(minutes: float = ANALYSIS_LEASE_DEFAULT_MINUTES, *,
-                         note: str = "", symbol: str = "") -> dict:
+                         note: str = "", symbol: str = "",
+                         liveness: str = "ttl") -> dict:
     """声明「交互式分析进行中」。
 
     TTL 有上限（30 分钟）——分析脚本崩了也不会把后台续航永久锁死。
+
+    liveness（2026-09-14 修）:
+      - "ttl"（默认）：**只看 TTL，不看 pid 存活**。这是 CLI `start` / 交互式分析
+        的正确语义——`python scripts/tv_analysis_lease.py start` 写完文件就退出，
+        旧实现把 pid 记成这个短命进程，consumer 一查 psutil.pid_exists() 就是 False，
+        于是租约被判「持有进程已退出」→ 后台任务照旧抢图。
+      - "pid"：保留旧的存活性判定，适合真正常驻的持有者（守护进程自持租约）。
     """
     try:
         ttl = float(minutes)
@@ -117,12 +125,14 @@ def begin_analysis_lease(minutes: float = ANALYSIS_LEASE_DEFAULT_MINUTES, *,
         ttl = ANALYSIS_LEASE_DEFAULT_MINUTES
     ttl = max(0.5, min(ANALYSIS_LEASE_MAX_MINUTES, ttl))
     now = datetime.now(TZ)
+    mode = "pid" if str(liveness).strip().lower() == "pid" else "ttl"
     payload = {
         "active": True,
         "started_at": now.isoformat(timespec="seconds"),
         "expires_at": (now + timedelta(minutes=ttl)).isoformat(timespec="seconds"),
         "minutes": ttl,
         "pid": os.getpid(),
+        "liveness": mode,
         "note": str(note or "")[:200],
         "symbol": str(symbol or "").upper(),
     }
@@ -166,7 +176,12 @@ def _lease_holder_alive(pid) -> bool | None:
 
 
 def analysis_lease_status(now=None) -> dict:
-    """租约状态。文件缺失 / active 非真 / 已过期 / 持有进程已死，一律视为「无分析」。"""
+    """租约状态。文件缺失 / active 非真 / 已过期 / （pid 模式）持有进程已死，一律视为「无分析」。
+
+    2026-09-14：`liveness == "ttl"`（默认，CLI/交互式分析写入）**跳过 pid 存活判定**，
+    只看 TTL。原因见 begin_analysis_lease 文档 —— CLI 进程写完即退，旧逻辑把
+    有效租约误判为「持有进程已退出」，后台切图任务因此完全不退让。
+    """
     data = read_analysis_lease()
     if not data or not data.get("active"):
         return {"active": False, "reason": "无分析租约"}
@@ -183,15 +198,17 @@ def analysis_lease_status(now=None) -> dict:
     if remaining <= 0:
         return {"active": False, "reason": "租约已过期", "lease": data,
                 "remaining_seconds": round(remaining, 1)}
-    alive = _lease_holder_alive(data.get("pid"))
-    if alive is False:
-        return {
-            "active": False,
-            "reason": "租约持有进程已退出",
-            "lease": data,
-            "holder_pid": data.get("pid"),
-            "remaining_seconds": round(remaining, 1),
-        }
+    ttl_only = str(data.get("liveness") or "ttl").strip().lower() != "pid"
+    if not ttl_only:
+        alive = _lease_holder_alive(data.get("pid"))
+        if alive is False:
+            return {
+                "active": False,
+                "reason": "租约持有进程已退出",
+                "lease": data,
+                "holder_pid": data.get("pid"),
+                "remaining_seconds": round(remaining, 1),
+            }
     return {
         "active": True,
         "reason": "交互式分析进行中",

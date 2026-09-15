@@ -653,7 +653,7 @@ def _read_grok_token() -> Optional[str]:
     try:
         if AUTH_JSON.exists():
             auth = json.loads(AUTH_JSON.read_text(encoding="utf-8"))
-            return auth.get("providers", {}).get("xai-oauth", {}).get("access_token")
+            return auth.get("providers", {}).get("xai-oauth", {}).get("tokens", {}).get("access_token")
     except Exception:
         pass
     return None
