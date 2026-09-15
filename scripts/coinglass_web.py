@@ -251,6 +251,85 @@ def summarize(payload: dict[str, Any], top: int = 8) -> str:
     return "\n".join(lines)
 
 
+# ── 缓存（供卡面渲染路径读取，避免渲染时打网络）─────────────────────────────
+CACHE_MAX_AGE_S = 600          # 超过 10 分钟即视为陈旧，卡面必须显示「陈旧」而不是照抄
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_PATH = os.path.join(_REPO_ROOT, "data", "coinglass_liq.json")
+
+
+def refresh_cache(symbol: str = "Binance_BTCUSDT", interval: int = 5, limit: int = 288,
+                  cache_path: str | None = None) -> dict[str, Any]:
+    """抓一次热力图并落盘（含失败态），供卡面渲染只读缓存。"""
+    res = fetch_heatmap(symbol, interval, limit)
+    record = {
+        "source": SOURCE,
+        "symbol": res["symbol"],
+        "status": res["status"],
+        "fetched_at": res["fetched_at"],
+        # 数据新鲜度看门狗只认 TIMESTAMP_KEYS（updated_epoch/updated_at/ts…），
+        # 不认 fetched_at；缺它会把这套缓存判成「无显式时间戳」而误报。
+        "updated_epoch": res["fetched_at"],
+        "error": res["error"],
+        "spot": None,
+        "top": [],
+        "intensity_note": "强度为 CoinGlass 相对刻度，非 USD",
+    }
+    if res["status"] == "live":
+        record["spot"] = spot_price(res["data"])
+        record["top"] = top_liquidation_levels(res["data"], top=8, min_gap_pct=0.4)
+        record["updated_at"] = res["data"].get("updateTime")
+    path = cache_path or CACHE_PATH
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return record
+
+
+def liquidation_band_text(symbol: str = "BTCUSDT", cache_path: str | None = None,
+                          max_age_s: int = CACHE_MAX_AGE_S) -> str:
+    """卡面用的短句：清算堆积最近的上/下两个价位。
+
+    只认 `Binance_BTCUSDT`（该品种匿名可读）。状态三态可见，不拿旧值冒充实时：
+      新鲜 → `清算带 上77,492(+0.77%)/下75,303(-2.08%)`
+      陈旧 → `清算带 陈旧(需刷新)`
+      不可用 → `清算带 不可用`
+      非 BTC → 空串（不占位）
+    """
+    su = str(symbol or "").upper().replace("/", "").replace("-", "")
+    if su not in ("BTCUSDT", "BTCUSD", "BTC") and "BTC" not in su:
+        return ""
+    path = cache_path or CACHE_PATH
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except Exception:
+        return "清算带 不可用"
+    if not isinstance(rec, dict):
+        return "清算带 不可用"
+    age = time.time() - float(rec.get("fetched_at") or 0)
+    if age > max_age_s:
+        return "清算带 陈旧(需刷新)"
+    if rec.get("status") != "live" or not rec.get("top"):
+        return "清算带 不可用"
+    spot = rec.get("spot") or 0
+    # 取**距现价最近**的上/下堆积位（缓存池 top8），而不是强度榜前两名：
+    # 卡面要回答的是「价格摸到哪儿会撞上清算」，不是「哪一档最厚」。
+    above = min((x for x in rec["top"] if spot and x["price"] > spot),
+                key=lambda x: x["distance_pct"], default=None)
+    below = max((x for x in rec["top"] if spot and x["price"] < spot),
+                key=lambda x: x["distance_pct"], default=None)
+    bits = []
+    if above:
+        bits.append(f"上{above['price']:,.0f}({above['distance_pct']:+.2f}%)")
+    if below:
+        bits.append(f"下{below['price']:,.0f}({below['distance_pct']:+.2f}%)")
+    if not bits:
+        return "清算带 不可用"
+    return "清算带 " + "/".join(bits)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="读取 CoinGlass 网页端清算热力图（免 key / 免登录）")
     ap.add_argument("--symbol", default="Binance_BTCUSDT", help="例 Binance_BTCUSDT / Binance_ETHUSDT")
@@ -258,7 +337,16 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=288, help="桶数量，默认 288 = 24h")
     ap.add_argument("--top", type=int, default=8, help="输出清算最密集的价位个数")
     ap.add_argument("--json-out", default=None, help="把原始 JSON 落盘（调试用）")
+    ap.add_argument("--refresh-cache", action="store_true",
+                    help="刷新卡面缓存 data/coinglass_liq.json 并打印卡面短句")
     args = ap.parse_args()
+
+    if args.refresh_cache:
+        rec = refresh_cache(args.symbol)
+        print(f"[{rec['status']}] CoinGlass 缓存已刷新 · spot={rec.get('spot')} "
+              f"top={len(rec.get('top') or [])} · {CACHE_PATH}")
+        print(liquidation_band_text("BTCUSDT"))
+        return 0 if rec["status"] == "live" else 1
 
     res = fetch_heatmap(args.symbol, args.interval, args.limit)
     if res["status"] != "live":

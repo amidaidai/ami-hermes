@@ -13,11 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from coinglass_web import (  # noqa: E402
+    CACHE_MAX_AGE_S,
     HEATMAP_PATH,
     aes_gzip_decrypt,
+    liquidation_band_text,
     liquidation_by_level,
     make_param_token,
     param_key_for_path,
+    refresh_cache,
     spot_price,
     top_liquidation_levels,
     totp,
@@ -113,3 +116,79 @@ def test_gated_symbol_error_surfaces_server_code():
         assert "40000" in str(exc)
     else:
         raise AssertionError("门控响应必须抛错")
+
+
+# ── 缓存层（卡面渲染路径）2026-09-15 ─────────────────────────────────────────
+
+
+def _write_band_cache(path, top, spot, *, status="live", age_s=0.0):
+    import json
+    import time
+
+    path.write_text(json.dumps({
+        "source": "coinglass_web", "symbol": "Binance_BTCUSDT", "status": status,
+        "fetched_at": time.time() - age_s, "error": None, "spot": spot, "top": top,
+        "intensity_note": "强度为 CoinGlass 相对刻度，非 USD",
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def test_band_text_marks_missing_and_stale_cache(tmp_path):
+    """没有缓存 / 缓存过期都必须可见降级，不得照抄旧价位。"""
+    assert liquidation_band_text("BTCUSDT", cache_path=str(tmp_path / "none.json")) == "清算带 不可用"
+    p = tmp_path / "c.json"
+    _write_band_cache(p, [], 77000, age_s=CACHE_MAX_AGE_S + 60)
+    assert liquidation_band_text("BTCUSDT", cache_path=str(p)) == "清算带 陈旧(需刷新)"
+
+
+def test_band_text_picks_nearest_above_and_below(tmp_path):
+    """卡面要的是「摸到哪儿会撞清算」，取距离最近的上/下，而不是强度榜前二。"""
+    p = tmp_path / "c.json"
+    top = [
+        {"price": 79680.0, "intensity": 9.0, "share_pct": 2.5, "side": "上方", "distance_pct": 3.52},
+        {"price": 77492.0, "intensity": 1.0, "share_pct": 1.9, "side": "上方", "distance_pct": 0.68},
+        {"price": 75303.0, "intensity": 1.0, "share_pct": 1.6, "side": "下方", "distance_pct": -2.19},
+    ]
+    _write_band_cache(p, top, 76969.0)
+    assert liquidation_band_text("BTCUSDT", cache_path=str(p)) == \
+        "清算带 上77,492(+0.68%)/下75,303(-2.19%)"
+
+
+def test_band_text_is_empty_for_non_btc(tmp_path):
+    """CoinGlass 匿名只覆盖 BTC —— 其它品种不占位，也不拿 BTC 数据冒充。"""
+    p = tmp_path / "c.json"
+    _write_band_cache(p, [], 3000)
+    assert liquidation_band_text("ETHUSDT", cache_path=str(p)) == ""
+    assert liquidation_band_text("XAUUSD", cache_path=str(p)) == ""
+
+
+def test_refresh_cache_persists_status_spot_and_top(tmp_path, monkeypatch):
+    import json
+    import time
+
+    def fake_fetch(symbol="Binance_BTCUSDT", interval=5, limit=288, timeout=30):
+        return {"source": "coinglass_web", "symbol": symbol, "fetched_at": int(time.time()),
+                "status": "live", "data": _fixture_payload(), "error": None}
+
+    monkeypatch.setattr("coinglass_web.fetch_heatmap", fake_fetch)
+    p = tmp_path / "c.json"
+    rec = refresh_cache("Binance_BTCUSDT", cache_path=str(p))
+    assert rec["status"] == "live"
+    assert rec["spot"] == 77050.0
+    assert 1 <= len(rec["top"]) <= 8
+    assert all(x["side"] == "下方" for x in rec["top"])   # fixture 价位全在现价下方
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["spot"] == 77050.0 and on_disk["status"] == "live"
+
+
+def test_refresh_cache_records_failure_state(tmp_path, monkeypatch):
+    import json
+
+    def fake_fetch(*_a, **_k):
+        return {"source": "coinglass_web", "symbol": "Binance_BTCUSDT", "fetched_at": 1,
+                "status": "unavailable", "data": None, "error": "ValueError: 接口返回异常"}
+
+    monkeypatch.setattr("coinglass_web.fetch_heatmap", fake_fetch)
+    p = tmp_path / "c.json"
+    rec = refresh_cache(cache_path=str(p))
+    assert rec["status"] == "unavailable" and rec["top"] == []
+    assert json.loads(p.read_text(encoding="utf-8"))["status"] == "unavailable"

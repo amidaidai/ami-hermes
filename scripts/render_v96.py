@@ -14,6 +14,7 @@ import math
 import re
 import sys
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 # 棠溪看盘顺序：从上往下（D背景 → 4h → 1h → 15m → 5m主执行层）
 TF_ORDER = ("D", "4h", "1h", "15m", "5m")
@@ -515,6 +516,38 @@ def _multi_source_line(cvd_dir, cvd_quality, taker_dir, taker_ratio, funding_rat
     return " · ".join(parts) if parts else "待采集"
 
 
+def _liquidation_line(symbol: str) -> str:
+    """③ 多源表里的清算行：CoinGlass 24h 堆积热图带（仅 BTC）+ OKX 逐笔强平流（BTC/ETH）。
+
+    两源各自三态（新鲜 / 陈旧 / 不可用），任一不可用不影响另一条；都拿不到时返回
+    空串 —— 不占位、不编造，也不拿 K 线估算冒充真实清算数据。
+    """
+    su = str(symbol or "").upper()
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    parts: list[str] = []
+    try:
+        import coinglass_web
+
+        band = coinglass_web.liquidation_band_text(su)
+        if band and "不可用" not in band:
+            parts.append(band.replace("清算带 ", "带 "))
+    except Exception:
+        pass
+    try:
+        import liquidation_flow
+
+        coin = "BTC" if "BTC" in su else ("ETH" if "ETH" in su else "")
+        if coin:
+            flow = liquidation_flow.flow_text(coin)
+            if flow and "不可用" not in flow:
+                parts.append(flow.replace("清算流", "流"))
+    except Exception:
+        pass
+    return " · ".join(parts)
+
+
 def _soft_cut(text: str, limit: int) -> str:
     """按分隔符就近截断，宁短勿切半截数字（2026-09-14 实测「POC 77,」）。"""
     text = str(text or "").strip()
@@ -983,6 +1016,9 @@ def render_v96_card(
     lines.append(f"| SVP主驾驶 | {_cell(svp_short)} | 结构/入场/止损/目标优先 |")
     lines.append(f"| HALDRO副驾驶 | {_cell(haldro_short)} | {_cell(dual_verdict)} |")
     lines.append(f"| 订单流 | {_cell(multi_src_line)} | CVD/OI不配则降级 |")
+    _liq_line = _liquidation_line(symbol)
+    if _liq_line:
+        lines.append(f"| 清算 | {_cell(_liq_line)} | 磁吸/挤仓参考·非执行授权 |")
     if isinstance(dual_indicator, dict) and dual_indicator.get("haldro_quality"):
         lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:56]} | 覆盖不足不追 |")
     _src_footer = _source_footer(source_matrix)

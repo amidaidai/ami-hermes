@@ -85,6 +85,17 @@ WATCH_FILES = {
         "paths": [PROJECT_DATA / "cron_incidents_report.json",
                   HERMES_DATA / "cron_incidents_report.json"],
     },
+    # 清算双源（20260915 新增）：no-agent cron「清算双源刷新」每 10 分钟一跑。
+    # 阈值 0.7h(42 分) = 只在漏掉约 4 次时才报，区分「刷新器没跑」与「跑了且源正常」。
+    # ⚠ 两份缓存必须带 `updated_epoch`（TIMESTAMP_KEYS 不认 fetched_at）。
+    "coinglass_liq.json": {
+        "threshold": 0.7,
+        "paths": [PROJECT_DATA / "coinglass_liq.json", HERMES_DATA / "coinglass_liq.json"],
+    },
+    "liquidation_flow.json": {
+        "threshold": 0.7,
+        "paths": [PROJECT_DATA / "liquidation_flow.json", HERMES_DATA / "liquidation_flow.json"],
+    },
 }
 
 # 有意不监控的来源（生产者已停用）。列在这里是为了让「为什么没报」有据可查，
