@@ -30,7 +30,7 @@ from tv_indicator_contract import (
 
 @dataclass(frozen=True)
 class FinalVerdict:
-    state: str                         # GO-A / GO-B / WAIT / NO-GO
+    state: str                         # PLAN-B / GO-A / WAIT / NO-GO（GO-B 已于 P0-1 取消）
     executable: bool
     side: str                          # long / short / neutral
     grade: str
@@ -50,6 +50,15 @@ class FinalVerdict:
     watch_stop: float | None = None
     watch_target: float | None = None
     chart_evidence_status: str = "unavailable"
+    # ── 人工方案（PLAN-B）2026-09-15 ──────────────────────────────────────
+    # 「不能自动执行」不等于「不能给方案」。B 级 = 结构成立 + 方向明确 +
+    # 三件套几何有效，只缺副指标/触发确认，不产生任何自动授权。方案放独立
+    # 字段，绝不写入 entry/stop/target，任何下游读 .entry 都拿不到它。
+    plan: dict[str, Any] | None = None
+    plan_reason: str = ""
+    # 拦因归并：同一「现在不做」常被 5-7 条同义记录，卡面需要用主因说人话。
+    primary_blocker: str = ""
+    blocker_groups: tuple[tuple[str, tuple[str, ...]], ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -154,6 +163,75 @@ def _zone_quality(main: dict[str, Any], model_id: str) -> float | None:
     if not key or main.get(key) in (None, "", "—", "--"):
         return None
     return _number(main.get(key), 0.0)
+
+
+# ── 拦因家族归并（2026-09-15）──────────────────────────────────────────────
+# 同一个「现在不做」会被多条同义门各记一笔（影子账本实测：438/454 个信号至少
+# 撞 1 条，190 个同时撞 5-7 条），卡面因此像几十个闸门全红，掩盖真正的主因。
+# 归并只影响渲染层的「主因 + 家族」，blockers 证据层原样保留、一个字不减。
+BLOCKER_FAMILIES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("risk", "风控/体制/订单流拦截", "hard",
+     ("risk_constitution", "regime_blocked", "regime_model", "regime_missing",
+      "exhaustion_chase", "advanced_confluence", "data",
+      "decision_evidence", "execution_contract")),
+    ("conflict", "主副冲突", "hard",
+     ("dual_indicator", "svp_authorization", "x_forbidden", "chart_identity",
+      "tv_five_tf", "background")),
+    ("cross_source", "跨源不一致", "soft",
+     ("cross_source", "tv_live", "dual_alignment")),
+    ("sub_invalid", "副指标未确认", "soft",
+     ("haldro_invalid", "haldro_degraded", "haldro_state_invalid",
+      "haldro_state_degraded", "haldro_state_unknown", "haldro_fallback",
+      "haldro_fallback_conflict", "oi_agreement_low", "oi_dispersion_high",
+      "cvd_quality_unavailable")),
+    ("authority", "未获执行授权", "soft",
+     ("b_wait", "svp_entry_invalid", "svp_entry_forbidden", "advanced_pending")),
+    ("no_structure", "结构/位置未成立", "soft",
+     ("no_direction", "svp_wait_language", "svp_no_trade_reason", "location",
+      "zone_quality", "svp_quality_code")),
+    ("no_trigger", "触发未确认", "soft",
+     ("trigger", "bar_closed", "trigger_pack_stale", "trigger_pack_pending",
+      "trigger_pack_no_signal", "trigger_pack_forbidden")),
+    ("geometry", "盈亏比不足", "soft", ("rr_ratio",)),
+)
+_FAMILY_ORDER = ("risk", "conflict", "cross_source", "sub_invalid", "authority",
+                 "no_structure", "no_trigger", "geometry")
+# PLAN-B（人工方案）的最低盈亏比：低于 GO-A 的 1:2 授权线，但仍然必须有几何
+# 优势，否则「方案」只是把不交易的价位包装出来。1.5 与合同 `MCP RR Ratio`
+# 的「1.5-1.99 = B/C人工观察候选·不授权」一致。
+PLAN_B_MIN_RR = 1.5
+
+
+def _blocker_groups(hard: list[str], wait: list[str]):
+    """把 hard+wait 折成 (主因文案, ((家族名, 明细), ...))。不删任何 blocker。"""
+    present = set(hard) | set(wait)
+    found: dict[str, list[str]] = {}
+    for code, _label, _sev, members in BLOCKER_FAMILIES:
+        hit = [m for m in members if m in present]
+        if hit:
+            found.setdefault(code, []).extend(hit)
+    # 未被任何家族收录的 blocker 也要露面，不能因为没登记就消失。
+    known = {m for _c, _l, _s, members in BLOCKER_FAMILIES for m in members}
+    orphan = sorted(present - known)
+    if orphan:
+        found.setdefault("other", []).extend(orphan)
+    ordered = [(c, found[c]) for c in _FAMILY_ORDER if c in found]
+    ordered += [(c, v) for c, v in found.items() if c == "other"]
+    # 主因：先硬门家族，再按固定优先级。硬门本身也按 hard 顺序取第一条。
+    primary = ""
+    for code, _label, sev, members in BLOCKER_FAMILIES:
+        if sev == "hard" and any(m in hard for m in members):
+            primary = next(m for m in hard if m in members)
+            break
+    if not primary:
+        for code in _FAMILY_ORDER:
+            if code in found:
+                primary = found[code][0]
+                break
+    labels = {c: l for c, l, _s, _m in BLOCKER_FAMILIES}
+    labels["other"] = "其他"
+    groups = tuple((labels[c], tuple(v)) for c, v in ordered)
+    return primary, groups
 
 
 def resolve_final_verdict(
@@ -490,8 +568,25 @@ def resolve_final_verdict(
     warnings = list(dict.fromkeys(warnings))
     all_blockers = tuple(hard + wait)
 
+    # ── PLAN-B 资格（2026-09-15）────────────────────────────────────────────
+    # 「不能自动执行」≠「不能给方案」。B 级 = 结构成立 + 方向明确 + 三件套几何
+    # 有效，只缺副指标同向/触发确认，所以不产生任何自动执行权（executable 恒
+    # False）。硬门一律不许进 PLAN-B——只要有硬门，仍然只出 NO-GO、连价都不出。
+    # 只认 B，不认 C反（反转型更弱）；只认 A 的分支完全不受影响。
+    plan_b_eligible = (
+        grade.startswith("B")
+        and side in ("long", "short")
+        and execution_complete
+        and execution_geometry_valid
+        and not hard
+        and rr >= PLAN_B_MIN_RR
+    )
+
     if hard:
         state = "NO-GO"
+        executable = False
+    elif plan_b_eligible:
+        state = "PLAN-B"
         executable = False
     elif wait or is_bc:
         # P0-1 (2026-08-31): B/C反 一律 WAIT 不执行——等触发/确认，无自动授权；
@@ -520,6 +615,31 @@ def resolve_final_verdict(
         final_side = side
         final_entry, final_stop, final_target = entry, stop, target
         final_grade = grade
+
+    # ── 人工方案载荷（PLAN-B）2026-09-15 ─────────────────────────────────────
+    # 用独立字段承载，entry/stop/target 保持 None：任何下游读 .entry 都拿不到
+    # 方案价，物理上不可能把人工方案当成授权订单。进场/目标给区间（不是单一
+    # 价），失效位给单点，并显式标 authorized=False。
+    plan = None
+    plan_reason = ""
+    if state == "PLAN-B" and entry and stop and target:
+        band = sorted((abs(entry - stop) * 0.25, abs(entry) * 0.0005))[-1]
+        plan = {
+            "side": side,
+            "grade": grade,
+            "model_id": model_id,
+            "authorized": False,
+            "label": "人工方案·非授权",
+            "entry_zone": [round(entry - band, 1), round(entry + band, 1)],
+            "invalidation": round(stop, 1),
+            "target_zone": [round(target - band, 1), round(target + band, 1)],
+            "rr": round(rr, 2),
+            "upgrade_prereqs": tuple(wait),
+            "note": "结构成立+方向明确，缺辅证确认；需人工判断，系统不授权执行。",
+        }
+        plan_reason = "人工方案·非授权 — 结构成立+方向明确，缺辅证确认"
+
+    primary_blocker, blocker_groups = _blocker_groups(hard, list(wait))
 
     reason = (
         "硬闸门：" + "/".join(hard)
@@ -595,4 +715,8 @@ def resolve_final_verdict(
         watch_target=watch_target,
         decision_id=decision_id,
         chart_evidence_status=chart_status,
+        plan=plan,
+        plan_reason=plan_reason,
+        primary_blocker=primary_blocker,
+        blocker_groups=blocker_groups,
     )

@@ -999,6 +999,30 @@ def render_v96_card(
     lines.append("| ⚠️禁止 | 不做单：不追单·主副不共振 | 数据失效不执行 |")
     lines.append("")
 
+    # ── 人工方案（PLAN-B）2026-09-15 ────────────────────────────────────────
+    # 「不能自动执行」≠「不能给方案」。B 级 = 结构成立+方向明确+几何有效，只缺
+    # 辅证确认。此前它被折成 WAIT，用户只看到「禁做」，无法区分「今天没优势」与
+    # 「永远不给方案」（影子账本：454 信号 GO-A 出现 0 次、B 级占 58%）。
+    # 用 ## 独立区块：card_reformat 的区块正则按 [①-④⓪#] 切，不会污染 ④ 表。
+    _plan = (final_verdict or {}).get("plan")
+    if isinstance(_plan, dict) and _plan.get("entry_zone"):
+        _ez = list(_plan.get("entry_zone") or [None, None])
+        _tz = list(_plan.get("target_zone") or [None, None])
+        _side_cn = "多" if _plan.get("side") == "long" else "空"
+        lines.append("## 人工方案（非授权·需人工确认）")
+        lines.append("")
+        lines.append("| 方向 | 参考进场区 | 失效位 | 参考目标区 | R:R |")
+        lines.append("|:---|:---:|:---:|:---:|:---:|")
+        lines.append(
+            f"| 偏{_side_cn} | `{_num(_ez[0])}–{_num(_ez[1])}` | `{_num(_plan.get('invalidation'))}` "
+            f"| `{_num(_tz[0])}–{_num(_tz[1])}` | 1:{_plan.get('rr')} |"
+        )
+        lines.append("")
+        _pre = [p for p in (_plan.get("upgrade_prereqs") or []) if p and p != "b_wait"]
+        if _pre:
+            lines.append("升级前置：" + " · ".join(_pre) + "（解除后重算，非自动授权）")
+            lines.append("")
+
     # 环境行（VWAP/EMA/DO，2026-09-13 接入）：属于「现在在哪」的注脚，
     # 不占首屏决策位（首屏留给 主推 + 结构 两行）。
     _ve_line = _ema_disclosure_line(vwap_ema, do_price=do_price, price=price)
@@ -1013,6 +1037,16 @@ def render_v96_card(
     inv_display = _price(execution_stop) if final_executable else '`—`'
     lines.append(f"【裁决】{action_summary} · {_risk_txt} · {leverage_text or ''}")
     lines.append(f"失效 {inv_display} · 价格共识{data_grade}（非全源健康度） · 源状态见③")
+    # 拦因归并（2026-09-15）：同一个「现在不做」常被 5-7 条同义门各记一笔，
+    # 【裁决】行只给主因 + 家族口径；blockers 证据层一个字不减，明细照旧可查。
+    _pb = str((final_verdict or {}).get("primary_blocker") or "")
+    _bg = (final_verdict or {}).get("blocker_groups") or []
+    if _pb:
+        _n = sum(len(items) for _label, items in _bg) if _bg else 1
+        _fam = next((label for label, items in _bg if _pb in tuple(items)), "")
+        _k = len(_bg) or 1
+        lines.append(f"主因 {_pb}{('（' + _fam + '）') if _fam else ''} · "
+                     f"{_k} 类 / {_n} 条拦因（明细见证据层）")
     return "\n".join(lines) + "\n"
 
 

@@ -77,6 +77,8 @@ def parse(card_path: Path) -> dict:
             d["vwapline"] = l.replace("VWAP/EMA/DO：", "").strip()
         elif l.startswith("【裁决】"):
             d["verdict"] = l.replace("【裁决】", "").strip()
+        elif l.startswith("主因 "):
+            d["primary_blocker"] = l.replace("主因 ", "").strip()
         elif l.startswith("管线路由"):
             d["route"] = l.strip()
         elif l.startswith("**裁决**"):
@@ -87,6 +89,13 @@ def parse(card_path: Path) -> dict:
     d["key_levels"] = _rows(key_tbl)[1:]
     d["multi"] = _rows(next((b for b in blocks if b.lstrip().startswith("③")), ""))[1:]
     d["plan"] = _rows(next((b for b in blocks if b.lstrip().startswith("④")), ""))[1:]
+    # 人工方案（PLAN-B）区块（2026-09-15）：「不能自动执行」不等于「不能给方案」，
+    # 这块必须原样搬进 v7 卡，只留在附录等于用户还是看不到。
+    _plan_block = next((b for b in blocks if "人工方案" in b[:24]), "")
+    _plan_rows = _rows(_plan_block) if _plan_block else []
+    d["manual_plan"] = _plan_rows[1:] if len(_plan_rows) > 1 else []
+    d["manual_plan_prereq"] = next(
+        (l.replace("升级前置：", "").strip() for l in lines if l.startswith("升级前置：")), "")
     d["appendix"] = "\n".join(b.strip() for b in blocks[3:] if b.strip())
     return d
 
@@ -340,6 +349,21 @@ def render_tables(card_path: Path) -> str:
             out.append(f"| {c[0]} | {c[1]} | {c[2]} |")
     out.append("")
 
+    # ④ 人工方案（PLAN-B）：结构成立+方向明确但缺辅证确认 —— 给方案，不给授权。
+    # 没有 PLAN-B 时这一段整块不出现，v7 版式与旧卡完全一致。
+    plan_rows = d.get("manual_plan") or []
+    if plan_rows:
+        out += ["**④ 人工方案（非授权·需人工确认）**", "",
+                "| 方向 | 参考进场区 | 失效位 | 参考目标区 | R:R |",
+                "|:--|--:|--:|--:|--:|"]
+        for c in plan_rows:
+            if len(c) >= 5:
+                out.append(f"| {c[0]} | {c[1]} | {c[2]} | {c[3]} | {c[4]} |")
+        out.append("")
+        if d.get("manual_plan_prereq"):
+            out.append("升级前置：" + d["manual_plan_prereq"])
+            out.append("")
+
     # 总结（大白话三段：最推荐 / 看哪里 / 怎么做 —— 不带符号串、不做术语堆叠）
     band = band_zone or next((r for r in levels if "现价所在带" in r["role"] or "现价带" in r["role"]), None)
     push = (d.get("main_push") or "").strip()
@@ -349,20 +373,33 @@ def render_tables(card_path: Path) -> str:
     reason = _plain(reason)
     if reason and not reason.endswith(("。", "！", "？")):
         reason += "。"
-    zone = (f"现价就在 {band['price']} 这个窄带里，没有优势位置。"
-            if band else "现价就夹在这两条线之间，没有优势位置。")
-    out.append(f"- **最推荐**：{_plain(act)}。{reason}{zone if dn_trig and up_trig else ''}")
-    dn_txt = dn_label if dn_trig else "主观察位"
-    up_txt = up_label if up_trig else "上沿"
-    out.append(f"- **看哪里**：看 {up_txt}（上方）和 {dn_txt}（下方）这两个价格。"
-               f"收上 {up_txt} 才谈 {'、'.join(up_next) if up_next else '上方空间'}；"
-               f"跌回 {dn_txt} 以下就看向 {'、'.join(dn_next) if dn_next else '下方空间'}。")
-    if dn_trig and up_trig:
-        out.append(f"- **怎么做**：{dn_txt} 到 {up_txt} 之间不动作；"
-                   f"等 15 分钟收线给出方向、主副指标重新共振后再重算。当前不给入场价，只作人工观察。")
+    if plan_rows:
+        # 有 PLAN-B 时不能说「当前不给入场价」——那会和自己刚给出的方案打架。
+        pr = plan_rows[0]
+        out.append(f"- **最推荐**：按上面的人工方案准备。{reason}"
+                   f"这不是授权单，需要你自己确认后才动手。")
+        out.append(f"- **看哪里**：参考进场区 {pr[1]}、失效位 {pr[2]}、参考目标区 {pr[3]}；"
+                   f"价格走到 {pr[2]} 方案作废。")
+        out.append(f"- **怎么做**：方案价是区间不是指令；等升级前置解除、主副指标重新共振后"
+                   f"再重算成可执行。在此之前只按区间人工判读，系统不自动下单。")
+    else:
+        zone = (f"现价就在 {band['price']} 这个窄带里，没有优势位置。"
+                if band else "现价就夹在这两条线之间，没有优势位置。")
+        out.append(f"- **最推荐**：{_plain(act)}。{reason}{zone if dn_trig and up_trig else ''}")
+        dn_txt = dn_label if dn_trig else "主观察位"
+        up_txt = up_label if up_trig else "上沿"
+        out.append(f"- **看哪里**：看 {up_txt}（上方）和 {dn_txt}（下方）这两个价格。"
+                   f"收上 {up_txt} 才谈 {'、'.join(up_next) if up_next else '上方空间'}；"
+                   f"跌回 {dn_txt} 以下就看向 {'、'.join(dn_next) if dn_next else '下方空间'}。")
+        if dn_trig and up_trig:
+            out.append(f"- **怎么做**：{dn_txt} 到 {up_txt} 之间不动作；"
+                       f"等 15 分钟收线给出方向、主副指标重新共振后再重算。当前不给入场价，只作人工观察。")
     out.append("")
     if d.get("vwapline"):
         out.append("注　" + d["vwapline"])
+    # 主因单列一行：让人一眼看出「为什么不做」，而不是从一串符号里自己拼。
+    if d.get("primary_blocker"):
+        out.append("　　主因：" + d["primary_blocker"])
     if d.get("route"):
         out.append("　　" + d["route"])
     return "\n".join(out)

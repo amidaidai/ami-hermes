@@ -58,7 +58,10 @@ def test_literal_closed_bar_can_authorize():
     assert out.executable is True
 
 
-@pytest.mark.parametrize("grade,state", [("B多", "WAIT"), ("C反多", "WAIT")])
+# 2026-09-15：B 级从「一律 WAIT」升级为「PLAN-B 人工方案」——它仍然无执行权、
+# entry/stop/target 仍然为空、watch 价仍然全保留；变的只是状态标签，因为
+# 「不能自动执行」不等于「不能给方案」。C反 更弱，仍走 WAIT。
+@pytest.mark.parametrize("grade,state", [("B多", "PLAN-B"), ("C反多", "WAIT")])
 def test_observation_preserves_all_watch_prices_without_execution(grade, state):
     inputs = _inputs()
     inputs["main"]["grade"] = grade
