@@ -163,8 +163,18 @@ def _twelvedata_candles(key: str, interval: str, count: int = 3) -> list[dict]:
         return []
     values = data.get("values") or []
     def utc_time(v):
-        raw = str(v.get("datetime") or "")
-        return timestamp(raw + "+00:00") if raw else None
+        raw = str(v.get("datetime") or "").strip()
+        if not raw:
+            return None
+        # 2026-09-15 修：日线的 datetime 是**纯日期**（"2026-09-15"），
+        # 直接拼 "+00:00" 会让 fromisoformat 抛错 → 日线恒 [] → 五周期整体失败
+        # → XAU 每次退回切图（实测 TwelveData 密钥本来是好的）。
+        # 日线（10 字符）补成当日 00:00 UTC；盘中（"YYYY-MM-DD HH:MM:SS"）维持原拼法。
+        if len(raw) == 10:
+            raw = f"{raw}T00:00:00+00:00"
+        elif "+" not in raw[10:] and not raw.endswith("Z"):
+            raw = raw + "+00:00"
+        return timestamp(raw)
     times = [utc_time(v) for v in values]
     if any(t is None for t in times) or any(a <= b for a, b in zip(times, times[1:])):
         return []
@@ -219,6 +229,34 @@ def fetch_all(count: int = 3) -> dict:
     return {}
 
 
+def fetch_daily_closes(count: int = 30) -> tuple[list[float], str]:
+    """取**日线收盘序列**（给相关性等需要多根历史 K 的消费方用）。
+
+    与 fetch_all() 的区别：fetch_all 只返回每个周期**最新一根**（供卡面读数），
+    做 30 天相关性必须逐根取。返回 (closes, source)：
+      - 现货源（OANDA → TwelveData）逐根取成功 → (closes, "oanda_spot"/"twelvedata_spot")
+      - 两个源都不可用（无 token / 熔断 / 取数失败）→ ([], "none")，调用方自己决定回退
+    口径优先 OANDA（与图表 OANDA:XAUUSD 同源），失败再退 TwelveData。
+    """
+    attempts = (
+        ("oanda_spot", "oanda_token.txt", _oanda_candles, "D"),
+        ("twelvedata_spot", "twelvedata_api_key.txt", _twelvedata_candles, "1day"),
+    )
+    for label, secret, fn, gran in attempts:
+        key = _read_secret(secret)
+        if not key or breaker_open(label.split("_")[0]):
+            continue
+        try:
+            bars = fn(key, gran, count) or []
+        except Exception:
+            continue
+        closes = [float(b["close"]) for b in bars
+                  if isinstance(b, dict) and b.get("close") and b.get("complete", True)]
+        if len(closes) >= 3:
+            return closes, label
+    return [], "none"
+
+
 def bars_ok(bar: dict) -> bool:
     """几何自检（外部源也可能给出坏数据）。"""
     try:
@@ -250,3 +288,40 @@ def cross_check(api_frames: dict, tv_bar: dict, tolerance: float = 0.0035) -> tu
     if worst <= tolerance:
         return True, f"5m 校核通过（{detail}）"
     return False, f"5m 校核超出 {tolerance * 100:.2f}%（{detail}）"
+
+
+def _probe_cli() -> int:
+    """自检：当前密钥下这套 API 取数到底通不通（填完 token 后就跑它验证）。
+
+    用法：python scripts/xau_ohlcv_source.py --probe
+    退出码：0 = 至少一个现货源可用；1 = 两个源都不可用（会回退切图）。
+    """
+    import argparse
+    ap = argparse.ArgumentParser(description="XAU 五周期 API 取数自检")
+    ap.add_argument("--probe", action="store_true", help="打印各源可用性与样例")
+    ap.add_argument("--count", type=int, default=3, help="每周期取几根（默认 3）")
+    a = ap.parse_args()
+
+    tok_oanda = _read_secret("oanda_token.txt")
+    tok_td = _read_secret("twelvedata_api_key.txt")
+    print(f"密钥：oanda={'有' if tok_oanda else '无'} · twelvedata={'有' if tok_td else '无'}")
+    frames = fetch_all(count=a.count)
+    if frames:
+        src = frames.get("source")
+        print(f"五周期取数：✅ {src}")
+        for tf, bar in (frames.get("timeframes") or {}).items():
+            print(f"  {tf:>4}  close={bar.get('close')}  high={bar.get('high')}  low={bar.get('low')}")
+    else:
+        reasons = []
+        for name, s in (("oanda", "oanda"), ("twelvedata", "twelvedata")):
+            if breaker_open(s):
+                reasons.append(f"{name}=熔断中")
+        print(f"五周期取数：❌ 不可用（{' '.join(reasons) or '无密钥或取数失败'}）→ 调用方会回退逐周期切图")
+    closes, src = fetch_daily_closes(count=30)
+    print(f"30 日线序列：{'✅ ' + src + f'（{len(closes)} 根，末根 {closes[-1]}）' if closes else '❌ 不可用（相关性将退回代理腿并明标）'}")
+    return 0 if frames else 1
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(_probe_cli())

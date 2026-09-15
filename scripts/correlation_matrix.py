@@ -102,18 +102,14 @@ def gold_spot_reference() -> float | None:
 
 def load_gold_series(lookback_days: int = 30) -> tuple[list[float], str, float | None]:
     """黄金腿取数。返回 (序列, 来源标签, 与现货基准的偏差%)。"""
-    # 1) 合规现货源（当前 token/key 缺失时返回空）
+    # 1) 合规现货源：日线逐根取（2026-09-15 修：原先误用 fetch_all()，
+    #    它只返回每周期最新一根且结构是 {source, timeframes} —— 那条分支实际是死代码）
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import xau_ohlcv_source as _xs
-        frames = _xs.fetch_all(count=lookback_days) or {}
-        for src, tf in frames.items():
-            bars = (tf or {}).get("1D") or (tf or {}).get("1d")
-            if isinstance(bars, list) and len(bars) >= 3:
-                closes = [float(b["close"]) for b in bars
-                          if isinstance(b, dict) and b.get("close")]
-                if len(closes) >= 3:
-                    return closes, f"{src}_spot", 0.0
+        closes, label = _xs.fetch_daily_closes(count=lookback_days)
+        if len(closes) >= 3:
+            return closes, label, 0.0
     except Exception:
         pass
     # 2) 代理腿（明标）
