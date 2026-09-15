@@ -3,10 +3,23 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import tv_data_bridge as bridge
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shared_chart_lock(tmp_path, monkeypatch):
+    """把真实 TV 锁挪走：`collect_and_cache()` 内部会去抢它。
+
+    2026-09-15 实测偶发（约 1/6 概率）：线上 cron 每 2 分钟一次的作业持锁时，
+    本模块的用例会在真锁上等 30 秒后超时 → 随机 FAILED。
+    测试不该和线上进程抢同一把锁；要测锁语义的两个用例会自己再指到各自的 tmp。
+    """
+    monkeypatch.setattr(bridge, "TV_LOCK", tmp_path / "tv.lock")
 
 
 def test_expected_symbol_is_switched_and_verified(monkeypatch):
