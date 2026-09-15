@@ -121,6 +121,11 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
     return {
         "risk_state_status": constitution["risk_state_status"],
         "allowed": allowed,
+        # 2026-09-15：1.5 ≤ R:R < 2.0 时非 None = 仅人工观察候选，授权线未达。
+        "observe_only_rr": constitution.get("observe_only_rr"),
+        # 宪法逐项结论必须可见（「R:R x:1 仅B/C人工观察候选」就写在这里），
+        # 否则「为什么不授权」在 v2 出口就被吞掉了。
+        "reasons": list(constitution.get("reasons") or []),
         "risk_usd": risk_usd,
         "position_size": position_size,
         "risk_tier": tier,

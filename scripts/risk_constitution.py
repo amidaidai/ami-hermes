@@ -44,7 +44,11 @@ CONSTITUTION = {
     "KELLY_FRACTION": 0.20,               # Kelly分数 (保守=0.20, v2.0更保守)
     "VOLATILITY_BAN_BTC": 0.05,            # BTC波动>5%禁做
     "VOLATILITY_BAN_XAU": 0.01,            # XAU波动>1%禁做
-    "REQUIRED_RR_RATIO": 2.0,              # R:R底线 1:2
+    "REQUIRED_RR_RATIO": 2.0,              # R:R底线 1:2（GO-A 授权线）
+    # 2026-09-15：观察候选线。合同（docs/指标驱动分析与策略合同.md）与
+    # tv_indicator_contract.RR_BC_MIN 一致：1.5–1.99 是「B/C 人工观察候选·
+    # 不授权执行」，不是硬否决。低于 1.5 才连人工候选都不给。
+    "OBSERVE_RR_RATIO": 1.5,
     "MIN_STOP_ATR_RATIO": 0.5,             # 止损 ≥ 0.5×ATR（下限）
     "MAX_STOP_ATR_RATIO": 2.5,             # 止损 ≤ 2.5×ATR（上限·v2.0新增·防风险过大）
     # Freqtrade-style Protections（v2.0 社区增强）
@@ -202,6 +206,8 @@ def check_constitution(symbol: str,
 
     reasons = []
     violations = []
+    # 2026-09-15：1.5 ≤ R:R < 2.0 的运行值。非 None 表示「仅人工观察候选·不授权」。
+    observe_only_rr: float | None = None
     
     # ═══ 检查1: 单笔风险 ≤ 3% 本金 ═══
     risk_pct = risk_usd / account_balance if account_balance > 0 else 1.0
@@ -210,16 +216,31 @@ def check_constitution(symbol: str,
     else:
         reasons.append(f"单笔风险 {risk_pct:.1%} ✓")
     
-    # ═══ 检查2: R:R 底线 1:2 ═══
+    # ═══ 检查2: R:R 分层（2026-09-15 对齐合同分层）═══
+    # 原实现把 rr<2.0 一律记 violation → allowed=False → decision_loop 硬门
+    # risk_constitution。但合同与 tv_indicator_contract 明写：
+    #   1.5–1.99 = 「B/C 人工观察候选·不授权执行」，低于 1.5 才不给候选。
+    # 一律硬否决等于把合同中段整段杀掉（影子账本实测 46 个 1.5–1.99 的信号
+    # 死在这里），并且同一个 R:R 事实在 decision_loop:422 已被记成等待类
+    # rr_ratio —— 一处软、一处硬，自相矛盾。
+    # 分层后执行权不变：GO-A 需要 not wait，rr_ratio 仍在 wait 里，
+    # 所以 R:R<2 物理上到不了 GO-A，只是允许它成为人工观察候选。
     if entry_price and stop_price and target1_price:
         risk = abs(entry_price - stop_price)
         reward = abs(target1_price - entry_price)
         if risk > 0:
             rr = reward / risk
-            if rr < CONSTITUTION["REQUIRED_RR_RATIO"]:
-                violations.append(f"R:R {rr:.1f}:1 < {CONSTITUTION['REQUIRED_RR_RATIO']}:1 底线")
+            if rr < CONSTITUTION["OBSERVE_RR_RATIO"]:
+                violations.append(
+                    f"R:R {rr:.2f}:1 < {CONSTITUTION['OBSERVE_RR_RATIO']}:1 观察线"
+                    f"·连人工候选都不给")
+            elif rr < CONSTITUTION["REQUIRED_RR_RATIO"]:
+                observe_only_rr = rr
+                reasons.append(
+                    f"R:R {rr:.2f}:1 < {CONSTITUTION['REQUIRED_RR_RATIO']:.2f}:1 授权线"
+                    f"·仅B/C人工观察候选")
             else:
-                reasons.append(f"R:R {rr:.1f}:1 ✓")
+                reasons.append(f"R:R {rr:.2f}:1 ✓")
     
     # ═══ 检查3: 止损夹层 — 0.5×ATR ≤ 止损距离 ≤ 2.5×ATR ═══
     if entry_price and stop_price and atr_value:
@@ -310,6 +331,8 @@ def check_constitution(symbol: str,
         "allowed": allowed,
         "reasons": reasons,
         "violations": violations,
+        # 非 None = 该笔只能做人工观察候选，授权线（R:R≥2）未达。
+        "observe_only_rr": observe_only_rr,
         "risk_tier": risk_tier,
         "max_risk_usd": round(max_risk_usd, 2),
         "cooldown_minutes": 60 if has_hard_violation else 0,
