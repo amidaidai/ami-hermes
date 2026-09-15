@@ -242,7 +242,15 @@ def main():
         )
     elif active_levels < MIN_ACTIVE_APPROVED_LEVELS:
         log("DEGRADED: keylevels_config 当前无有效批准关键位；不把进程存活误报为监控正常")
-        sys.exit(2)
+        # 2026-09-15 修：这里原来 `sys.exit(2)`。实测 9/1–9/12 该条件持续 12 天，
+        # 每 2 分钟生成一条 cron incident（共 3,745 条）；且错误文本带时间戳 →
+        # 每次签名都不同，Hermes 无法去重，incident 表被单一条件刷爆、无人看。
+        # 降级是**状态**不是**故障**：可见性靠 stdout（deliver=local 会落
+        # cron/output/<job_id>/），再结构化写进 health 文件供审计读取；
+        # 退出码留给真故障（脚本崩/依赖缺失），不再拿它喊状态。
+        write_health({**health, "active_approved_levels": active_levels,
+                      "degraded": True, "degraded_reason": "no_active_approved_levels"})
+        sys.exit(0)
 
     alive_info = is_guard_alive()
     alive = bool(alive_info) if isinstance(alive_info, list) else alive_info

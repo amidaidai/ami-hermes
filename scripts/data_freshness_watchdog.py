@@ -35,11 +35,10 @@ WATCH_FILES = {
     # 峰值年龄 ≈ 20 分（间隔 20 + 采集 ~3，再被下一 tick 刷新）→ 0.6h(36 分)
     # 只会在「整整漏掉一次刷新」时才报，既不误报也不放过真停摆。
     "source_snapshot_BTCUSDT.json": {"threshold": 0.6, "paths": [PROJECT_DATA / "source_snapshot_BTCUSDT.json", HERMES_DATA / "source_snapshot_BTCUSDT.json"]},
-    "source_snapshot_XAUUSD.json": {"threshold": 0.5, "paths": [PROJECT_DATA / "source_snapshot_XAUUSD.json", HERMES_DATA / "source_snapshot_XAUUSD.json"]},
     "tv_dmi_cache.json": {"threshold": 1, "paths": [PROJECT_DATA / "tv_dmi_cache.json", HERMES_DATA / "tv_dmi_cache.json"]},
-    # 每品种专属缓存（btc_tv_refresh 每 20 分钟 / xau_tv_sync 每 15 分钟）
+    # 每品种专属缓存（btc_tv_refresh 每 20 分钟）。XAU 侧 2026-09-15 起已停（用户决定：
+    # 「XAU 暂停，只要 BTC 的」），其缓存/同步状态移入 PAUSED_SOURCES。
     "tv_live_BTCUSDT.json": {"threshold": 1, "paths": [PROJECT_DATA / "tv_live_BTCUSDT.json", HERMES_DATA / "tv_live_BTCUSDT.json"]},
-    "xau_tv_state.json": {"threshold": 1, "paths": [PROJECT_DATA / "xau_tv_state.json", HERMES_DATA / "xau_tv_state.json"]},
     # 唯一批准监控源：批准位本身有 TTL，文件本身超过 24h 没被续期就是异常
     "keylevels_config.json": {"threshold": 24, "paths": [PROJECT_DATA / "keylevels_config.json", HERMES_DATA / "keylevels_config.json"]},
     # ── 监控链自身生命体征（20260910 新增，这次事故的直接教训）─────────
@@ -56,11 +55,8 @@ WATCH_FILES = {
     # XAU 现场同步生命体征（20260914 新增）：单次失败由脚本自身升级计数，
     # 这里只盯「最近一次成功」是否还在可接受窗口内 —— 连续失败会让
     # last_success_at 停住，从而在这里暴露，而不必读 cron 的 error 状态。
-    "xau_tv_sync_last_success": {
-        "threshold": 1,
-        "payload_path": ("last_success_at",),
-        "paths": [PROJECT_DATA / "xau_tv_sync_status.json", HERMES_DATA / "xau_tv_sync_status.json"],
-    },
+    # ⚠ 2026-09-15：用户决定「XAU 暂停，只要 BTC 的」→ cron `XAU TV现场同步`
+    # （113655ad34b5）已 pause，本条移入 PAUSED_SOURCES（继续盯着只会天天假告警）。
     # X 情绪客观面（20260914 起由 cron「X情绪客观面刷新」每小时产出）。
     # 阈值与卡面的「超过 6 小时写本轮不采用」对齐。
     "x_sentiment_context.json": {
@@ -68,12 +64,38 @@ WATCH_FILES = {
         "payload_path": ("fear_greed", "ts"),
         "paths": [PROJECT_DATA / "x_sentiment_context.json", HERMES_DATA / "x_sentiment_context.json"],
     },
+    # 叙事断言闸门生命体征（20260915 新增）：no-agent cron 每 10 分钟一跑。
+    # 阈值 0.7h(42 分) = 只在「整整漏掉约 4 次」时才报；作用是区分
+    # 「闸门没跑」与「跑了且干净」——这两者此前都表现为“无输出”。
+    "claim_watchdog_heartbeat.json": {
+        "threshold": 0.7,
+        "paths": [PROJECT_DATA / "claim_watchdog_heartbeat.json",
+                  HERMES_DATA / "claim_watchdog_heartbeat.json"],
+    },
+    # cron 失败聚合看门狗生命体征（20260915 新增）：no-agent cron 每 30 分钟一跑。
+    # 它读的是 Hermes 的 cron_incidents 表 —— 那张表此前只写不读（实测积压 3806 条
+    # 未关闭失败，一个作业 3745 条），于是「脚本连错上千次」被读成「cron 全 active」。
+    "cron_incident_watchdog_heartbeat.json": {
+        "threshold": 1.2,
+        "paths": [PROJECT_DATA / "cron_incident_watchdog_heartbeat.json",
+                  HERMES_DATA / "cron_incident_watchdog_heartbeat.json"],
+    },
+    "cron_incidents_report.json": {
+        "threshold": 1.2,
+        "paths": [PROJECT_DATA / "cron_incidents_report.json",
+                  HERMES_DATA / "cron_incidents_report.json"],
+    },
 }
 
 # 有意不监控的来源（生产者已停用）。列在这里是为了让「为什么没报」有据可查，
 # 而不是让它们继续制造噪声把真事故淹掉。
 #   需要恢复其中任何一个时，先把对应 cron 恢复运行，再把文件加回 WATCH_FILES。
 PAUSED_SOURCES = {
+    "source_snapshot_XAUUSD.json / xau_tv_state.json / xau_tv_sync_status.json": (
+        "2026-09-15 用户决定「XAU 暂停，只要 BTC 的」：cron `XAU TV现场同步`(113655ad34b5) 已 pause。"
+        "停用期间这三份会一直停更，继续盯只会天天假告警。"
+        "恢复：`hermes cron resume 113655ad34b5`（或按需单跑 `python scripts/xau_tv_sync.py`），再把本行删掉。"
+    ),
     "btc_ref_levels.json": "btc_ref_levels_sync cron 已停用，能力由 keylevels_config 承担",
     "monitor_heartbeat.json": "旧行情守望守护（monitor/market_watchdog）已退役",
     ".btc_daemon_heartbeat.json": "旧 btc_daemon 守护已退役，现役为 keylevel_guard",

@@ -68,15 +68,22 @@ def test_accuracy_gates_use_real_snapshot_freshness_and_xau_monitoring():
     monitor = _text("scripts/行情守望.py")
     assert "def _refresh_and_mark_snapshot" in auto
     assert 'engine_data["_snapshot_age_h"]' in auto
-    assert '"source_snapshot_XAUUSD.json"' in watchdog
+    # 2026-09-15：XAU TV 同步暂停后，XAU 快照不再是"必须被盯"的对象 —— 但也不能
+    # 悄悄不盯：必须落在 PAUSED_SOURCES 里并写明暂停哪条 cron 与如何恢复。
+    assert "PAUSED_SOURCES" in watchdog
+    assert "source_snapshot_XAUUSD.json" in watchdog
+    assert "113655ad34b5" in watchdog          # 暂停的是哪条 cron，有据可查
+    assert "source_snapshot_BTCUSDT.json" in watchdog   # BTC 侧仍必须被监控
     assert "def maybe_refresh_source_snapshot" in monitor
     assert "expired monitor levels caused process_block() to return" in monitor
 
 
 def test_cross_asset_sentiment_does_not_bleed_into_non_crypto_cards():
     auto = _text("scripts/auto_card.py")
-    assert 'if asset == "crypto":\n        try:\n            from coingecko_collector import community_dashboard' in auto
+    # 2026-09-14：cg_pro 退役后加密社区面板下线，改用本品种热点；隔离断言改为同一意图的新形态。
+    assert 'print("  ℹ️ 社区: cg_pro已退役·使用本品种热点")' in auto
     assert '非加密跳过CoinGecko加密社区面板' in auto
+    assert 'from coingecko_collector import community_dashboard' not in auto
     assert '非加密跳过BTC/crypto预测市场桥' in auto
     assert '非加密不采用BTC缓存' in auto
 
