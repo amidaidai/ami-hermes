@@ -62,13 +62,18 @@ def get_json(url):
 # 1. 获取数据（直接用 API）
 data = get_json('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT')
 if not data:
-    sys.exit(0)  # 出错静默退出
+    # ⚠ 不要把“读不到数据源”当成“无事件”静默退出：那会把故障伪装成健康。
+    heartbeat(db_ok=False, error="ticker 不可用")
+    print("[ticker] 数据源不可用：本轮未检查（不是无事件）")   # 非零退出会作为错误通知发出
+    sys.exit(2)
+
+heartbeat(db_ok=True)   # 成功跑完也写心跳，见下方“生命体征铁律”
 
 # 2. 条件判断
 if condition_met:
     print(f"【条件达成】{message}")
 else:
-    # 静默退出 — no_agent 模式下空输出=不通知
+    # 静默退出 — no_agent 模式下空输出=不通知（仅限“跑完且无事件”）
     sys.exit(0)
 ```
 
@@ -98,7 +103,46 @@ cronjob(
 )
 ```
 
-### 4. 更新已存在的 cron 为 no_agent
+### 生命体征铁律（每个看门狗都要有）
+
+no_agent 看门狗的“空输出”同时代表两件事：**跑干净** 与 **根本没跑起来**（脚本不存在、import 失败、
+数据源/DB 读不到、上游异常被吞）。只靠 stdout 无法区分，故障就会伪装成健康。所以：
+
+1. **每次运行写心跳** `data/<name>_heartbeat.json`：`updated_epoch`（epoch 秒，`source_health.payload_timestamp` 认这个键）
+   + `ts` + 本轮计数（`checked` / `hits`）+ `db_ok` / `error`。
+2. **无法运行 → 出声**：打印一行诊断（ASCII 更稳，避开 Windows 控制台转码）+ `sys.exit(2)`；
+   只有“跑完且无事件”才允许空输出。错误分支用 **非零退出** 而不是 `sys.exit(0)`。
+3. **登记进现成的新鲜度看门狗**：把心跳加进 `scripts/data_freshness_watchdog.py` 的 `WATCH_FILES`
+   （阈值 ≈ 4 倍调度间隔，例：每 10 分钟跑 → 0.7h），让“停摆”由已有基础设施兜底，
+   而不是再写一个看门狗看门狗。
+4. 登记后 **必须复跑** `python scripts/data_freshness_watchdog.py report` 确认
+   `healthy=true, issue_count=0` —— 阈值/路径写错会让新登记本身变成新的误报源。
+5. **同一检查只有一套默认口径**：若同一判定存在 CLI 与守护两条入口（或两个脚本），
+   必须共用一个函数与同一套默认参数，并加一条锁死默认值的回归测试。
+   实案：同一份文本 CLI 拦 52 条、守护路径 0 条 —— 只在一边调参会得出完全相反的结论。
+6. **“发现异常”不得用非零退出码**（与“自己跑不起来”相反，这是两回事）：Hermes 会把**任何**非零退出
+   记进 `cron_incidents`，所以一个“检出问题就 exit 1”的看门狗每轮都给自己造一条失败记录，
+   最后自己变成噪声源、真事故被自己的告警淹没。命中时的可见性靠 **stdout**（`deliver=local` 会把输出
+   落到 `cron/output/<job_id>/`）。退出码 2 只留给“看门狗自己没跑起来”（配置/DB/数据目录读不到）。
+7. **“让路”不等于“失败”**：多个作业共享同一资源（TV 图表锁、数据库、采集器）时，抢不到锁是**排队**。
+   正确姿势：调用前先探测锁（带短 wait），抢不到 → 打一行「↷ 让路」+ **exit 0**。
+   若让路与真实失败共用同一个非零退出码，每次撞车都会变成一条 incident（实测一晚上三条）。
+   另：**让路时不要写“成功”状态文件**——那会把 `last_success_at` 刷成现在，让上游新鲜度看门狗
+   被假成功糊住；也不要累积 `consecutive_failures`（让路既不是成功也不是失败）。
+8. **阈值对齐算术**：生产者/刷新器自己的“需要刷新”阈值必须 **≤ 调度间隔**，
+   而监控门阀要 **> 调度间隔**。把刷新阈值设成等于（或大于）监控门阀，
+   年龄就会在“0 → 门阀+间隔”之间锯齿，周期性报过期
+   （实测：15 分节奏的同步器 + 30 分刷新闻 + 30 分门阀 = 每 45 分钟假告警 15 分钟）。
+   改完必须复跑一次报告确认 `healthy=true / issue_count=0`，而不是只看代码变了。
+
+> 看门狗层自身的失败（脚本非零退出、timed out）不在 `hermes cron list` 里——它在
+> `~/AppData/Local/hermes/cron/executions.db` 的 `cron_incidents` 表。读取、分诊与批量关单
+> （含为什么必须用她自己的 API 而不是手写 SQL）见 `references/cron-incident-triage.md`。
+>
+> 要**停掉/退役**一个看门狗或采集器（而不是修它）时，走
+> `references/producer-decommission-checklist.md`——只 `pause` 不改新鲜度清单会立刻制造假告警。
+
+### 更新已存在的 cron 为 no_agent
 
 ```python
 cronjob(
@@ -114,11 +158,13 @@ cronjob(
 | 规则 | 说明 |
 |:--|:--|
 | 空 stdout = 静默 | 条件未满足时不要 print 任何内容，直接 `sys.exit(0)` |
-| 非零退出码 = 错误通知 | 脚本异常退出会发送错误提醒，所以要吞掉预期的网络错误 |
+| 非零退出码 = 错误通知 | 脚本异常退出会发送错误提醒。**两个副作用要分清**：① 会发错误提醒；② 会被记进 `cron_incidents` 持久账本。所以只能吞掉“预期内的网络/锁竞争错误”，且“发现异常”绝不能用非零退出（见生命体征铁律 6）。 |
 | stdout 内容 = 通知正文 | 条件满足时 print 的内容就是用户收到的消息；只适合纯文本、单脚本、无乱码风险的简单监控 |
 | 不要用 MCP 工具 | MCP 只在 agent 会话上下文可用；脚本里直接用 requests/urllib |
 | 超时 10s | 脚本默认 timeout 由 Hermes 控制；脚本内部也设自己的 timeout |
 | cron `repeat` 默认为 `forever` | 除非显式传 `repeat=N`，否则去心化循环不停。**特别注意 `repeat='once'` 会让 job 跑完一次就永久停止**，不会循环。bug 排查时先 `cronjob(action='list')` 看 `repeat` 值。 |
+| 心跳区分“没跑”与“跑干净” | 静默即健康的前提是**心跳文件在更新**。审计一个新看门狗时，先看它有没有写心跳、失败时会不会出声，再看它的判定逻辑。 |
+| 退役的守护要一并清理心跳与检查单 | 心跳文件停在几周前、`status` 仍写 `running`、对应进程已不存在时，它多半是**已退役代际**而非事故。判定权威源是新鲜度脚本的 `WATCH_FILES` / `PAUSED_SOURCES`，不是心跳文件自身；清理时把死心跳移入 `data/_archive/` 并附 README，同时改掉仍把它们当 P0 的检查清单。 |
 
 ### Windows/Telegram 中文提醒模式
 

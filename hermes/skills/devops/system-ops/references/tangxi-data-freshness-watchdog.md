@@ -30,8 +30,13 @@
 
 ## 废弃/替代文件
 
-- 不要再把 `fast_daemon_state.json` 当 BTC daemon 新鲜度依据；优先看 `D:/Hermes agent/data/.btc_daemon_heartbeat.json`。
-- XAU/行情守望心跳仍看 `D:/Hermes agent/data/monitor_heartbeat.json`。
+- 不要再把 `fast_daemon_state.json` 当 BTC daemon 新鲜度依据。
+- **旧守护心跳全部退役（2026-09-15 归档）**：`.btc_daemon_heartbeat.json` 与 `monitor_heartbeat.json`
+  对应进程早已不存在（前者 8/30 停、后者 7/16 停，`status` 却仍写 `running`），
+  文件已移到 `data/_archive/heartbeats_retired_20260915/`（带 README）。
+- **新鲜度唯一权威 = `scripts/data_freshness_watchdog.py` 的 `WATCH_FILES` + `PAUSED_SOURCES`**；
+  现役心跳只有 `.keylevel_guard_heartbeat.json` / `.keylevel_guard_health.json`（0.3h）
+  与 `claim_watchdog_heartbeat.json`（0.7h）。别凭旧清单查心跳，那会制造假 P0。
 
 ## 真过期的常见补救
 

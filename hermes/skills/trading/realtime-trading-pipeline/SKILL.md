@@ -309,6 +309,11 @@ process(action='kill', session_id='proc_...')  # Only if Hermes-tracked
 - heartbeat file path MUST be absolute: `D:/Hermes agent/data/.btc_daemon_heartbeat.json`
 - PID file at same location for taskkill targeting
 - After updating daemon code, ALWAYS kill + restart. No hot-reload.
+- **心跳必须定时刷新，不能只在“有新事件”时刷**：否则「市场平静」会被心跳判成「守护死了」→ 看门狗反复重拉起。给一个独立的 stamp 计时（分钟级），事件触发另算；「活着但安静」与「没在跑」必须是两个可区分的状态。
+- **看门狗统计实例时按 cmdline 参数匹配，不要用“整条命令行包含脚本名”**：`python -c "...<script>.py..."` 这类诊断／临时脚本会把脚本名当字面量带进 cmdline → 被判成多个实例 → 看门狗杀掉健康的守护。正确写法：`any(str(arg).replace('\\','/').endswith('/<script>.py') for arg in cmdline)`。
+- **重启要用 pyvenv.cfg 里的真实解释器**，不要用 venv 的 `python.exe` stub：uv 环境的 stub 会再 spawn 真正的解释器，psutil 会数到两个实例，于是看门狗每轮都判「实例数异常」并反复重启。
+- **看门狗退出码只表达“还能不能供数”**：被守护进程活着只是安静（没事件）→ exit 0；只有「重启失败」这类真故障才非零。把降级写成失败会让 cron 记 incident → 报警疲劳，真事故被噪声淹掉。
+- **采集器缓存与心跳分层**：缓存里的时间戳（`updated_epoch`）供数据新鲜度看门狗判「数据多旧」，心跳文件供进程看门狗判「进程还活吗」；两者阈值不同（缓存节奏 ×4，心跳约分钟级），不要用一个文件兼两者。
 
 ## Real-time approved-level alerts (daemon direct delivery · 2026-09)
 
@@ -576,6 +581,7 @@ When the user says that alerts like `价值区·VAL` are unwanted, interpret thi
 - `references/cockpit-v96-runtime-hardening.md` — v9.6 cockpit/runtime hardening: watchdog guard ordering, canonical wrapper imports, auto_card risk fallback, futures symbol routing, verification checklist
 - `references/tv-data-bridge-windows-debug.md` — TV bridge debugging on Windows: no_agent script bridge, Node path escaping, cache quality gates, verification commands
 - `references/cron-notification-routing.md` — cron 通知路由/降噪、Telegram vs local 分层、X情绪 LLM 分析卡升级模式
+- `references/multi-source-collector-contract.md` — 多源采集器/聚合契约 9 条（每源独立状态、跨所单位归一、采样≠全量、覆盖窗口标签、降级≠故障、重试、看门狗认的时间戳键、消费方粒度、上线自检）
 - `agentless-monitoring` skill — covers the no_agent monitoring pattern
 - `references/btc-daemon-architecture-v1.md` — BTC background daemon + watchdog + card gen architecture (2026-06-23 session)
 

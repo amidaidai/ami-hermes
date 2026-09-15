@@ -59,6 +59,16 @@ Hermes 的模型选择可以自动化。社区提供了多种方式来：
 
 详细的真实图像探针、错误判读和本次配置案例见 `references/vision-quality-routing-2026-07-11.md`。
 
+## Web UI「自定义模型」(customModels) 清理
+
+Web UI/Studio 的 provider 模型列表 = 实时发现列表 ∪ `customModels[provider]`，命中 `customModels` 的条目在界面上带「自定义」角标（i18n `models.customBadge`）。要点：
+
+1. **注入条目绕过 `modelVisibility`**：即使某模型不在该 provider 的 include 可见清单里，只要在 `customModels` 中就会显示；角标只判断“在不在 customModels”，不判断发现列表是否已有它——所以模型重新进入发现列表后角标仍留着，需要手动摘。
+2. **`openrouter/free` 这类路由端点天生必须靠 customModels**：`:free` 后缀过滤不会返回它。
+3. **停用 Freerouter 后必须手动巡检**：`sync_custom_free_models()` 是唯一写入方，脚本一停用，`:free` 变体下架后不会自动摘除；这类死条目在列表里不报错，只在真正调用时 404（例：`tencent/hy3:free` → `This model is unavailable for free ... use tencent/hy3`）。
+4. **删条目走 Studio API，不要直接改 `~/.hermes-web-ui/config.json`**（server 有内存态会回写覆盖）：`DELETE /api/hermes/custom-model?provider=<p>&model=<urlencoded id>`，需要 `Authorization: Bearer $(cat ~/.hermes-web-ui/profiles/<profile>/.model-run-token)` + `X-Hermes-Profile`。改前先备份 config.json。
+5. **验收**：读取磁盘 `customModels` + 重新 GET `/api/hermes/available-models?profile=<p>`，确认 `custom_models` 与展示清单一致。
+
 ## 失效模型清理后的路由收敛
 
 当实测确认某个 provider/model 不可用并应移除时，必须做全局引用收敛，而不是只删 `fallback_providers`：
@@ -476,7 +486,7 @@ hermes chat -q "What time is it? Use the terminal tool to run 'date' and tell me
 | 顺位 | 选谁 | 理由 |
 |------|------|------|
 | 兜底1 | 付费/订阅 provider（如 GPT 月度订阅） | 优先用回付费额度，质量最高 |
-| 兜底2 | 免费大模型（如 hy3:free 295B MoE） | 零成本，金融分析强 |
+| 兜底2 | 免费大模型（先探针确认仍在线的 `:free`，如 `nvidia/nemotron-3-super-120b-a12b:free`） | 零成本，金融分析强 |
 | 兜底3 | 快速轻量模型（如 grok non-reasoning） | 最后防线，要快不要深度 |
 
 ### Ollama Pro 优先场景（2026-07-11）
@@ -495,7 +505,9 @@ hermes chat -q "What time is it? Use the terminal tool to run 'date' and tell me
 
 ### 交易/金融分析场景推荐
 
-**→ `openrouter:tencent/hy3:free` 优于 `nvidia/nemotron-3-ultra-550b-a55b:free`**
+**免费池选型必须先过实盘探针**：本节曾把 `tencent/hy3:free` 作为委派首选，但该 `:free` 端点已被 OpenRouter 下架（只剩付费 `tencent/hy3`，探针回 404），照抄旧结论只会得到 404。选型标准仍然成立——优先“active 参数小 + 金融域优化 + 3 并发不撞限额”，但**每次改 delegation 前重跑上方的单行验证，只从当次返回列表里挑**。
+
+判据对照（存档，用于理解取舍，不代表当前可选项）：
 
 | 对比 | nemotron-3-ultra (550B) | tencent/hy3 (295B/21B active) |
 |------|------------------------|-------------------------------|
@@ -668,7 +680,7 @@ model_catalog:
 
 | 角色 | 模型 | 评分/质量 | Context | 理由 |
 |------|------|-----------|---------|------|
-| 主模型 | `openrouter/owl-alpha` | 85.9 | 1M | 评分最高，1M ctx，工具+视觉全支持（路由入口） |
+| 主模型（已下线，仅存档） | `openrouter/owl-alpha` | 85.9 | 1M | 曾为评分最高路由入口；**该 id 已不在 API 列表**，勿再选用 |
 | 视觉辅助 ⭐ | **`google/gemma-4-31b-it:free`** | **65** (免费最高) | **262K** | **Vision+Tools，Google Gemini 同源识图顶尖。2026-06-23 起替换 `openrouter/owl-alpha` 为默认视觉模型。配置: `hermes config set auxiliary.vision.model google/gemma-4-31b-it:free` + `provider openrouter`** |
 | 编程专精 | `qwen/qwen3-coder:free` | 41 | 1M | 编程专精，1M ctx，真免费 |
 | 旗舰兜底 | `nvidia/nemotron-3-ultra-550b-a55b:free` | — | 1M | 550B 参数，大上下文 |
@@ -700,7 +712,15 @@ Full list accessible via `?free=true` (340+ models) includes free-tier and promo
 cat ~/.hermes-web-ui/profiles/default/.model-run-token
 ```
 
-**GET 请求不需要认证**（如 `available-models`），但 **PUT/POST 需要** Bearer token 返回 401。
+**GET 和 PUT/POST 都需要** Bearer token，缺失一律 401（实测无 token 请求 `GET /api/hermes/available-models` 返回 401）。token 用 `~/.hermes-web-ui/profiles/default/.model-run-token`：
+
+```bash
+T=$(cat ~/.hermes-web-ui/profiles/default/.model-run-token)
+curl -s -H "Authorization: Bearer $T" -H "X-Hermes-Profile: default" \
+  "http://localhost:PORT/api/hermes/available-models?profile=default"
+```
+
+端口 `PORT` 从 `~/.hermes-web-ui/logs/server.log` 的 listening 行读取（常见 8748），不要写死。`~/.hermes-web-ui/.token` 不是这个 API 的凭据，拿它请求同样 401。
 
 ### Studio API 直接更新（推荐）
 
@@ -806,6 +826,26 @@ config["customModels"]["openrouter"].remove("openrouter/free")
 **实战验证**（2026-06-23）：`openrouter/free`（免费路由，200K ctx，tools=True）和 `openrouter/owl-alpha`（免费路由，1M ctx，tools=True）通过 customModels 成功加入 OpenRouter 提供者列表，在 Web UI 中正常显示并可选用。查看 `groups[0].available_models` 可确认它们出现在列表中。
 
 > ⚠️ `openrouter/auto` 是变量定价路由（pricing=-1），不是免费，不应加入 customModels。
+
+### 用户问“为什么这个 provider 有一些自定义模型” = customModels 诊断入口
+
+这是 `customModels` 机制，不是 provider 侧的东西。先取证再改配置：
+
+- Studio 模型页渲染 `models = provider.models + customModels[provider]`（`desktop-runtime/webui/<ver>/dist/client/assets/js/ModelsView-*.js`），凡是命中 `customModels` 的 id 都打「自定义」角标（i18n key `models.customBadge`）并带一个删除按钮。
+- 角标判定只看“在不在 customModels 里”，**不看该 id 是否也已进入 provider 发现列表**：模型后来被自动发现，角标也不会掉；只有把它从 customModels 删掉才消失。因此“模型明明在 OpenRouter 上却标着自定义”不是 bug。
+- `customModels` 注入**绕过 `modelVisibility` 过滤**：某个 id 在 `available_models` 里、不在 include 清单里，前端仍会补回并显示。
+- 该列表**没有自动清理**：写入者（Freerouter 的 `sync_custom_free_models()`）一旦停用或挪进 `scripts/_disabled/`，死 id 就永久留在界面上，直到手动删。
+- 它只影响 Studio 界面可选列表，**不动 `config.yaml` 路由**。报告前 grep `config.yaml` 确认有没有被真正引用，别把 UI 残留说成路由故障。
+
+**死条目判定必须用 1-token chat 探针，不能只看 `/models`**：`/models` 里没有该 `:free` slug 只能说明“可能死了”；付费 slug 仍在时 OpenRouter 会给出权威原因。逐条判读：
+
+| 探针结果 | 含义 | 处理 |
+|---|---|---|
+| `200 OK model=<具体免费模型>` | 活着（`openrouter/free` 会回落到具体模型） | 保留 |
+| `429 ...temporarily rate-limited upstream` | 模型存在，上游限流 | 保留 |
+| `404 ... This model is unavailable for free. The paid version is available now - use this slug instead: <paid>` | `:free` 端点已下架，仅剩付费版 | 从 `customModels` 删除 |
+
+完整取数命令、响应字段与只读诊断流程见 `references/studio-custom-models-diagnosis.md`。
 
 ### 🚨 Gateway 重启后 MCP deferred 工具失效
 
@@ -994,7 +1034,9 @@ re.sub(r'^(\s*default:\s*).+$', lambda m: m.group(1) + main_model, content, re.M
 
 `hermes-config-audit` 的 reference 文件 `references/freerouter-free-model-management.md` 有完整的 Windows 路径陷阱说明。
 
-## 真免费模型 Top 10（2026-06-23 更新）
+## 真免费模型 Top 10（历史快照 — 使用前必须逐条重探）
+
+⚠️ **本表是历史快照，免费池变动极快**：`openrouter/owl-alpha` 等曾列为第一的条目已从 OpenRouter 下线，照抄即选中死 id。任何选型、推荐、文案更新前，先重跑下方的单行验证或 1-token chat 探针，只从当次返回结果里挑；旧快照只作方法参考。
 
 ⚠️ 以下全部经过 API 验证：`pricing.prompt=0` 且 `pricing.completion=0` 且支持工具调用。不包含免费试用/免费额度的收费模型。
 **2026-06-23 重要更新**: 5 个原 `:free` 模型已不再免费（`dolphin-mistral-24b-venice-edition:free`、`lfm-2.5-1.2b-instruct:free`、`llama-3.2-3b-instruct:free`、`hermes-3-llama-3.1-405b:free`、`nemotron-3.5-content-safety:free`），剩余 17 个 `:free` + 2 个免费路由（`openrouter/free`、`openrouter/owl-alpha`）。Freerouter V4 每日 06:00 会自动检测并清理过期模型。
@@ -1028,3 +1070,4 @@ re.sub(r'^(\s*default:\s*).+$', lambda m: m.group(1) + main_model, content, re.M
 - **MoA + Fallback + Delegation 配置实战**: `references/moa-and-fallback-config-2026-07-11.md`
 - **额度敏感路由与退役切换清单**: `references/quota-aware-routing-and-retirement.md`
 - **模型路由清理、同名提供商区分与双探针验收**: `references/model-route-pruning-and-validation.md`
+- **Studio「自定义模型」只读诊断（customModels / 角标 / 死条目探针）**: `references/studio-custom-models-diagnosis.md`

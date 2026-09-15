@@ -1,5 +1,11 @@
 # Cron Job 健康检查清单
 
+> ⚠ 2026-09-15 状态校正：本清单部分行仍列 `行情守望.py` / `monitor_heartbeat.json`——
+> **它们是已退役代际**（进程不存在、心跳已归档到 `data/_archive/heartbeats_retired_20260915/`，
+> cron 里也没有对应作业）。查“监控还活着吗”请用唯一权威：
+> `python scripts/data_freshness_watchdog.py report` → 看 `healthy` / `issue_count` 与 `WATCH_FILES` 名单。
+> 下文提及它们的行仅作历史对照，不要据此判 P0。
+
 ## 触发条件
 用户说"查任务/查监控/监控有问题/cron审计"时执行。
 

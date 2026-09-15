@@ -14,9 +14,19 @@ category: trading
 
 用户手动交易，不自动下单。若数据源冲突，先说明冲突与源，不替用户执行交易。
 
+**裁决为禁做时必须交代「哪一道门」，不能只转述禁做。**
+用户反馈过「你总是不给方案，总是禁止做」——只报「禁做」而不报为什么，等于没分析。
+禁做结论至少要说清三件：拦下来的是哪一道门、它属于**行情判断**还是**系统状态（可修）**、
+要它转绿得等什么。
+当「一直禁做」跨多次会话或跨多日重现时，先跑闸门饥饿审计
+（`trading-system-architecture-design` 自带的 `scripts/gate_starvation_audit.py`），
+确认是行情读法还是结构缺陷，再作答——不要用「今天没有优势」解释一个系统现象。
+B/C 级人工候选价位能不能展示，用户已有裁决（人工候选允许展示、明确不代表 GO-A；
+WAIT/NO-GO 执行字段仍清空、X 禁做不显示候选），**不要当成新问题重新问他**。
+
 ## 标准执行顺序
 
-1. 识别档位：轻量/裸品种请求走快速；“现在呢/更新”走跟踪更新；“分析/深度分析/完整卡”走完整管线。
+1. 识别档位：轻量/裸品种请求走快速；“现在呢/更新”走跟踪更新；“分析/深度分析/完整卡”走完整管线；**“为什么/昨天发生了什么/怎么会这样”走事件归因**（不重跑管线：先拉 K 线还原路径、再找叙事并交叉验证，形状与坑见 `references/event-attribution.md`）。
 2. 先校验 TradingView 当前 symbol、周期和研究；加密主执行周期为 15m。
 3. 读取主指标行动格与副指标行动格；副指标仅作确认、降级或否决。**同一周期上主指标 OI 行（▲新空/新多）与副指标 持仓行（⚡新多/新空）方向相反时，就是「副S4降权·⚠冲突」的来源** —— 方向票打架时结论只能是等待/观望，不给 Entry/Stop/Target（实测 15m：主「▲新空 0.30%」对副「⚡新多 0.31%」= S4 降权）。
 4. 并行调用 Binance `get_price`；标准/完整更新再取 OI、Funding、Long/Short、Taker。
@@ -45,6 +55,23 @@ category: trading
 > 版式历史（都已否决，不要重提）：v1 东西多 → v2 看不懂 → v3 格式怪 → v4 难看 → v5/v6 面板式 → **v7 表格版（现行）**。
 > **教训：不把卡面当自由设计题；用户明确说“换版式/要表格”才改，改完先给他看再固化**。
 
+## 四态裁决：GO-A / PLAN-B / WAIT / NO-GO（2026-09-15 定版）
+
+**「不能自动执行」≠「不能给方案」。** 用户明确纠正过：卡面永远只有禁做 = 系统没在用。
+
+- `GO-A`：唯一带执行权的状态，出执行三件套，卡面 `⭐` 只在这里点亮。
+- `PLAN-B`：B 级（结构成立+方向明确）+ 三件套几何有效 + R:R≥1.5 + **无任何硬门** → 出「人工方案」：参考进场区 / 失效位 / 参考目标区 + 升级前置。`executable` 恒 false，方案只写 `plan` 字段，`entry/stop/target` 恒 None。卡面 `**④ 人工方案（非授权·需人工确认）**`，总结固定写「这不是授权单」。
+- `WAIT`：有等待类拦因或 C 级 → 只有观察条件与结构位。
+- `NO-GO`：任一硬门 → 连候选价都不出，**也不出 PLAN-B**。
+
+诊断口径：`python scripts/a_grade_probe.py <SYM>` 逐项对照 A 级门槛，并区分「行情没机会」（Grade/Side/EntryValid 是 SVP 的判断）与「工程封死」（字段缺失 / HALDRO Valid Code=0 / Contract Pack 坏）。**别把行情判断报成接线故障。**
+
+R:R 分层是同一个事实、两处定性：`decision_loop` 记等待类 `rr_ratio`，`risk_constitution` 检查2 曾经记 violation → `allowed=False` → 硬门。已按合同改为：`<1.5` 硬否决、`1.5–1.99` 只给 `observe_only_rr` 人工观察候选、`≥2.0` 干净；`OBSERVE_RR_RATIO` 必须等于 `tv_indicator_contract.RR_BC_MIN`。**改 R:R / 风控阈值后必须验证：R:R<2 仍不可能拿到 GO-A。**
+
+量效果时别只看 tick 加权：把影子账本的 `main/dual/regime/risk/advanced` 快照用新逻辑重放，**必须再按价位去重**（实测 92 tick 只对应 6 套不同方案），否则会把「一条方案持续了 21 小时」说成「20% 的分析都出方案」。
+
+卡面另加一行 `主因 <code>（家族） · N 类 / M 条拦因`：同一「现在不做」常被 5-7 条同义门各记一笔，`blockers` 证据层一个字不减，但人看的只有主因；`N 类 / M 条` 让榻缩看得见（实测一张真实卡曾有 18 条拦因）。家族清单重复会把 M 算多，改 `BLOCKER_FAMILIES` 后必须跑 `test_blocker_families_have_no_duplicates_and_cover_every_group`。
+
 ## 卡片重排纪律（`scripts/card_reformat.py`：表格版 v7 为主、面板式为备）
 
 出卡＝先跑原生卡、再机械重排；重排器只搬运原生卡已有的价位/角色/裁决，**不新增、不改写任何结论**。实跑要点：
@@ -58,6 +85,38 @@ category: trading
 - 阶梯与三态里的数字必须来自原生卡原文；卡面值与现场实测冲突时（恐贪这类）**卡后加一行注明，不动卡面**。
 - 用户明确说「换个版式/要表格」才改版式，改完先给他看再固化；不要自己起新版式。
 - 模板与字段映射：仓库 `docs/分析卡模板-v7.md`（可复制）＋本技能 `templates/card-skeleton.md` v7；实现细节与边界（含 `_plain()` 映射表、两模式差异）见 `references/card-three-layer-reformat.md`。
+
+## 发布前闸门（带外部归因的回复必跑）
+
+卡面数字不受闸门约束（价位/距现价百分比属 `out_of_scope`），会被拦的只有**宏观/资金流/政策类**句子的外部数字。
+所以：先写草稿文件，再跑闸门，**exit 0 才发**：
+
+```bash
+python scripts/claim_lint.py --file outputs/draft_reply.md --asof <YYYY-MM-DD> \
+    --data outputs/binance_<SYM>_<ts>.json      # 默认口径 = 看门狗口径；exit 1=有违规，exit 2=闸门自己没跑起来
+```
+
+引宏观指数（VIX/美债/金/市占/SPX）的合规写法是「**据 <具名来源>（YYYY-MM-DD 现场实拉）**」：
+`据 macro_probe（2026-09-15 11:06 现场实拉，上游 Yahoo/FRED）：SPX 7,603（-1.28%）· VIX 17.10 · 美债 4.96%`。
+只写括号里的「（现场实拉）」**不算来源**（闸门认 URL 或 `据/来源/Reuters/金十/CoinGlass…` 具名源词）——实测同一段话：带「据+日期」过，只写「（现场实拉）」被拦。
+**自 2026-09-15 起还有第二条**：归因句要求 **≥2 个独立来源**（同一个来源的多种写法只算 1 家），
+只写「据 macro_probe」会进 `weak_source` 弱提示——写上上游（·上游 Yahoo/FRED）即满足且更诚实；
+发关键结论前用 `python scripts/claim_lint.py --file <草稿> --strict` 跑一遍。
+机制、工具与已知失败案例见 `external-claim-verification`（若需自动扩写，先 `hermes curator adopt external-claim-verification`）。
+
+## XAU 数据链路（2026-09-15 修）
+
+**取数自检先跑它**：`python scripts/xau_ohlcv_source.py --probe`
+（打印各源密钥有无 / 五周期读数 / 30 日线序列；exit 1 = 两源都不可用，会回退切图）。
+
+| 事实 | 说明 |
+|:--|:--|
+| 现货源优先级 | OANDA（与图表 OANDA:XAUUSD 同源）→ TwelveData（现货，实测差 ~0.1%） |
+| 2026-09-15 修的坑 | TwelveData **日线的 datetime 是纯日期**（`2026-09-15`），原实现无条件拼 `+00:00` → 解析恒失败 → **日线一根坏掉就把五周期整条链路打死** → XAU 每次退回切图（密钥其实是好的）。修后 `--probe` 应显示 ✅ |
+| 五周期 vs 多根历史 | `fetch_all()` 只返回每周期**最新一根**；要多根历史（如 30 日相关性）用 `fetch_daily_closes(count)` |
+| 限流 | TwelveData 免费档约 8 次/分；连续自检会打 429 → 源级熔断 15 分钟（`data/.xau_ohlcv_breaker.json`）。自检不要连刷 |
+| XAU 定时同步 | 2026-09-15 起**已暂停**（用户：「XAU 暂停，只要 BTC 的」）；XAU 分析时由 `auto_card.py` 按需单跑 `xau_tv_sync.py` |
+| 相关性黄金腿 | 现货源可用走 `oanda_spot`/`twelvedata_spot`；否则退 Binance `XAUUSDT` **代理腿**并明标 + 与现货基准比偏差（>1% 降级不给仓位建议；基准文件停更 >60 分钟视为不可用） |
 
 ## “现在呢/看哪个位置”专用输出规则
 
@@ -111,6 +170,8 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 | 现货对照 | `api/v3/ticker/24hr.lastPrice` | 期现基差用来看快照时序，不用于否决 |
 
 - 只有**量级错误、方向反向、品种错配**才判该源不可用；微差不否决（同 TV↔Binance 口径）。
+- **跨场所对账用各场所自己的公开端点**，别把 Binance 当唯一官方源（资金费尤其）：MEXC `contract.mexc.com/api/v1/contract/funding_rate/<SYM>`、Gate.io `api.gateio.ws/api/v4/futures/usdt/tickers?contract=<CONTRACT>`（`funding_rate`/`mark_price`/`last`）、Bybit `api.bybit.com/v5/market/tickers?category=linear&symbol=`（`fundingRate`）、OKX `okx.com/api/v5/public/funding-rate?instId=`、Hyperliquid `POST api.hyperliquid.xyz/info` with `{"type":"metaAndAssetCtxs"}`（`funding` 是**小时**率）。实测站点口径与这些官方值逐位一致时，该第三方数字可当证据。
+- **同名不同工具要先判再比**：同一 ticker 在不同场所可能是不同标的（RWA pre-IPO / 股票永续，OPENAI、SAP 这类常差 8~16%）。比价前先看类目/子类（`class`/`subtype`）与标的全称；价差 >5% 且历史实现值≈0 → 判「不同工具」，不得写成套利机会。
 - 对账结果写进回复（`项目 | 第三方 | 官方` 三列），不写「已核对」三字了事。
 - 多端点对账一律写成 `outputs/*.py` 再跑（urllib + `ProxyHandler({"http":"http://127.0.0.1:7897","https":"..."})`）；不要用长内联 curl 或嵌套 `$()`，那会被 hardline block。
 
@@ -121,6 +182,8 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 - **`python scripts/auto_card.py --help` 不打印帮助，它会直接跑一张 quick 卡**（实测：打印「一键分析卡 · BTCUSDT · quick / 3步路由」并真去刷 TV）。想看用法读源码或直接用下一条命令。
 - 完整（L3）调用：`HANGQING_NO_SEND=1 TANGXI_ENABLE_AUTOMATED_TG=0 python scripts/auto_card.py <SYM> --mode-auto --message "分析 <SYM>"`。回执看第 3 行的 `档位=full` 与 `管线路由：14步`（加密，2026-09 起 cg_pro 退役后由 15 步降为 14 步；步数按 `pipeline_router.route_pipeline(sym,'full')` 现算，别背旧数）；不带 `--mode-auto --message` 就是静默 quick。
 - 耗时 2-3 分钟，**后台跑 + wait**，不要前台阻塞；卡落在 `data/auto_card_<SYM>_full.md`，尾部自带管线完成度审计（直接用它写“完成 N/M”）。
+- **轻量（L1）档的产物文件名不同：`data/auto_card_<SYM>.md`（没有 `_full` 后缀）**。命令 `python scripts/auto_card.py <SYM> --quick --message "现在呢"`（路由 `tv → binance → card`，约 70s）。踩过的坑：跑完 quick 后去看 `data/auto_card_<SYM>_full.md` 的 mtime，会把**上一轮完整卡**当成本轮产物（mtime 停在几小时前，且 "结构：" 行还是旧价）——先 `ls -t data/auto_card_<SYM>*.md` 看两个候选再读。
+- **轻量档的降级要写成「档位未刷新」而不是「源失败」**：轻量卡里 `宏观/事件 not_run · X情绪 not_run · 跨资产相关性 not_run` 属该档不跑那几步（不是采集失败），③ 覆盖 `3.0`、`主导 76% ⚠` 是只聚合 3 源所致，`TV五周期 live` 落在「仅展示/辅助」列也只是档位未入裁决；交付时说明「轻量档：宏观/X情绪/相关性 not_run，体温与高周期为继承」，不要把 not_run 报成 unavailable，也不要少报这一条。
 - 跑卡前声明分析租约，跑完释放：`python scripts/tv_analysis_lease.py start --minutes 12 --symbol BINANCE:BTCUSDT.P` / `... end`（`status` 可看 `remaining_seconds`；顶层 `active:false` 只表示持有进程已退出，不代表租约失效，判据是 `lease.remaining_seconds > 0`）。
 - 衍生品方向票一次取齐：`python scripts/binance_deriv_bundle.py BTCUSDT` → `outputs/binance_<SYM>_<BJT时间>.json`（24h 价/高低/成交额 + OI 现值与 15m/4h 变化 + 费率与历史 + 全局与大户多空 + Taker 比值 + 前 5 档深度买卖比 + `_src` 逐项 live/unavailable），比手写多个 curl 稳，也自带状态契约。**读产物 JSON 要等脚本落盘后单独读**：`gen.py | python -c "读文件"` 是竞态——右侧读取不消费 stdin，会抢在写入前跑完并读到上一轮的文件（实测读到上一轮的价格/OI）。先跑生成脚本，另起一次调用再读。JSON 是**扁平键**，按名直取：`price`（没有 `last`）/`chg24h_pct`/`high24h`/`low24h`/`quote_vol24h`/`oi_now`/`oi_chg_15m_pct`/`oi_chg_4h_pct`/`funding_now_pct`/`mark`/`global_ls_now`/`top_pos_ls_now`/`taker_now`/`depth_ratio`/`bid_wall5`/`ask_wall5`/`best_bid`/`best_ask` + `_src` 逐项状态。键名不对会静默取空，先认键再取值，别按猜的名字读。
 - **深度比值是瞬时快照、不作单次方向证据**：`depth_ratio`/`bid_wall5`/`ask_wall5` 仅前 5 档，分钟级采样可数十倍翻转（实测同品种 54×→0.001×→0.17×）。翻转即标「弃用/不稳定」，不得写进方向票；要承接力证据就多次采样或看更宽档位。
@@ -174,7 +237,7 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
   仍是旧快照（实测 BTCUSDT 64,658 vs live 76,802、市占 58.73% vs CoinGecko 56.1%）。
   逐段核对量级/方向，任一段不过就整段丢弃，别只按文件龄放行。
 - **恐贪**：卡面「订单流」行的恐贪数同样会带错值（实测卡面 67，而同轮 live `alternative.me/fng` = 61，X 情绪侧也报 ~61）。恐贪一律现场取，不引卡面值。
-- **恐贪/宏观现场取一条命令**：`python scripts/macro_probe.py`（本技能自带、免参数）一次取回 恐贪现值+前值+分档、SPX/VIX/DXY/GC=F/^TNX 及其日变动、BTC 市占与全市场 24h 涨跌，逐项 `_src` 标 `live`/`unavailable`。Yahoo 类境外源必须走代理 `127.0.0.1:7897`（直连被封 IP），这条路径上 `^TNX`/`DXY`/`GC=F` 都能取到——不要改走 FMP 同类符号（402）。
+- **恐贪/宏观现场取一条命令**：`python "<技能目录>/scripts/macro_probe.py"`（本技能自带、免参数；仓库 `scripts/` 下**没有**这个文件——在仓库根目录直接跑 `python scripts/macro_probe.py` 会 `Errno 2`；技能目录 = `~/AppData/Local/hermes/skills/trading/crypto-market-verification`）一次取回 恐贪现值+前值+分档、SPX/VIX/DXY/GC=F/^TNX 及其日变动、BTC 市占与全市场 24h 涨跌，逐项 `_src` 标 `live`/`unavailable`。Yahoo 类境外源必须走代理 `127.0.0.1:7897`（直连被封 IP），这条路径上 `^TNX`/`DXY`/`GC=F` 都能取到——不要改走 FMP 同类符号（402）。
 - 探针命令、完整实录与完整档耗时/审计典型形状见 `references/card-value-cross-check.md`。
 
 ## 工具纪律
@@ -199,6 +262,7 @@ MCP 工具通过 `tool_search` 找到后，用 `tool_call` 调用；不要凭记
 
 ## 参考资料
 
+- `references/event-attribution.md`：事件归因（「昨天/隔夜发生了什么」「怎么会这样」）——先拉 1h/15m K 线还原实价路径，再拉金十日历、检索一手叙事并交叉验证；把 OI/量能/ETF/派发墙/宏观对回盘面读数；源冲突要两报不择一；交付六段形状（结论→路径表→力量表→卡面为何翻转→日程表→怎么办）与「跌的机制：没人买 vs 有人砸」等判读坑。
 - `references/card-three-layer-reformat.md`：卡片重排器实现与边界（两模式差异：tables 默认／panel 备用 · parser 锚点表 · 三态以现价锚＋区间取边＋远端回退 · 【总结】三段与 `_plain()` 符号→人话映射表 · panel 44 列自检 · 聊天压缩与坑清单）。
 - `references/binance-verification-session-pattern.md`：本轮验证形成的最小调用集、状态写法与位置型跟踪模板。
 - `references/full-run-execution-and-level-evidence.md`：完整档（L3）实跑序列（租约 / `--mode-auto --message` / 后台 wait / 产物位置）、

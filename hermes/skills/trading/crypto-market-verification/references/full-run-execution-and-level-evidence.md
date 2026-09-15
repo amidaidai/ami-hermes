@@ -25,8 +25,8 @@ HANGQING_NO_SEND=1 TANGXI_ENABLE_AUTOMATED_TG=0 \
   python scripts/auto_card.py BTCUSDT --mode-auto --message "分析 BTCUSDT"
 ```
 
-- 回执第 3 行确认 `档位=full`；下一行是 `管线路由：15步 → tv→binance→cg_pro→macro→x_sent→cron_read→cvd→depth→corr→engine→regime→dual→advanced→risk→card`。
-- 实测 44-52s 就跑完 15 步 → 后台跑（`background=true, notify=true`）+ `process wait`，别前台阻塞；慢时仍会到分钟级，所以也别改成前台。
+- 回执第 3 行确认 `档位=full`；下一行是 `管线路由：14步 → tv→binance→macro→x_sent→cron_read→cvd→depth→corr→engine→regime→dual→advanced→risk→card`（**cg_pro 已于 2026-09-14 退役**，不要再期待这一环）。
+- 实测 44-52s 就跑完 14 步 → 后台跑（`background=true, notify=true`）+ `process wait`，别前台阻塞；慢时仍会到分钟级，所以也别改成前台。
 - 产物：`data/auto_card_<SYM>_full.md`（卡体 + 尾部完成度审计）、截图进 `tools/tradingview-mcp/screenshots/`。
 
 ### 坑 1：`--help` 不是 help

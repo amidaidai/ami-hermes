@@ -48,6 +48,7 @@ description: "Use when formatting BTC/XAU analysis cards. Follow the canonical v
 - 来源区分live/cache/stale_cache/unavailable/quota_cooldown以及not_run，不用默认中性数字假装采集成功。
 - 路由步数、成功步骤、有效来源数是不同分母，禁止把11/15步骤写成11/15来源。
 - 非加密禁套加密Funding/Taker/OI；XAU行情源身份与周期按当前代码元数据核验。
+- 多源表「清算」行（**仅加密品种**）三态可见：CoinGlass 堆积带（相对刻度**非 USD**）＋ OKX 逐笔规模（估算口径）＋ 币安快照（≤1 条/秒**采样**，只作存在性附注、**不并入规模**）。缓存不可用时整行不出现，不占位、不拿旧值冒充实时；清算只作人工观察与交叉验证，**不参与执行授权**。
 
 ## 投递与验证
 

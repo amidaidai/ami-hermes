@@ -243,7 +243,8 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 | 闸门 | 铁律 | 验证 |
 |------|------|------|
 | 数据新鲜度 | `auto_card()` 启动必须刷新/标记 `source_snapshot_{symbol}.json`；`go_nogo_gate` 读取真实 `_snapshot_age_h`，禁止用默认24h假值 | `python scripts/data_freshness_watchdog.py` 必须0过期；BTC/XAU snapshot <1h |
-| 守望刷新 | `行情守望.py` 即使无有效监控价位，也必须每5分钟刷新 BTC/XAU SourceSnapshot；过期价位不能阻断数据刷新 | `data/monitor_heartbeat.json` fresh，`source_snapshot_BTCUSDT/XAUUSD.json` fresh |
+| 快照刷新 | 快照由 cron 负责：`btc_tv_refresh.py`（每 20 分，BTC）+ `xau_tv_sync.py`（每 15 分，XAU）；**旧 `行情守望.py` 已退役**（其心跳已归档），不要拿它当刷新链 | `source_snapshot_BTCUSDT/XAUUSD.json` <1h；`python scripts/data_freshness_watchdog.py report` → healthy=True |
+| 黄金腿口径 | BTC↔XAU 相关性/组合风险倍数里的**黄金腿**：现货源（OANDA/TwelveData）优先；用 Binance `XAUUSDT` 时只能当**代理腿**，必须明标 `binance_xauusdt_proxy` 并与 OANDA 现货基准比偏差；偏差 >1% → 降级（`proxy_degraded`，不给减仓建议） | `python scripts/correlation_matrix.py` 首行必显示「黄金腿来源」+ 偏差百分比 |
 | R:R硬底线 | GO/NO-GO 只看主线计划 `rr_a/rr1`，不是取A/B最大值；主线 R:R<1:2 必须 `NO-GO·rr_ratio`，即使反向 `rr_b`>2 也不能显示 GO | `python scripts/auto_card.py BTCUSDT` 若模板审计报 `rr1<2.0`，GO/NO-GO 必须同步红灯 |
 | 跨资产情绪隔离 | CoinGecko社区面板、BTC/crypto Polymarket、BTC x_sent 缓存只用于加密；XAU/外汇/股票改用本品种热点/宏观/金十/COT，禁止把BTC情绪灌进非加密卡 | `python scripts/auto_card.py XAUUSD` 输出应含“非加密跳过BTC/crypto预测市场桥/不采用BTC缓存” |
 | Windows输出安全 | 渲染器 `stdout/stderr.reconfigure()` 必须捕获 `OSError/ValueError`，避免 cron/管道句柄异常导致出卡中断 | `python -m py_compile scripts/render_v96.py` |
@@ -349,6 +350,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 - 链上专业数据缺 CryptoQuant/Glassnode/Nansen/Arkham 结构化源。
 - **外部能力扫描已完成**（2026-06-28）：cryptoskills.dev / browse.sh / 全网免费API —— 详细对比见 `references/external-capability-scan-2026-06-28.md`。免费源已穷尽：SoSoValue(ETF)、Dune(链上)、COT(CFTC)、Deribit(期权)已全部接入。
 - ~~CoinGlass 全所衍生品需付费 $29/mo，暂不接入。~~ → **Coinglass MCP 已移除（2026-06-29）**：无 API Key，401 未授权，从 MCP 配置删除。
+- **CoinGlass 清算热力图：网页端 BTC 免 key 可用（2026-09-15 实测）**。官方 API 仍付费——`secrets/coinglass_api_key.txt` 用正确头 `CG-API-KEY` 实测全端点 `401 Upgrade plan`；但网页端 pro 图表走的 `capi.coinglass.com/api/index/v2|v5/liqHeatMap` 匿名可读，只是包了「请求参数 AES-ECB + 响应头 `user` 二层密钥 + gzip」。已落地 `scripts/coinglass_web.py`（免 key、免登录、纯 Python、无浏览器依赖），`tests/test_coinglass_web.py` 15 用例离线锁死协议（含缓存三态）。三条必须记住的边界：① **只有 `Binance_BTCUSDT` 匿名可用**，ETH/OKX_* 等返回 `code=40000`（浏览器匿名会话同样 40000，服务端按档位门控，不是参数问题）；② 第 3 列强度是**相对刻度不是 USD**（全量求和 866 亿 vs 官方 24h 爆仓额数亿），只报强度与占比；③ 前端改版即失效，失效按 `unavailable` 暴露、不得拿旧值冒充实时。Legend（`legend.coinglass.com`，用户分享图即此）另算：**登录墙 + headless UA 被边缘 nginx 404**，匿名什么都拿不到。
 - 实时鲸鱼追踪需付费（Glassnode/CryptoQuant/Santiment），暂不接入。
 - **脚本路径分裂（2026-06-29 发现）**：21 个关键脚本（data_gatherer, multi_model_engine, model_checklist 等）只在 `hermes/scripts/`，不在 `scripts/`。`auto_card.py` 通过 sys.path 解决了 import，但 AI 按 SKILL.md 执行 `python scripts/xxx.py` 会失败。手动分析时注意路径前缀。
 - **盘前 GO/NO-GO 闸门缺失（2026-06-29 社区对标 → 2026-06-29 晚已落地）**：分析卡输出后、下单前缺 7 问硬检查闸门。**已实现**：`scripts/go_nogo_gate.py`（v9.6），七门（数据新鲜/TV现场/R:R/事件/Protections/样本WFO/组合暴露），已接入 `auto_card.py` 渲染层，输出追加到完整卡尾部。详见 `tangxi-system-audit/references/community-best-practices-2026.md`。
@@ -359,7 +361,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 | 缺口 | 状态 | 实现 |
 |------|:--:|------|
 | x_sent虚挂 | ✅ 已闭合 | `x_sentiment_collector.py` + cron `d6247e06ac30` 每30min |
-| 爆仓/清算数据 | ✅ 已闭合 | `liquidation_collector.py` (OI×价格联动) + cron `5db6dd683b1d` 每30min |
+| 爆仓/清算数据 | ✅ 已闭合（2026-09-15 重建） | 三源分工：**规模**=`liquidation_flow.py`（OKX 逐笔，cron `清算双源刷新` */10）· **堆积带**=`coinglass_web.py`（仅 BTC）· **存在性**=`ws_liquidation_listener.py`（币安 ≤1条/秒快照，cron `清算WS采集保活` */5）。旧 `liquidation_collector.py`（OI×价格挤压估算）已于 2026-07-15 退役 —— 那是估算不是真实强平。 |
 | DeFiLlama稳定币 | ✅ 已闭合 | `stablecoin_collector.py` + cron `5f7192fd9029` 每2h |
 | 数据新鲜度告警 | ✅ 已闭合 | `data_freshness_watchdog.py` + cron `155082fc5e34` 每15min |
 | DMI引擎接线 | ✅ 已闭合 | `pipeline_integration.py` 已import `dmi_decision.compute_dmi()` |
@@ -393,7 +395,7 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 - `cg_pro` CoinGecko Pro：**2026-09-14 退役**。原记录的「Orion CG 交叉验证 400」已定位为认证头用错（demo key 发 pro 头），代码已修（`scripts/cg_auth.py`）；步骤本身按用户决定不再进管线。
 
 **免费数据源尚未接入**：
-- **爆仓/强平数据**：Binance `GET /fapi/v1/forceOrders` 需认证（已有Key）。清算集群是最强支撑/阻力位（社区共识），当前驾驶舱完全缺失。**期货强制平仓需认证，现货无公开端点。**
+- ~~爆仓/强平数据~~ **2026-09-15 已接入**：OKX 公共逐笔（免 key、`uly=<COIN>-USDT`、单页 100 笔翻页）给出真实规模；币安侧 REST 已下线、WS 只推 ≤1 条/秒**快照**（只作存在性，不并入规模）；Bybit 的 REST 与 WS 清算主题均已下线。仍空白的是 **第二所逐笔规模源** —— Bitfinex/HTX/Hyperliquid 三家 2026-09-15 均已实测不可用（详见 `crypto-onchain-flow` 的「免费多所逐笔的边界」条目），免费公开渠道目前只剩 OKX 一所。卡面落点 = ③ 多源表「清算」行，口径与裁决语义见 `docs/指标驱动分析与策略合同.md` 二·五节。
 - **DeFiLlama 稳定币 API**：**已实测可用**（`stablecoins.llama.fi/stablecoins?includePrices=true`），385个稳定币实时供应量数据，USDT $184.85B / USDC $73.77B。**尚未接入驾驶舱或任何 cron。**
 - **稳定币供应 Dune 替代**：原 Dune 查询 4159727 可能失效，DeFiLlama 可作免费替代。
 

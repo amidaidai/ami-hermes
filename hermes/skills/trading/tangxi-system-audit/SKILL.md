@@ -35,32 +35,76 @@ description: 棠溪交易系统全面审计流程 — 静态扫描、社区对�
 
 ---
 
-### 监控心跳审计（P0 · 每次审计第一步 · v9.1 升级）
+### 监控心跳审计（P0 · 每次审计第一步 · **2026-09-15 重写：以代码为准，不凭旧清单**）
 
-**心跳停了 = 全系统瞎了。** 不仅要查 cron，更要查守护进程。两个守护进程独立运行：
+**心跳停了 = 全系统瞎。但要查“现役”的心跳，不是历史代际的。**
 
-| 守护进程 | 心跳文件 | 脚本 | 责任 |
-|---------|---------|------|------|
-| 行情守望 | `data/monitor_heartbeat.json` | `scripts/行情守望.py` | 多品种实时价格+关键位突破 |
-| BTC守护 | `data/.btc_daemon_heartbeat.json` | `scripts/btc_daemon.py` | BTC多因子评分+TG推送 |
+### ⚠ cron 审计的硬要求（2026-09-15 实测教训）
+
+`hermes cron list` 的 `[active]` 与派发“completed” **不代表脚本跑成功**。
+实测：`btc_tv_refresh.py` 连续退出码 1（抢图失败），而 `cron list` 里看不到；
+更严重的是 `~/AppData/Local/hermes/cron/executions.db` 的 `cron_incidents` 表**只写不读**——
+积压 **3,806 条 `state='detected'`**（从未 ack/closed），其中一个作业 **3,745 条**。
+所以旧的“12 个 cron 全 active、0 error”结论是**错的**。
 
 ```bash
-# 并行检查两个心跳
-cat data/monitor_heartbeat.json 2>/dev/null | python -c "import sys,json; d=json.load(sys.stdin); print(f'行情守望: {d[\"status\"]} ts={d[\"time\"][:19]}')"
-cat data/.btc_daemon_heartbeat.json 2>/dev/null | python -c "import sys,json; d=json.load(sys.stdin); print(f'BTC守护: ts={d[\"ts\"][:19]} score={d[\"score\"]}')"
+python scripts/cron_incident_watchdog.py --hours 24 --backlog   # 唯一正确的 cron 失败口径
+# exit 1 = 窗口内有失败；报告落 data/cron_incidents_report.json
+ls ~/AppData/Local/hermes/cron/output/<job_id>/ | tail -5   # 单次失败详情（stderr/stdout）
 ```
 
-**恢复命令**（任一心跳 stopped/丢失时执行）：
+判断规则：**只看 incident 表，不看 `[active]`**；窗口内有失败 → 至少 P1（先看是不是抢图/租约冲突，再看脚本本身）。
+共享 TV 图表的多个作业（`btc_tv_refresh` / `xau_tv_sync` / keylevel 每 2 分）会互相抢锁，
+失败往往是竞争而非 bug —— 但**没人报**本身就是 bug。
+
+**写 cron 脚本的硬规则（自噪声防护）**：no-agent 脚本“发现异常”**不得用非零退出码**——
+Hermes 会把任何非零退出记成新 incident，于是看门狗自己变成噪声源。
+异常靠 stdout 可见（`deliver=local` 会落 `cron/output/<job_id>/`）；
+退出码 2 只留给“脚本自己没跑起来（配置/DB 不可读）”——那才应该是 incident。
+
+**「让路」不是「失败」（2026-09-15 修）**：多个后台作业共用一张 TV 图时，
+抢不到 `tv_data_bridge.tv_collection_lock` 是**排队**，不是脚本坏了。
+- `btc_tv_refresh`：先探测锁（wait 60s），抢不到 → 打「↷ 让路」+ **exit 0**
+- `xau_tv_sync`：捕捕 `TimeoutError` → 缓存可用则 exit 0；缓存已不可用才 exit 1（那种情况该被看见）
+- **让路时绝不写 status 文件**：既不能刷 `last_success_at`（否则 freshness 看门狗被假成功糊住），
+  也不该累积 `consecutive_failures`。
+
+**阈值对齐算术（反复踩）**：刷新器的“需要刷新”阈值必须 **小于** 看门狗门阀，且对齐 cron 节奏。
+实测两例：`btc_tv_refresh` 五周期 12 分 vs 节奏 20 分（一次失败就级联）；
+`xau_tv_sync` 快照刷新 30 分 = 看门狗门 30 分（年龄在 0–45 分锯齿 → 每 45 分钟假告警 15 分钟）。
+正确算式：**刷新阈值 ≤ 节奏**，才能“每个周期都刷”，年龄稳定在节奏量级。
+
+**唯一权威清单 = `scripts/data_freshness_watchdog.py` 的 `WATCH_FILES` + `PAUSED_SOURCES`**（照它查，不要凭记忆）：
+
 ```bash
-# 行情守望恢复
-cd "D:/Hermes agent"
-rm -f data/monitor.lock
-python scripts/行情守望.py -s BTCUSDT XAUUSD
-
-# BTC守护恢复
-rm -f data/.btc_daemon.pid data/.btc_daemon.lock
-python scripts/btc_daemon.py
+cd "D:/Hermes agent" && python scripts/data_freshness_watchdog.py report
+python -c "import json;d=json.load(open('data/data_freshness_watchdog_report.json',encoding='utf-8'));print(d['healthy'],d['active_count'],d['issue_count'],d['generated_at'])"
+# healthy=True 且 issue_count=0 才算监控链健康；静默不代表健康，必读报告 JSON。
 ```
+
+| 项 | 现役权威 | 阈值 |
+|:--|:--|:--|
+| 关键位守护心跳 | `data/.keylevel_guard_heartbeat.json` + `.keylevel_guard_health.json` | 0.3h |
+| 结构复核盖章 | `keylevels_config.json` → `auto_approval_policy.structure_reviewed_at` | 6h |
+| 闸门生命体征 | `data/claim_watchdog_heartbeat.json`（叙事断言闸门 cron 每 10 分） | 0.7h |
+| cron 失败聚合 | `data/cron_incident_watchdog_heartbeat.json` + `data/cron_incidents_report.json`（cron 每 30 分） | 1.2h |
+| 快照/缓存 | `source_snapshot_BTCUSDT.json`、`tv_live_BTCUSDT.json`、`tv_dmi_cache.json` | 0.5–1h |
+| X 情绪客观面 | `x_sentiment_context.json` → `fear_greed.ts` | 6h |
+
+**已退役、禁止再当 P0 报的**（心跳文件已于 2026-09-15 归档到 `data/_archive/heartbeats_retired_20260915/`，含 README）：
+
+- **XAU 现场同步**（2026-09-15 用户决定「XAU 暂停，只要 BTC 的」）：cron `XAU TV现场同步`
+  (`113655ad34b5`) 已 pause；`source_snapshot_XAUUSD.json` / `xau_tv_state.json` /
+  `xau_tv_sync_status.json` 已从 WATCH_FILES 移入 `PAUSED_SOURCES`。
+  **停用期间这三份停更是预期，不得当故障报**；XAU 分析不受影响
+  （`auto_card.py` 在 XAU 缓存不新鲜时会**按需单跑** `xau_tv_sync.py`）。
+  恢复：`hermes cron resume 113655ad34b5` + 删掉 PAUSED_SOURCES 那行。
+- `monitor_heartbeat.json`（行情守望.py）—— 进程不存在、cron 无看门狗
+- `.btc_daemon_heartbeat.json`（btc_daemon.py）—— 同上
+
+> 教训（2026-09-15）：这两个文件停在 7/16 与 8/30，`status` 还写着 `running`，
+> 审计时差点被报成“P0 全系统瞎”。事实是它们早退役，且 `PAUSED_SOURCES` 里早有记录——
+> **文档不同步就会制造假 P0**。所以：心跳类结论一律以 `WATCH_FILES` 为唯一事实源。
 
 ### 守护进程看门狗覆盖审计（P0 · 2026-07-07 教训 · 2026-07-11 实例验证）
 **光查心跳新鲜度不够——必须查每个守护进程有没有看门狗 cron 兜底。**

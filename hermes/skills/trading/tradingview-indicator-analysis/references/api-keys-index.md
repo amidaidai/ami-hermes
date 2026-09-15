@@ -21,7 +21,8 @@
 | `tushare_token.txt` | Tushare | A股·中国宏观 | ⚠️ 分接口：7/23 可用，其余需 2000+ 积分 |
 | `dune_api_key.txt` | Dune Analytics | 链上流量·稳定币 | ✅ |
 | `jin10_token.txt` + `jin10_mcp.cmd` | 金十数据（MCP） | 快讯·日历·XAU 报价 | ✅ |
-| `coinglass_api_key.txt` | Coinglass | 加密衍生品聚合 | ⚠️ `HTTP 200 + code 401 Upgrade plan`；系统未引用 |
+| `coinglass_api_key.txt` | Coinglass | 加密衍生品聚合 | ⚠️ `HTTP 200 + code 401 Upgrade plan`；系统未引用（免 key 替代见下行） |
+| （无需密钥） | **CoinGlass 网页端** | 清算热力图（BTC） | ✅ 2026-09-15 落地 `scripts/coinglass_web.py`：免 key/免登录，仅 `Binance_BTCUSDT` 可用；强度为相对刻度非 USD |
 | `oanda_token.txt` + `oanda_account_id.txt` | OANDA | XAU 五周期 OHLCV 首选源 | ❌ **占位符，从未配置真 token** |
 | `polymarket_address.txt` / `polymarket_api_key.txt` | Polymarket | 预测市场 | ✅ 公开读可用 |
 

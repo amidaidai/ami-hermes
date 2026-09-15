@@ -23,6 +23,8 @@ tags: [crypto, onchain, whale, exchange-flow, stablecoin, funding-rate, smart-mo
 | 恐惧贪婪 | web_extract | `alternative.me/api/crypto/fear-and-greed-index/latest` |
 | 交易所净流 | web_extract | `coinglass.com/ExchangeFlow` 或 `cryptoquant.com` |
 | 稳定币总市值 | web_search | `web_search("USDT USDC market cap 2026")` |
+| **清算堆积带（24h）** | **`scripts/coinglass_web.py`** | **免 key 网页端握手；仅 `Binance_BTCUSDT` 匿名可读（其它品种 `code=40000`）；强度是相对刻度不是 USD；缓存 `data/coinglass_liq.json`，卡面短句 `liquidation_band_text()`** |
+| **逐笔强平流（真实成交）** | **`scripts/liquidation_flow.py`** | **OKX 公共接口免 key：`uly=<COIN>-USDT` 必填、单页硬上限 100 笔、往旧翻页用 `after=<最旧ts>`；缓存 `data/liquidation_flow.json`，卡面短句 `flow_text()`；刷新走 `scripts/liquidation_refresh.py`（双源、cron `清算双源刷新`）** |
 
 ## 链上分析框架
 
@@ -131,3 +133,8 @@ F&G 22 恐惧 · USDT.D 5.8% ↑
 - 资金费率极端值常见于行情末端，但可能维持数天
 - BTC 入交易所不一定立刻卖出，可能只是转入做市/借贷
 - 稳定币数据有 6-24h 延迟（链上确认时间）
+- **清算口径三条铁律**：① CoinGlass 热图强度是**相对刻度**，不得当美元爆仓额引用；② OKX 名义按 `sz × ctVal × bkPx` **估算**（ctVal 随品种变：BTC 0.01 / ETH 0.1 / SOL 1，取自 `/api/v5/public/instruments`），写卡面必须带「估算」；③ 交易所单页只回 100 笔、只保留最近约 24h → **覆盖不足时标签必须写真实窗口**，不把 4 小时的数据标成「近24h」。
+- **bootstrap 陷阱**：`fetched_at` 不在 `source_health.TIMESTAMP_KEYS`（只认 `updated_epoch/updated_at/ts/time/updated`）里 —— 自建缓存只写 `fetched_at` 会被数据新鲜度看门狗判成「无显式时间戳」而误报，落盘时要同时写 `updated_epoch`。
+- **别再用已下线的强平接口**：币安 `fapi/v1/allForceOrders` 返错误页、Bybit `/v5/market/liquidation` 返 404、Bybit WS `liquidation.<SYM>` 主题回 `handler not found`（2026-09-15 实测）→ 免费可用的**规模口径只剩 OKX 逐笔**（`uly=<COIN>-USDT`，单页上限 100 笔需翻页），本轮采集器 `scripts/liquidation_flow.py`。
+- **币安 WS 强平流三个坑**：① 路径已改为 `wss://fstream.binance.com/market/ws/!forceOrder@arr`（旧路径 `/ws/…` 仍能握手但**永不推送**，静默空转② 官方自 2021-04-27 起只推 **≤1 条/秒快照**，不是全量逐笔 → **不得并入规模统计**（系统性低估比不给数字更糟），只能作「币安侧最近发生过强平」的存在性提示；③ `fstream` 直连超时需走代理，普通 HTTP 代理可隧道 WS（实测 `bookTicker` 12s 17,947 条）。采集器 `scripts/ws_liquidation_listener.py` + 保活 `liquidation_ws_watchdog.py`。
+- **免费多所逐笔的边界（2026-09-15 全部实测，别重复找）**：Bitfinex WS `liq` 与 `liquidations` 频道均回 `10300 channel: unknown`（已下线）；HTX `market.<sym>.liquidation_orders` 走代理被 `1003` 断开、直连握手超时；币安只推 ≤1 条/秒快照；**Hyperliquid 无公开全市场清算流**（官方 `WsTrade` 定义里没有 liquidation 字段，清算只出现在**用户级** `userFills`/`userEvents`；全市场需自建 gRPC 节点或付费第三方）。→ **结论：免费公开的第二所逐笔清算源不存在，规模口径只能挂 OKX 一所**；多所规模需求出现时只能走付费（CoinGlass/TapeSurf 档位）。

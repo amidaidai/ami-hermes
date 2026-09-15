@@ -393,7 +393,6 @@ When auditing or designing a MoA preset, distinguish “unset” from an explici
 - **价目也拿不到，比身份更难**：这类中转线上节点通常只放行推理路径（`/pricing`、`/v1/pricing`、根路径 403 `HTTP node only allows access to inference API paths`），`GET /v1/models` 无价格字段，`POST /v1/chat/completions` 响应也不回成本（只有 `usage` token），单模型 `GET /v1/models/<id>` 还可能对**能用别名**回 `model_not_found`。所以「哪几个免费/打折」只能向用户要后台价目页，不能靠探测推断，更不许编单价。
 
 ### 中转能力矩阵：reasoning_effort × function tools（2026-09-13 实证）
-
 中转「能跑」还要再分一层：**模型存在 ≠ 该模型在 `/v1/chat/completions` 上支持工具**。b.ai 实测：
 
 - `gpt-6-astra` 带 function tools + 非零 `reasoning_effort` **必然 HTTP 400**：
@@ -435,8 +434,16 @@ Nvidia 免费池会**用 HTTP 200 返回错误体**：
 - 视觉不进免费兜底槽，用别的通道（用户明示）。免费真读图 ≥18s 且多是最后一道。
 - 改完读回 YAML 确认仍是 list 而非字符串（`hermes config set` 的已知陷阱）。
 
-## 「为什么不是 X 模型」问答路径（2026-09-13 实证）
+### b.ai reasoning 矩阵第二轮：模型可以只接受 low/high/max（2026-09-15 实测）
 
+`glm-5.3-flash` 在带 tools 的 `/v1/chat/completions` 上只接受 `low` / `high` / `max` / 省略：`none` 与 `medium` 都回 HTTP 400「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」。本机全局 `agent.reasoning_effort: medium`，所以**把它设成主模型 = 每条消息先 400 再重试**（与 gpt-6-astra 同类的能力矩阵冲突）。
+
+- 修法：`agent.reasoning_overrides: {glm-5.3-flash: low}`，只对**主对话路径**生效（`/model` 切换与 fallback 激活会重解析）。
+- 辅助槽 `auto` **不读** reasoning_overrides：主模型换成 always-think 模型后，`title_generation` 仍 400（`agent/title_generator.py` 硬编码 `reasoning_config={"enabled": False}`），加 `auxiliary.title_generation.reasoning_effort` 也无效 → 只能给该槽**钉一个非 always-think 模型**。
+- 视觉槽不受此限：`auxiliary.vision = <always-think 模型>` 零 400（视觉路径不送该参数），实测可正常出图。
+- 结论形状：主模型留快模型，always-think 模型放视觉槽；见 `references/relay-reasoning-matrix-and-vision-slot-20260915.md`（含同题横评与真图夹具判分，副图真值=1 个 AggVol，含浅色主题图的判读陷阱）。
+
+## 「为什么不是 X 模型」问答路径（2026-09-13 实证）
 用户问「什么模型 / 为什么不是 GPT / 怎么不用 X」时，**先结论后证据、两段式**：一段配置层，一段可用性层。不要只答配置，也不要把配置意图说成正在跑。
 
 1. `config.yaml` 的 `model.default` + `model.provider` = 当前主模型；会话系统提示里的 Model/Provider 才是现场路由（两者常年不一致，分开报）。

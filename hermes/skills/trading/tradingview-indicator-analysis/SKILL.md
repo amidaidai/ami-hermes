@@ -94,6 +94,7 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 6. **追踪更新带截图+衍生品核验**：追踪更新必须拉全 Binance 方向票（OI/费率/多空/Taker/depth）交叉核验，不能只拉现价。
 
 7. **表格使用**：Markdown表格用于多周期定位、关键位矩阵、多源交叉验证表。保持简洁紧凑即可。
+8. **多源表「清算」行（2026-09-15 起，仅加密）**：CoinGlass 堆积带（相对刻度**非 USD**）＋ OKX 逐笔规模（**估算**）＋ 币安快照（≤1 条/秒**采样**，只作存在性、**不并入规模**）。缓存不可用时整行不出现；清算只作人工观察与交叉验证，**不参与执行授权**（授权仍只归 SVP）。细节见 `docs/指标驱动分析与策略合同.md` 二·五节。
 
 ## ⚠ TV切周期指标等待铁律（2026-08-31 · 用户确认）
 
@@ -924,7 +925,8 @@ sys.path.insert(0, str(hermes_venv))
 **7. cron 任务分类治理（2026-08-29）**
 
 - **保留**：核心 9 个 cron（BTC关键位同步、BTC守护看门狗、XAU TV现场同步、BTC关键位守护看门狗、BTC关键位到价分析推送、数据新鲜度看门狗、行情守望看门狗、TV Desktop保活、liq_listener_btcusdt）
-- **禁用**：16 个非 Binance/不必要 cron（Orion/Dune/Deribit/COT/X情绪/清算/稳定币/QLib/执行桥/X情绪LLM/宏观Poly/运维聚合/作战室/黄金宏观/影子结果标注）
+- **禁用**：16 个非 Binance/不必要 cron（Orion/Dune/Deribit/COT/X情绪/稳定币/QLib/执行桥/X情绪LLM/宏观Poly/运维聚合/作战室/黄金宏观/影子结果标注）
+  > 更正（2026-09-15）：「清算」已从禁用清单移出 —— 退役的是旧 `liquidation_collector.py`（OI+价格挤压估算）；现役为 `liquidation_refresh.py`（cron 清算双源刷新 */10）+ `ws_liquidation_listener.py`（cron 清算WS采集保活 */5）+ 卡面「清算」行。
 - **原则**：保留文件不删，只在 cron 配置中设 `enabled: false`
 
 **8. 脚本路径解析陷阱（2026-08-29）**
@@ -1130,7 +1132,7 @@ no-agent cron 的脚本解析为 `{workdir}/scripts/{script_path}`。脚本不�
 - 联网结合社区时，社区情绪只作博弈背景，必须绑定可执行条件：收复、拒绝、扫损、失效；不要把看多/看空讨论直接当信号。
 - **MCP 连接排查**：MCP 配置了但工具不出现 → 先 `timeout 8 python <server.py>` 手动测启动崩溃 → 再查 command 格式（Windows 下 `-m` 优于 `-c` 多分号） → 最后重启 Hermes。完整方法论见 `references/mcp-connectivity-troubleshooting.md`。
 - 分析后必须覆写 `data/monitor_levels.json` 的近端可执行支撑/阻力和 `analysis_cycle`，避免监控只剩远端旧位导致日内告警过稀。
-- **到价通知分两种模式：LLM cron vs no_agent脚本。优先用no_agent**：\n  - **LLM模式**（默认）：`cronjob(action='create', schedule='5m', prompt='...', deliver='origin')`。prompt内写明用哪些MCP工具和触发条件。**切勿设置 `enabled_toolsets`** — MCP工具不属于toolsets分类。每次跑都耗token。\n  - **no_agent模式（推荐·零token）**：写一个Python脚本用 `urllib.request` 或 `curl` 从免费API拉价格做条件判断，用 `cronjob(action='create', no_agent=True, script='myscript.py', schedule='5m', deliver='origin')`。脚本输出=推送内容，空输出=静默。黄金现货价走 `api.gold-api.com/price/XAU`（免费无Key），期货价+成交量走 `query1.finance.yahoo.com/v8/finance/chart/GC=F`。零token消耗，更可靠。\n  - 适用场景：价位监控、条件触发、简单价格检查 → no_agent。需推理判断、多源分析、情绪解读 → LLM模式。\n  - **gold_monitor.py v2 设计要点**（双源+阶段自升级）：\n    - 数据源：`api.gold-api.com/price/XAU`（现货主源）+ `query1.finance.yahoo.com/v8/finance/chart/GC=F`（期货校验，减$20溢价估算现货）。双源差价<$5取均值（A级），差价大信托主源（B级），单源运作标C级。\n    - 阶段定义：8个阶段（0初始→1回踩确认→2突破确认→3空头确认→4持仓做多→5目标区→6持仓做空→7空头目标区），触发后自动跳转下一阶段不重复。\n    - 冷却防刷：同阶段同条件10分钟冷却（时间戳记录，重启不丢失）。\n    - 日志记录：每次触发写入 `data/gold_monitor_events.jsonl`。\n    - 状态自清理：超过7天的冷却记录和警报自动清除。\n    - 推送条件宽（价到位即推）+ 防重复严（冷却内不推）= 用户不丢失信号也不被刷屏。\n\n- **双cron联动模式（no_agent触发 → agent出卡）**：当需要\"触发时自动出分析卡\"时，用两个cron配合：\n  ① **no_agent价格监控**（5m间隔，零token）：`cronjob(action='create', no_agent=True, script='gold_monitor.py', schedule='5m')`。脚本检测到触发条件后，除了print推送消息，还写一个trigger request JSON文件到 `data/gold_trigger_request.json`，格式：`{'status':'pending', 'price':N, 'phase':N, 'triggers':[...], 'triggered_at':'...'}`。\n  ② **agent分析cron**（1m间隔，只触发时耗token）：`cronjob(action='create', schedule='1m', skills=['tradingview-indicator-analysis'], prompt='检查 D:/Hermes agent/data/gold_trigger_request.json，如果status=pending则拉MCP数据出完整分析卡，然后改status为completed')`。\n  — 没触发时：no_agent静默，agent cron检查完立即退出（几乎零token）。\n  — 触发时：no_agent推消息+写标记，agent cron读到标记后自动拉MCP数据出分析卡。\n  — 避免两cron打架：no_agent写完标记才走，agent读完改标记为completed，没有竞态。\n  — 详见 `references/dual-cron-trigger-pattern.md`。
+- **到价通知分两种模式（LLM cron vs no_agent）**：完整要点已移至 `references/price-alert-cron-patterns.md`。核心：优先 no_agent 脚本（零 token，空输出=静默）；LLM 模式仅用于需要推理判断的场景。
 - **后台守护进程实时到价监控（零token·10s级）**：当用户要求"实时"（比 5m cron 更频繁），用 `terminal(background)` 启动常驻 Python 脚本而非 cron。脚本每 10s 轮询 Binance 免费 API，条件满足才 print→sys.exit(0)，notify_on_complete 捕获输出。详见 `references/background-daemon-threshold-monitor.md`。
 - **TV 已运行时不要重复启动**：先调 `tv_health_check` — 如返回 `cdp_connected: true` 则 TV 已在运行（大概率是监控行情守望常驻或之前会话残留），直接切品种即可。此时 `tv_launch()` 会报"TradingView not found on win32"但这是误导性错误（CDP 端口已在用），不要去排查 TV 安装路径。
 - **`symbol_search` 可能失败，直接 `chart_set_symbol` 更稳**：特别是 OANDA 等非主流交易所，`symbol_search` 可能返回"fetch failed"。直接 `chart_set_symbol("OANDA:XAUUSD")` 跳过搜索。设置后 `chart_ready` 可能为 false，需立即调 `chart_get_state` 确认符号已切换成功。
