@@ -139,3 +139,85 @@ def test_module_reads_no_secrets_and_no_heavy_deps():
 def test_okx_page_limit_is_capped_at_exchange_maximum():
     """OKX limit>100 回 HTTP 400 —— 翻页上限必须被代码夹住。"""
     assert lf.PAGE_LIMIT == 100
+
+
+# ── 多源聚合（OKX 逐笔 + 币安 WS 快照）2026-09-15 ──────────────────────────
+
+
+def test_okx_usd_events_apply_contract_value():
+    """OKX 第 4 列是张数：必须 ×ctVal×价格 才折成 USD。"""
+    out = lf.okx_usd_events([[NOW_MS, "long", 70_000.0, 100.0]], ct_val=0.01)
+    assert out == [[NOW_MS, "long", 70_000.0, 70_000.0]]
+
+
+def test_stats_usd_takes_notional_as_given():
+    """USD 事件表不再乘面值，避免二重换算。"""
+    st = lf.stats_usd([[NOW_MS, "long", 70_000.0, 1_000_000.0]], now_ms=NOW_MS)
+    assert st["w1h"]["long_usd"] == 1_000_000.0
+    assert st["coverage_hours"] == 0.0
+
+
+def _write_okx_cache(path, events, *, fetched_at, ct_val=0.01):
+    path.write_text(json.dumps({
+        "source": "okx_public", "fetched_at": fetched_at, "updated_epoch": int(fetched_at),
+        "status": "live", "error": None,
+        "coins": {"BTC": {"ct_val": ct_val, "events": events, "stale": False}},
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_ws_cache(path, events, *, updated_epoch, status="live"):
+    path.write_text(json.dumps({
+        "source": "binance_ws", "updated_epoch": updated_epoch, "status": status,
+        "error": None,
+        "coins": {"BTC": {"events": events, "coverage_from": 0, "coverage_to": 0}},
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def test_multi_source_text_keeps_binance_out_of_scale(tmp_path):
+    """币安快照只作存在性附注，绝不并进规模合计 —— 否则系统性低估。
+
+    币安流自 2021-04-27 起只推 ≤1 条/秒快照（官方变更日志）。这里给币安一笔
+    $5,000,000 的快照，规模读数必须仍等于 OKX 的 $70,000。
+    """
+    okx = tmp_path / "okx.json"
+    ws = tmp_path / "ws.json"
+    now_s = NOW_MS / 1000
+    _write_okx_cache(okx, [[NOW_MS - 60_000, "long", 70_000.0, 100.0]], fetched_at=now_s - 5)
+    _write_ws_cache(ws, [[NOW_MS - 30_000, "short", 70_000.0, 71.4286]], updated_epoch=int(now_s - 5))
+
+    text = lf.multi_source_text("BTC", okx_cache_path=str(okx), ws_cache_path=str(ws), now=now_s)
+    assert "清算流OKX" in text
+    assert "$70K" in text              # 规模 = OKX 的 100 张 × 0.01 × 70,000
+    assert "$5.0M" not in text         # 币安那笔不得进规模
+    assert "币安快照" in text          # 但存在性可见
+
+
+def test_multi_source_text_reports_snapshot_when_okx_missing(tmp_path):
+    """OKX 无数据时只给币安快照并**显式说明规模口径不可用**，不拿快照冒充规模。"""
+    ws = tmp_path / "ws.json"
+    now_s = NOW_MS / 1000
+    _write_ws_cache(ws, [[NOW_MS - 30_000, "short", 70_000.0, 3.0]], updated_epoch=int(now_s - 5))
+    text = lf.multi_source_text("BTC", okx_cache_path=str(tmp_path / "none.json"),
+                               ws_cache_path=str(ws), now=now_s)
+    assert "规模口径不可用" in text
+    assert "币安快照" in text
+
+
+def test_multi_source_text_unavailable_when_all_sources_missing(tmp_path):
+    assert lf.multi_source_text("BTC", okx_cache_path=str(tmp_path / "a.json"),
+                               ws_cache_path=str(tmp_path / "b.json")) == "清算流 不可用"
+
+
+def test_ws_events_are_usd_converted_from_coins(tmp_path):
+    """币安 WS 第 4 列是币数：×价格 即 USD；陈旧缓存不得算 live。"""
+    ws = tmp_path / "ws.json"
+    now_s = NOW_MS / 1000
+    _write_ws_cache(ws, [[NOW_MS - 1000, "long", 70_000.0, 2.0]], updated_epoch=int(now_s - 5))
+    live = lf.load_ws_usd_events("BTC", cache_path=str(ws), now=now_s)
+    assert live["status"] == "live"
+    assert live["events"][0][3] == 140_000.0
+
+    _write_ws_cache(ws, [[NOW_MS - 1000, "long", 70_000.0, 2.0]],
+                    updated_epoch=int(now_s - lf.WS_MAX_AGE_S - 60))
+    stale = lf.load_ws_usd_events("BTC", cache_path=str(ws), now=now_s)
+    assert stale["status"] == "stale_cache"

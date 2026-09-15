@@ -540,7 +540,8 @@ def _liquidation_line(symbol: str) -> str:
 
         coin = "BTC" if "BTC" in su else ("ETH" if "ETH" in su else "")
         if coin:
-            flow = liquidation_flow.flow_text(coin)
+            # 多所合并（OKX 逐笔 + 币安 WS 流）；源数写进标签，单源时不会假装两所
+            flow = liquidation_flow.multi_source_text(coin)
             if flow and "不可用" not in flow:
                 parts.append(flow.replace("清算流", "流"))
     except Exception:

@@ -321,6 +321,153 @@ def flow_text(coin: str = "BTC", cache_path: str | None = None,
     return " · ".join(bits) + "（估算）"
 
 
+# ── 多源聚合（OKX 逐笔 + 币安 WS 流）2026-09-15 ─────────────────────────────
+# OKX 事件第 4 列是**张数**（需 × ctVal × price），币安 WS 第 4 列是**币数**
+# （× price 即 USD）。两源口径不同，必须先折成 USD 再合并 —— 否则聚合数是错的。
+WS_CACHE_PATH = os.path.join(_REPO_ROOT, "data", "liquidation_ws.json")
+WS_MAX_AGE_S = 900                # 采集器每 ≤60s 刷时间戳；15 分钟无更新即视为停摆
+
+
+def okx_usd_events(events: list[list[Any]], ct_val: float) -> list[list[Any]]:
+    """OKX 事件（张数）→ USD 名义事件表。"""
+    out: list[list[Any]] = []
+    for ev in events or []:
+        try:
+            out.append([int(ev[0]), str(ev[1]), float(ev[2]),
+                        float(ev[3]) * float(ct_val) * float(ev[2])])
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def load_ws_usd_events(coin: str = "BTC", cache_path: str | None = None,
+                       max_age_s: int = WS_MAX_AGE_S,
+                       now: float | None = None) -> dict[str, Any]:
+    """读币安 WS 采集器缓存 → USD 名义事件表 `[[ts, side, price, usd], ...]`。
+
+    返回 {status: live|stale_cache|unavailable, events, age_s, error}。状态三态可见，
+    陈旧缓存只用于**标注**，卡面不得把它当实时（调用方按 status 决定是否采用）。
+    """
+    path = cache_path or WS_CACHE_PATH
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except Exception as exc:
+        return {"status": "unavailable", "events": [], "age_s": None,
+                "error": f"{type(exc).__name__}: {exc}"}
+    age = (now if now is not None else time.time()) - float(rec.get("updated_epoch") or 0)
+    info = ((rec.get("coins") or {}).get(str(coin).upper())) or {}
+    events: list[list[Any]] = []
+    for row in info.get("events") or []:
+        try:
+            events.append([int(row[0]), str(row[1]), float(row[2]),
+                           float(row[3]) * float(row[2])])
+        except (TypeError, ValueError, IndexError):
+            continue
+    if not events:
+        status = "unavailable"
+    elif rec.get("status") == "live" and age <= max_age_s:
+        status = "live"
+    else:
+        status = "stale_cache"
+    return {"status": status, "events": events, "age_s": round(age, 1),
+            "error": None if status == "live" else (rec.get("error") or "缓存陈旧或为空")}
+
+
+def stats_usd(events_usd: list[list[Any]], now_ms: int | None = None) -> dict[str, Any]:
+    """窗口统计（事件已是 USD 名义，不再乘合约面值）。"""
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    rows: list[tuple[int, str, float, float]] = []
+    for ev in events_usd or []:
+        try:
+            rows.append((int(ev[0]), str(ev[1]), float(ev[2]), float(ev[3])))
+        except (TypeError, ValueError, IndexError):
+            continue
+
+    def _window(secs: int) -> dict[str, Any]:
+        floor = now_ms - secs * 1000
+        long_usd = short_usd = 0.0
+        long_n = short_n = 0
+        for ts, side, _px, usd in rows:
+            if ts < floor:
+                continue
+            if side == "long":
+                long_usd += usd
+                long_n += 1
+            else:
+                short_usd += usd
+                short_n += 1
+        return {"long_usd": round(long_usd, 2), "short_usd": round(short_usd, 2),
+                "long_count": long_n, "short_count": short_n,
+                "net_usd": round(long_usd - short_usd, 2), "count": long_n + short_n}
+
+    coverage_s = 0.0
+    if rows:
+        coverage_s = (max(r[0] for r in rows) - min(r[0] for r in rows)) / 1000
+    last = None
+    if rows:
+        ts, side, px, usd = max(rows, key=lambda r: r[0])
+        last = {"ts": ts, "side": side, "price": px, "notional_usd": round(usd, 2)}
+    biggest = None
+    if rows:
+        ts, side, px, usd = max(rows, key=lambda r: r[3])
+        biggest = {"ts": ts, "side": side, "price": px, "notional_usd": round(usd, 2)}
+    return {"events": len(rows), "coverage_hours": round(coverage_s / 3600, 2),
+            "w1h": _window(3600), "w24h": _window(WINDOW_S),
+            "last": last, "biggest": biggest,
+            "notional_note": "名义为估算（OKX=张数×合约面值×破产价；币安WS=币数×均成交价）"}
+
+
+def multi_source_text(coin: str = "BTC", okx_cache_path: str | None = None,
+                      ws_cache_path: str | None = None,
+                      max_age_s: int = CACHE_MAX_AGE_S, now: float | None = None) -> str:
+    """卡面短句：**规模口径以 OKX 逐笔为准**，币安 WS 只作存在性附注。
+
+    为什么不让币安进规模合计：币安 forceOrder 流自 2021-04-27 起只推「最多 1 条/秒的
+    快照」（官方变更日志），与 OKX 逐笔相加会**系统性低估**币安侧规模 —— 比不给数字更糟。
+
+      新鲜 → `清算流OKX 近1h 多$1.2M/空$0.4M · 窗18.5h … · 近笔 76,869 多$131 · 币安快照3笔/1h`
+      OKX 不可用但币安有 → `清算流 币安快照3笔/1h·规模口径不可用(OKX无数据)`
+      全不可用 → `清算流 不可用`
+    """
+    coin = str(coin or "").upper()
+    now_s = now if now is not None else time.time()
+    rec = load_cache(okx_cache_path)
+    okx_events: list[list[Any]] = []
+    if rec and (now_s - float(rec.get("fetched_at") or 0)) <= max_age_s:
+        info = ((rec.get("coins") or {}).get(coin)) or {}
+        raw = info.get("events") or []
+        ct_val = float(info.get("ct_val") or CT_VAL_FALLBACK.get(coin, 0.0))
+        okx_events = okx_usd_events(raw, ct_val)
+    ws = load_ws_usd_events(coin, cache_path=ws_cache_path, now=now_s)
+    ws_events = ws["events"] if ws["status"] == "live" else []
+    ws_note = ""
+    if ws_events:
+        floor = int((now_s - 3600) * 1000)
+        recent = [e for e in ws_events if int(e[0]) >= floor]
+        ws_note = f"币安快照{len(recent)}笔/1h" if recent else f"币安快照{len(ws_events)}笔/24h"
+
+    if not okx_events:
+        if ws_note:
+            return f"清算流 {ws_note}·规模口径不可用(OKX无数据)"
+        return "清算流 不可用"
+
+    st = stats_usd(okx_events, now_ms=int(now_s * 1000))
+    covered_h = float(st.get("coverage_hours") or 0)
+    w1, w24 = st["w1h"], st["w24h"]
+    bits = [f"清算流OKX {_span_label(covered_h, 1)} 多{_fmt_usd(w1['long_usd'])}"
+            f"/空{_fmt_usd(w1['short_usd'])}",
+            f"{_span_label(covered_h, 24)} 多{_fmt_usd(w24['long_usd'])}"
+            f"/空{_fmt_usd(w24['short_usd'])}"]
+    last = st["last"]
+    if last:
+        bits.append(f"近笔 {last['price']:,.0f} {'多' if last['side'] == 'long' else '空'}"
+                    f"{_fmt_usd(last['notional_usd'])}")
+    if ws_note:
+        bits.append(ws_note)
+    return " · ".join(bits) + "（估算）"
+
+
 def summarize(coin: str = "BTC", pages: int = 3) -> str:
     res = fetch_recent(coin, pages=pages)
     st = stats(res["events"], res["ct_val"])

@@ -96,6 +96,18 @@ WATCH_FILES = {
         "threshold": 0.7,
         "paths": [PROJECT_DATA / "liquidation_flow.json", HERMES_DATA / "liquidation_flow.json"],
     },
+    # 币安强平流采集器（20260915 新增）：常驻进程 + cron `清算WS采集保活`(*/5) 守护。
+    # 缓存阈值 0.7h；心跳阈值 0.3h(18 分) 才能区分「采集器卡住」与「市场没有强平」。
+    "liquidation_ws.json": {
+        "threshold": 0.7,
+        "paths": [PROJECT_DATA / "liquidation_ws.json", HERMES_DATA / "liquidation_ws.json"],
+    },
+    ".liquidation_ws_heartbeat.json": {
+        "threshold": 0.3,
+        "payload_path": ("ts",),
+        "paths": [PROJECT_DATA / ".liquidation_ws_heartbeat.json",
+                  HERMES_DATA / ".liquidation_ws_heartbeat.json"],
+    },
 }
 
 # 有意不监控的来源（生产者已停用）。列在这里是为了让「为什么没报」有据可查，
