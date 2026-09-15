@@ -232,16 +232,17 @@ def refresh_cache(coins: tuple[str, ...] = DEFAULT_COINS, pages: int = 6,
         old_events = ((prev_coins.get(coin) or {}).get("events")) or []
         res = None
         last_exc: Exception | None = None
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             # 2026-09-15：实测单次 SSL 抖动（UNEXPECTED_EOF_WHILE_READING）会让整轮降级，
             # 而该降级此前被写成**顶层** status → 一个品种失败就把 BTC 卡面清算行整行抹掉。
+            # 抖动出现频率不低（当日晚 20:30、22:50 各一次），故给两次重试。
             try:
                 res = fetch_recent(coin, pages=pages, timeout=timeout)
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt == 1:
-                    time.sleep(1.5)
+                if attempt < 3:
+                    time.sleep(1.5 * attempt)
         if res is None:
             errors.append(f"{coin}: {type(last_exc).__name__}: {last_exc}")
             if old_events:
