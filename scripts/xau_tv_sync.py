@@ -363,8 +363,14 @@ def analysis_lease_defer_exit() -> int | None:
     return 1
 
 
-def _refresh_source_snapshot_if_stale(max_age_seconds: int = 1800) -> None:
-    """Keep XAU's multi-source quality snapshot inside the 30-minute freshness gate."""
+def _refresh_source_snapshot_if_stale(max_age_seconds: int = 900) -> None:
+    """Keep XAU's multi-source quality snapshot inside the 30-minute freshness gate.
+
+    阈值算术（2026-09-15 对齐，与 BTC 侧同一教训）：同步节奏 15 分 < 看门狗门 30 分。
+    旧阈值 1800s(=门值) 会让年龄在 0–45 分之间锯齿 —— 每 45 分钟里有约 15 分钟被
+    freshness 看门狗判 stale_cache（周期性假告警）。设成 900s 后每个同步周期都会刷新，
+    年龄稳定 ≤ ~16 分，既不误报也不放过真停摆。
+    """
     try:
         scripts_dir = str(ROOT / "scripts")
         if scripts_dir not in sys.path:
@@ -807,6 +813,20 @@ def main() -> int:
         _audit_marker("published")
         _write_sync_status(True)
         return 0
+    except TimeoutError as e:
+        # 共享图表锁被 BTC 侧续航占用 → 这是**排队**，不是失败。
+        # 与租约让路同一约定（见 analysis_lease_defer_exit）：
+        #   ① 不写 status 文件 —— 让路既不是成功（绝不能刷 last_success_at，
+        #      否则 freshness 看门狗会被假成功糊住）也不是失败（不该累积 consecutive_failures）；
+        #   ② 缓存仍可用 → exit 0（非零退出会被 Hermes 记成 cron incident，把表刷爆）；
+        #      缓存已不可用 → exit 1，这种情况本来就该让调度器看见。
+        _audit_marker("defer:lock_busy", error=str(e)[:200])
+        cache = published_xau_cache_usable()
+        if cache.get("usable"):
+            print("↷ XAU同步本轮让路：共享图表锁被其它后台任务占用（缓存仍可用，不做失败计）")
+            return 0
+        print(f"↷ XAU同步让路但已发布缓存不可用：共享图表锁被占用·{cache.get('reason')}")
+        return 1
     except Exception as e:
         _audit_marker("error", error=str(e)[:200])
         try:

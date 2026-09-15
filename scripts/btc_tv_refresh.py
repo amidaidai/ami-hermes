@@ -57,6 +57,28 @@ def refresh_source_snapshot() -> bool:
         return False
 
 
+def chart_lock_available(wait: float = 60.0) -> bool:
+    """共享图表锁是否可用（拿一下立刻放，只探测不占用）。
+
+    **为什么需要**：本作业的采集子进程自己要抢 `tv_data_bridge.tv_collection_lock`
+    （timeout=180）。若此刻 XAU 同步正持锁，子进程会空等两轮再以「未发布新快照」退出，
+    于是每轮都被记成 cron 失败（实测 2026-09-15 11:08/11:28/11:49 连续 incident）。
+    先探测的好处：抢不到就**体面让路**（exit 0），既不改子进程、也不制造假失败。
+    锁模块自身异常一律当作「可用」——不能让探测把续航堵死。
+    """
+    try:
+        from tv_data_bridge import tv_collection_lock
+    except Exception:
+        return True
+    try:
+        with tv_collection_lock(timeout=wait):
+            return True
+    except TimeoutError:
+        return False
+    except Exception:
+        return True
+
+
 def main() -> int:
     # 交互式分析租约：分析期间不切用户正在看的图。让路一轮不会让快照过期
     # （阈值 18 分 < cron 20 分 < 合同 30 分），比硬闯读出一张空表划算。
@@ -77,6 +99,11 @@ def main() -> int:
     need_five = not bool(five.get("usable"))
     need_source = not bool(source.get("fresh"))
     if not need_five and not need_source:
+        return 0
+    # 后台任务互斥：抢不到共享图表锁 → 让路一轮（是「排队」，不是「失败」）
+    if not chart_lock_available():
+        print("↷ BTC五周期续航本轮让路：共享图表锁被其它后台任务占用（不做失败计）")
+        print(f"   five={five.get('reason')} source={source.get('reason')}")
         return 0
     if need_five and run_collector() != 0:
         print(f"BTC五周期续航失败: {five.get('reason', '不可用')}", file=sys.stderr)
