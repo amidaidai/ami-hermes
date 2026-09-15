@@ -341,6 +341,7 @@ def yahoo_chart_price(yahoo_symbol: str) -> float | None:
 
 
 from credential_store import read_secret
+from cg_auth import auth_headers
 CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
 
 
@@ -350,7 +351,7 @@ def coingecko_price(asset: str) -> float | None:
     if not coin_id:
         return None
     try:
-        headers = {"x-cg-pro-api-key": CG_KEY} if CG_KEY else {}
+        headers = auth_headers(CG_KEY)
         data = http_get("https://api.coingecko.com/api/v3/simple/price", {"ids": coin_id, "vs_currencies": "usd"}, timeout=8, headers=headers)
         price = data.get(coin_id, {}).get("usd")
         return float(price) if price else None

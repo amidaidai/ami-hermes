@@ -12,7 +12,7 @@ Orion 全市场雷达 v2 — 多源交叉验证版
 
 环境变量（Hermes 自动注入）：
   BINANCE_API_KEY, BINANCE_SECRET_KEY — Binance 签名请求
-  CG_API_KEY — CoinGecko Pro API Key (x-cg-pro-api-key)
+  CG_API_KEY — CoinGecko key（`CG-` 前缀 = Demo key，走 x-cg-demo-api-key；见 scripts/cg_auth.py）
   ORION_EXCHANGE — binance / hl / both
 """
 
@@ -41,6 +41,7 @@ HAS_KEYS = bool(BK and BS)
 # CoinGecko Demo API (CG- prefix key, uses api.coingecko.com)
 from credential_store import read_secret
 CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
+from cg_auth import auth_headers  # noqa: E402
 HAS_CG = bool(CG_KEY)
 CG_BASE = "https://api.coingecko.com/api/v3"  # Demo & Free both use api.coingecko.com
 
@@ -196,7 +197,7 @@ def verify_binance(symbol):
 
 # ─── CoinGecko Pro API ───
 def _cg_headers():
-    return {"x-cg-pro-api-key": CG_KEY, "User-Agent": UA}
+    return {"User-Agent": UA, **auth_headers(CG_KEY)}
 
 
 def _cg_get(path):

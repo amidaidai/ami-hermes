@@ -59,6 +59,7 @@ TUSHARE_TOKEN = _read_secret("tushare_token.txt")
 FMP_KEY = _read_secret("fmp_api_key.txt")
 MASSIVE_KEY = _read_secret("massive_api_key.txt")
 CG_KEY = os.environ.get("CG_API_KEY", "") or _read_secret("coingecko_api_key.txt")
+from cg_auth import auth_headers as _cg_auth_headers  # noqa: E402
 
 
 def _fetch(url: str, headers: dict[str, str] | None = None, timeout: int = 10) -> Any:
@@ -277,26 +278,35 @@ def cg_top_coins(n: int = 10) -> dict:
         # 该参数组合导致本源静默死亡 60+ 天（此前一直靠 stale_cache 兜底、卡面报未采到）。
         # 改为默认字段（含 price_change_percentage_24h）；1h/7d 缺失时如实给 None。
         d = _fetch(f"{CG_BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page={n}&page=1&sparkline=false",
-            headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None)
+            headers=_cg_auth_headers(CG_KEY) or None)
         coins = []
         btc_dom_shift = 0
         for c in d:
+            # 2026-09-14 实测缺陷：markets 端点对部分币返回 price_change_percentage_24h=null，
+            # 旧码 c.get(..., 0) 只兜「键缺失」、兜不住「键存在但值为 null」→ 下游 sum() 直接
+            # TypeError，整个源被吞成 request_failed（真因之一，另一个是认证头用错）。
+            _chg24 = c.get("price_change_percentage_24h")
             coins.append({
                 "symbol": c["symbol"].upper(),
                 "name": c["name"],
                 "price": c["current_price"],
                 "mc_rank": c.get("market_cap_rank"),
                 "change_1h": c.get("price_change_percentage_1h_in_currency"),
-                "change_24h": c.get("price_change_percentage_24h", 0),
+                "change_24h": None if _chg24 is None else float(_chg24),
                 "change_7d": c.get("price_change_percentage_7d_in_currency"),
                 "mc": c.get("market_cap", 0),
             })
             if c["symbol"].upper() == "BTC":
-                btc_dom_shift = c.get("price_change_percentage_24h", 0)
+                btc_dom_shift = 0.0 if _chg24 is None else float(_chg24)
         # Sector rotation signal: if BTC << alt avg → alt season
-        alt_changes = [c["change_24h"] for c in coins if c["symbol"] not in ("BTC", "ETH", "USDT", "USDC")]
+        # None（无 24h 涨跌的币）必须剔除后再求和，不能让一个 null 打死整个源。
+        alt_changes = [c["change_24h"] for c in coins
+                       if c["symbol"] not in ("BTC", "ETH", "USDT", "USDC")
+                       and c["change_24h"] is not None]
         avg_alt = sum(alt_changes) / len(alt_changes) if alt_changes else 0
-        btc_change = next((c["change_24h"] for c in coins if c["symbol"] == "BTC"), 0)
+        btc_change = next((c["change_24h"] for c in coins if c["symbol"] == "BTC"), None)
+        if btc_change is None:
+            btc_change = 0.0
         rotation = "BTC主导" if btc_change > avg_alt + 1 else "山寨季" if avg_alt > btc_change + 3 else "同步"
         return {
             "top_coins": coins,
@@ -315,7 +325,7 @@ def cg_trending() -> dict:
     """CoinGecko trending → 山寨热点检测"""
     def fetch():
         d = _fetch(f"{CG_BASE}/search/trending",
-            headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None)
+            headers=_cg_auth_headers(CG_KEY) or None)
         coins = d.get("coins", [])[:7]
         items = []
         for c in coins:
@@ -337,7 +347,7 @@ def cg_coin_detail(coin_id: str = "bitcoin") -> dict:
     def fetch():
         d = _fetch(
             f"{CG_BASE}/coins/{coin_id}?localization=false&tickers=false&community_data=true&developer_data=true&market_data=true",
-            headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None,
+            headers=_cg_auth_headers(CG_KEY) or None,
         )
         md = d.get("market_data", {})
         cd = d.get("community_data", {})
@@ -367,7 +377,7 @@ def cg_categories() -> dict:
     def fetch():
         d = _fetch(
             f"{CG_BASE}/coins/categories",
-            headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None,
+            headers=_cg_auth_headers(CG_KEY) or None,
         )
         cats = []
         for c in d[:20]:
@@ -396,7 +406,7 @@ def cg_exchange_volumes(coin_id: str = "bitcoin") -> dict:
     def fetch():
         d = _fetch(
             f"{CG_BASE}/coins/{coin_id}/tickers?order=volume_desc&depth=true",
-            headers={"x-cg-pro-api-key": CG_KEY} if CG_KEY else None,
+            headers=_cg_auth_headers(CG_KEY) or None,
         )
         tickers = d.get("tickers", [])
         # Aggregate by exchange

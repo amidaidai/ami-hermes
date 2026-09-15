@@ -160,13 +160,7 @@ def _crypto_matrix(engine: dict[str, Any], dual: dict[str, Any], steps: set[str]
         evidence=str(prices.get("source") or "价格未确认"),
     ))
 
-    cg = source_records.get("cg_top") or engine.get("cg_top")
-    rows.append(_row(
-        "cg_pro", "CoinGecko/板块", _status(cg), "context", False,
-        "板块和流动性背景，不改裁决",
-        requested="cg_pro" in steps,
-        source_value=cg,
-    ))
+    # 2026-09-14 cg_pro 步退役：CoinGecko/板块 那行 context 来源不再进来源矩阵。
     macro = source_records.get("macro") or engine.get("macro") or engine.get("_macro")
     rows.append(_row(
         "macro", "宏观/事件", _status(macro), "upstream_context", False,

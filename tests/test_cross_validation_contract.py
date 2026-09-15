@@ -19,19 +19,20 @@ def test_core_sources_are_explicitly_marked_as_final_verdict_inputs():
         "funding": {"rate_pct": "0.01%"},
         "oi": {"value": 1000},
         "_tv_sub": {"composite": 10},
-        "cg_top": {"_source_status": "unavailable"},
         "x_sentiment": {"_source_status": "not_run"},
     }
     dual = {"asset_is_crypto": True, "valid_code": 2, "conflict": False}
 
-    rows = build_source_matrix("BTCUSDT", engine, dual, pipeline_steps=["tv", "binance", "cg_pro", "x_sent"])
+    # 2026-09-14：cg_pro 退役后，这里用 macro 充当「非授权上下文源」样本。
+    rows = build_source_matrix("BTCUSDT", engine, dual, pipeline_steps=["tv", "binance", "macro", "x_sent"])
     by_id = {row["id"]: row for row in rows}
 
     assert by_id["tv_five_tf"]["status"] == "live"
     assert by_id["tv_five_tf"]["entered_final_verdict"] is True
     assert by_id["haldro"]["entered_final_verdict"] is True
-    assert by_id["cg_pro"]["entered_final_verdict"] is False
+    assert by_id["macro"]["entered_final_verdict"] is False
     assert by_id["x_sentiment"]["entered_final_verdict"] is False
+    assert "cg_pro" not in by_id, "退役的 cg_pro 不得再出现在来源矩阵里"
 
 
 def test_optional_source_failure_degrades_without_blocking_core_verdict():
@@ -42,16 +43,15 @@ def test_optional_source_failure_degrades_without_blocking_core_verdict():
         "_binance_data_collected": True,
         "prices": {"primary": 100.0, "futures": 100.0},
         "_tv_sub": {"composite": 10},
-        "cg_top": {"_source_status": "unavailable"},
     }
     dual = {"asset_is_crypto": True, "valid_code": 2, "conflict": False}
     evaluation = evaluate_cross_validation(
-        build_source_matrix("BTCUSDT", engine, dual, pipeline_steps=["tv", "binance", "cg_pro"])
+        build_source_matrix("BTCUSDT", engine, dual, pipeline_steps=["tv", "binance", "macro"])
     )
 
     assert evaluation["state"] == "degraded"
     assert evaluation["hard_blockers"] == []
-    assert "cg_pro" in evaluation["warnings"]
+    assert "macro" in evaluation["warnings"]
 
 
 def test_missing_required_tv_snapshot_blocks_full_verdict():

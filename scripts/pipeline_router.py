@@ -6,7 +6,7 @@ v1.1 (2026-06-29): 五层TF统一(D/4h/1h/15m/5m)·cron_read捷径·步数精简
 
 用法:
     from pipeline_router import route_pipeline, timeframe_info, pipeline_summary
-    steps = route_pipeline("BTCUSDT")   # → 15步: 采集/验证/引擎/风控/出卡
+    steps = route_pipeline("BTCUSDT")   # → 14步: 采集/验证/引擎/风控/出卡
     steps = route_pipeline("XAUUSD")    # → 8步: tv/macro/x_sent/cron_read/cvd/corr/gold_macro/card
     steps = route_pipeline("EURUSD")    # → 7步: tv/macro/x_sent/cron_read/corr/forex_rate/card
     tfinfo = timeframe_info("BTCUSDT")  # → {'layers': ['D','4h','1h','15m','5m'], 'main':'15m', 'screenshot':'15m'}
@@ -170,7 +170,7 @@ STEPS = {
     # 步骤ID: {label, description, 适用资产集合, executor}
     "tv":       {"label": "TV技术面",    "desc": "TradingView SVP+Volume 五层(D/4h/1h/15m/5m)", "assets": {"crypto", "gold", "forex", "stock", "futures", "option", "index", "other"}},
     "binance":  {"label": "Binance衍生品","desc": "OI/费率/Taker/LS/多空比",           "assets": {"crypto"}},
-    "cg_pro":   {"label": "CoinGecko Pro","desc": "板块/流动性/市值排名",                "assets": {"crypto"}},
+    "cg_pro":   {"label": "CoinGecko Pro", "desc": "板块/流动性/市值排名 [已退役 2026-09-14：无 Pro key→公共端点 429·恒定无字段；免费信息改由 x_sent 承载]", "assets": set()},  # retired
     "macro":    {"label": "宏观背景",     "desc": "SPX/VIX/DXY/US10Y + 金十日历 + Poly + FG(加密)", "assets": {"gold", "forex", "stock", "crypto", "futures", "index", "other"}},
     "jin10":    {"label": "金十日历",     "desc": "经济数据/利率决议/快讯 [已并入macro]", "assets": set()},  # merged into macro
     "poly":     {"label": "Polymarket",  "desc": "Fed/衰退/加密事件概率 [已并入macro]",  "assets": set()},  # merged into macro
@@ -185,7 +185,7 @@ STEPS = {
     "cvd":      {"label": "CVD订单流",   "desc": "量价背离/吸收/FVG",                   "assets": {"crypto", "gold"}},
     "depth":    {"label": "深度数据",     "desc": "挂单墙/清算池",                       "assets": {"crypto"}},
     "corr":     {"label": "跨资产相关",   "desc": "BTC-SPX-XAU-DXY 相关性矩阵(FnanceKit)", "assets": {"crypto", "gold", "forex", "stock", "futures", "index", "other"}},
-    # Crypto Full 的固定15步中，以下是实际执行器内部的决策阶段；
+    # Crypto Full 的固定14步中，以下是实际执行器内部的决策阶段；
     # 它们不是空占位，auto_card 会在相应数据/裁决生成后写入完成度审计。
     "engine":   {"label": "核心模型引擎", "desc": "VWAP/EMA/CVD + 多模型候选",           "assets": {"crypto"}},
     "regime":   {"label": "市场体制",     "desc": "闭柱特征/体制分类/模型适配",             "assets": {"crypto"}},
@@ -280,7 +280,7 @@ ASSET_STEP_DESCRIPTIONS = {
 
 # Multi-asset collection and cross-validation contract. X is evidence only.
 ASSET_PROFILES = {
-    "crypto": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "AggVol", "Binance Futures", "CoinGecko", "macro", "Deribit"]},
+    "crypto": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "AggVol", "Binance Futures", "macro", "Deribit"]},
     "gold": {"primary_timeframe": "5m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "Jin10", "DXY", "US10Y", "GLD/GDX/TIP", "COT"]},
     "forex": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "Jin10", "DXY", "central-bank/rates", "correlated pairs"]},
     "stock": {"primary_timeframe": "1h", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "FinanceKit", "SEC/earnings", "sector rotation", "options chain"]},
@@ -431,11 +431,16 @@ MODE_SPECS = {
 }
 
 
-# Public crypto Full contract: ten collection/output stages plus five
+# Public crypto Full contract: nine collection/output stages plus five
 # decision stages. All fallbacks should use this tuple instead of copying a
 # stale prose list.
+#
+# 2026-09-14 用户决定退役 cg_pro（CoinGecko Pro）：secrets/ 下无 coingecko_api_key.txt，
+# 只能打公共端点 api.coingecko.com，恒定 429/无字段 —— 每轮只产出一条 ⚠️，
+# 属结构性死步。加密完整档 15 → 14 步。CG 的免费信息（/global、/search/trending）
+# 仍在 x_sent（x_sentiment_collector.py）里，未丢源。
 CRYPTO_FULL_PIPELINE = (
-    "tv", "binance", "cg_pro", "macro", "x_sent", "cron_read",
+    "tv", "binance", "macro", "x_sent", "cron_read",
     "cvd", "depth", "corr", "engine", "regime", "dual",
     "advanced", "risk", "card",
 )
@@ -476,7 +481,7 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
     """返回应执行的步骤ID列表。
 
     mode（大小写不敏感）:
-      'full' — 完整分析（加密固定15步；其他资产按适用步骤路由）
+      'full' — 完整分析（加密固定14步；其他资产按适用步骤路由）
       'quick' — 快速更新（3步核心）
       'inherit'/'standard' — 继承高周期，只刷新主执行/触发与加密衍生品
       'monitor' — 监控模式（仅事件）
@@ -526,8 +531,7 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
     ordered = [
         "tv",          # ① TV MCP 五层全周期 + 截图@主周期
         "binance",     # ② Binance 衍生品（仅加密）
-        "cg_pro",      # ③ CoinGecko Pro（仅加密）
-        "macro",       # ④ 宏观背景（含金十+Poly+FG）
+        "macro",       # ③ 宏观背景（含金十+Poly+FG）
         "x_sent",      # ⑤ X情绪（实时x_search·所有市场）
         "cron_read",   # ⑥ 读Cron输出（dune/deribit/cot/qlib/liq/stablecoin）
         "cvd",         # ⑦ CVD订单流（加密/黄金）

@@ -364,8 +364,10 @@ def test_final_verdict_is_locked_once_per_analysis_run():
 
 def test_pipeline_audit_does_not_mark_stale_source_as_completed():
     source = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
-    assert '_source_record_status(engine_data, "cg_top", cg_top)' in source
-    assert 'completed_steps.add("cg_pro")' in source
+    assert '_source_record_usable(engine_data, "x_sentiment", engine_data.get("x_sentiment"))' in source
+    # 2026-09-14：cg_pro 退役后不得再出现在完成度判定里（无源步骤不该有完成态）。
+    assert 'completed_steps.add("cg_pro")' not in source
+    assert '_source_record_status(engine_data, "cg_top", cg_top)' not in source
 
 
 def test_pipeline_audit_does_not_use_card_labels_as_source_evidence():

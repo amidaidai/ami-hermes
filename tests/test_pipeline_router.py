@@ -36,7 +36,8 @@ def test_deribit_option_symbol_routes_to_option_pipeline():
 def test_core_market_pipeline_lengths_remain_stable():
     router = _load_router()
     expected = {
-        "BTCUSDT": ("crypto", 15, "15m"),
+        # 2026-09-14：cg_pro（CoinGecko Pro）退役 → 加密完整档 15 → 14 步。
+        "BTCUSDT": ("crypto", 14, "15m"),
         "XAUUSD": ("gold", 8, "5m"),
         "EURUSD": ("forex", 7, "15m"),
         "AAPL": ("stock", 8, "1h"),
@@ -48,13 +49,26 @@ def test_core_market_pipeline_lengths_remain_stable():
         assert router.timeframe_info(symbol)["main"] == main_tf
 
 
-def test_crypto_full_route_is_the_canonical_fifteen_stage_pipeline():
+def test_crypto_full_route_is_the_canonical_fourteen_stage_pipeline():
     router = _load_router()
     assert router.route_pipeline("BTCUSDT", "full") == [
-        "tv", "binance", "cg_pro", "macro", "x_sent", "cron_read",
+        "tv", "binance", "macro", "x_sent", "cron_read",
         "cvd", "depth", "corr", "engine", "regime", "dual",
         "advanced", "risk", "card",
     ]
+
+
+def test_retired_cg_pro_step_can_never_re_enter_a_route():
+    """退役不是「删掉就完」：步骤 ID 仍留在 STEPS 里供历史卡/产物解析标签，
+    但它的 assets 必须为空集 —— 否则任何资产类别都会重新把它路由回来，
+    每轮再多打一条恒定失败。"""
+    router = _load_router()
+    assert "cg_pro" in router.STEPS, "标签解析仍需保留该 ID"
+    assert router.STEPS["cg_pro"]["assets"] == set()
+    for symbol in ("BTCUSDT", "XAUUSD", "EURUSD", "AAPL", "ES1!"):
+        for mode in ("quick", "inherit", "standard", "full"):
+            assert "cg_pro" not in router.route_pipeline(symbol, mode), (symbol, mode)
+    assert "cg_pro" not in router.crypto_full_pipeline()
 
 
 def test_quick_route_contains_only_live_execution_inputs():

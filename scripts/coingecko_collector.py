@@ -20,11 +20,12 @@ from credential_store import read_secret
 from atomic_json import atomic_write_json
 
 CG_KEY = read_secret("coingecko_api_key.txt", "CG_API_KEY", "COINGECKO_DEMO_API_KEY")
+from cg_auth import auth_headers
 
 def _fetch(url: str) -> Any:
     headers = {"User-Agent": UA}
     if CG_KEY and "coingecko.com" in url:
-        headers["x-cg-pro-api-key"] = CG_KEY
+        headers.update(auth_headers(CG_KEY))
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as r:
         raw = r.read()

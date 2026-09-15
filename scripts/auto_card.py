@@ -4268,9 +4268,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                 pipeline_steps = crypto_full_pipeline()
             except Exception:
                 # Keep the fallback fail-closed and aligned with the public
-                # fifteen-stage contract even if the helper import fails.
+                # fourteen-stage contract even if the helper import fails.
                 pipeline_steps = [
-                    "tv", "binance", "cg_pro", "macro", "x_sent", "cron_read",
+                    "tv", "binance", "macro", "x_sent", "cron_read",
                     "cvd", "depth", "corr", "engine", "regime", "dual",
                     "advanced", "risk", "card",
                 ]
@@ -4447,45 +4447,10 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             else:
                 print(f"  ✅ 恐慌贪婪: {fg.get('value')} ({fg.get('classification') or '—'})")
             
-            # CoinGecko top coins → 板块轮动检测（仅full）
-            try:
-                from multi_source_collector import cg_top_coins, cg_trending
-                top = cg_top_coins(10) if "cg_pro" in pipeline_steps else {}
-                _register_source_record(engine_data, "cg_top", top, symbol=symbol, status="not_run" if "cg_pro" not in pipeline_steps else None)
-                engine_data["cg_top"] = top
-                cg_status = top.get("_source_status", "not_run") if isinstance(top, dict) else "unavailable"
-                # 2026-09-13：not_run/失败时不再打印「BTC +0.0% vs Alt +0.0%」
-                # —— 那是 .get(...,0) 的默认值伪装成读数。
-                _btc_chg = top.get("btc_change_24h") if isinstance(top, dict) else None
-                _alt_chg = top.get("avg_alt_change_24h") if isinstance(top, dict) else None
-                # not_run = 档位设计跳过，不是故障；别用 ⚠️ 让正常降级看起来像坏了
-                _icon = "✅" if cg_status in ("live", "cache") else (
-                    "⏭️" if cg_status == "not_run" else "⚠️")
-                if _btc_chg is None and _alt_chg is None:
-                    if cg_status == "not_run":
-                        print(f"  {_icon} CoinGecko Top10: 当前档位跳过（需 cg_pro 步）")
-                    else:
-                        print(f"  {_icon} CoinGecko Top10: 状态{cg_status}·本轮未采到有效字段")
-                else:
-                    _btc_txt = f"{float(_btc_chg):+.1f}%" if _btc_chg is not None else "—"
-                    _alt_txt = f"{float(_alt_chg):+.1f}%" if _alt_chg is not None else "—"
-                    print(f"  {_icon} CoinGecko Top10: {top.get('rotation','?')} | 状态{cg_status} | BTC {_btc_txt} vs Alt {_alt_txt}")
-            except Exception:
-                pass
-            try:
-                trend = cg_trending() if "cg_pro" in pipeline_steps else {}
-                _register_source_record(engine_data, "cg_trending", trend, symbol=symbol, status="not_run" if "cg_pro" not in pipeline_steps else None)
-                engine_data["cg_trending"] = trend
-                hot = ", ".join(c["symbol"] for c in trend.get("trending", [])[:3]) or "无"
-                trend_status = trend.get("_source_status", "not_run") if isinstance(trend, dict) else "unavailable"
-                # not_run = 档位设计跳过（同 CoinGecko Top10 的处理，别让正常降级像故障）
-                if trend_status == "not_run":
-                    print(f"  ⏭️ Trending: 当前档位跳过（需 cg_pro 步）")
-                else:
-                    _t_icon = "✅" if trend_status in ("live", "cache") else "⚠️"
-                    print(f"  {_t_icon} Trending: {hot} | 状态{trend_status}")
-            except Exception:
-                pass
+            # 2026-09-14：cg_pro 步已退役（无 Pro key → 公共端点 429·恒定无字段），
+            # 原来这里的两段采集（cg_top_coins / cg_trending）随之删除 —— 保留只会
+            # 每轮多打一条 ⚠️ 并往 engine_data 里塞空 dict。CG 的免费信息仍由
+            # x_sent 步（x_sentiment_collector.py: /global、/search/trending）承载。
             
             # Macro overview (SPX/VIX/US10Y/DXY) — full模式才刷新
             try:
@@ -5007,18 +4972,12 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
     print("⑤ 社区情绪...")
     community = ""
     if asset == "crypto":
-        try:
-            from coingecko_collector import community_dashboard
-            if "cg_pro" in pipeline_steps:
-                community = community_dashboard()
-                _register_source_record(engine_data, "cg_community", community, symbol=symbol)
-                print(f"  ✅ {community[:80]}...")
-            else:
-                _register_source_record(engine_data, "cg_community", None, status="not_run", symbol=symbol)
-                print("  ℹ️ 社区: 当前档位跳过CoinGecko")
-        except Exception as e:
-            _register_source_record(engine_data, "cg_community", None, status="unavailable", error=e, symbol=symbol)
-            print(f"  ⚠️ 社区: {e}")
+        # 2026-09-14：cg_pro 步已退役 → CoinGecko 社区面板（community_dashboard）
+        # 一并下线。加密的社区/热点改用本品种 X 热搜，与非加密分支保持一致，
+        # 不再给一个恒定失败的源留采集位。
+        community = search_sent
+        _register_source_record(engine_data, "cg_community", None, status="not_run", symbol=symbol)
+        print("  ℹ️ 社区: cg_pro已退役·使用本品种热点")
     else:
         community = search_sent
         print("  ℹ️ 社区: 非加密跳过CoinGecko加密社区面板·使用本品种热点")
@@ -5796,11 +5755,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             price_fields = {}
         if engine_data.get("_binance_data_collected") and price_fields.get("primary"):
             completed_steps.add("binance")
-        cg_top = engine_data.get("cg_top")
-        if isinstance(cg_top, dict) and cg_top:
-            cg_status = _source_record_status(engine_data, "cg_top", cg_top)
-            if cg_status in ("live", "cache", "inherited"):
-                completed_steps.add("cg_pro")
+        # 2026-09-14：cg_pro 完成度判定随该步退役一起删除（无源的步骤不该有完成态）。
         if _source_record_usable(engine_data, "x_sentiment", engine_data.get("x_sentiment")):
             completed_steps.add("x_sent")
         if _source_record_usable(engine_data, "cvd", engine_data.get("cvd")):
@@ -5851,7 +5806,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
             "|:---|:---:|:---|",
         ]
         for s in pipeline_steps:
-            label = {"tv":"TV五层","binance":"Binance衍生品","cg_pro":"CoinGecko Pro",
+            label = {"tv":"TV五层","binance":"Binance衍生品",
                      "macro":"宏观背景","x_sent":"X情绪","cron_read":"Cron缓存",
                      "cvd":"CVD订单流","depth":"深度数据","corr":"相关性",
                      "engine":"核心模型引擎","regime":"市场体制","dual":"双指标确认",

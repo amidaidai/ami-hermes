@@ -23,7 +23,7 @@
 
 | 市场 | 品种例 | full 流程 | quick 流程 | 主周期 | 核心能力 |
 |---|---|---|---|---|---|
-| 加密 | BTCUSDT/ETHUSDT/SOLUSDT | tv → binance → cg_pro → macro → x_sent → cron_read → cvd → depth → corr → card | tv → binance → macro → x_sent → card | 15m | TV SVP v10、Binance OI/Funding/Taker、多空比、Deribit、Dune、稳定币、清算、X情绪、CG |
+| 加密 | BTCUSDT/ETHUSDT/SOLUSDT | tv → binance → macro → x_sent → cron_read → cvd → depth → corr → card | tv → binance → macro → x_sent → card | 15m | TV SVP v10、Binance OI/Funding/Taker、多空比、Deribit、Dune、稳定币、清算、X情绪、CG(/global·trending 由 x_sent 承载) |
 | 贵金属 | XAUUSD/XAGUSD | tv → macro → x_sent → cron_read → cvd → corr → gold_macro → card | tv → macro → x_sent → card | 5m | TV主指标、金十、gold-api、DXY、US10Y、COT、GLD/GDX/TIP、伦敦/纽约窗口 |
 | 外汇 | EURUSD/GBPJPY/USDJPY | tv → macro → x_sent → cron_read → corr → forex_rate → card | tv → macro → x_sent → card | 15m | TV结构、DXY、利差、央行窗口、COT、事件日历 |
 | 股票 | AAPL/TSLA/NVDA | tv → macro → x_sent → cron_read → corr → fmp → options_chain → card | tv → macro → x_sent → card | 1h | TV结构、指数/VIX、财报/基本面、板块、期权链、新闻情绪 |
@@ -36,7 +36,7 @@
 |---|---|---|---|---|
 | tv | TradingView MCP / SVP v10 | D/4h/1h/15m/5m，study_values、tables、labels、lines、截图 | 主驾驶，决定结构/关键位/行动格 | MCP不可用则降级，正式BTC/XAU不得无截图出结论 |
 | binance | Binance API/MCP + `_collect_binance_data` | 价格、OI、Funding、Taker、多空比、K线 | 加密副驾驶，验证趋势真假与拥挤度 | 现货失败不跳过期货端点 |
-| cg_pro | `multi_source_collector` / CG | Top10、trending、市值、流动性 | 板块轮动和热点确认 | 标注不可用，不覆盖TV结构 |
+| cg_pro | ~~`multi_source_collector` / CG~~ | ~~Top10、trending、市值、流动性~~ | **已退役（2026-09-14）**：无 Pro key → 公共端点 429·恒定无字段，只剩一条恒 ⚠️；免费信息由 `x_sent` 承载 | — |
 | macro | `macro_filter`、金十、Poly、FG、Yahoo | DXY/VIX/SPX/US10Y/事件/预测概率 | 事件窗口与风险环境 | 数据不可用则中性处理 |
 | x_sent | `x_search` / `x_sentiment_collector` | X实时情绪、大V观点、热词 | 验证/挑战，不覆盖结构 | 回退 web_search，标注非实时 |
 | cron_read | data/*.json | deribit、dune、cot、x_sentiment、qlib、liquidation、stablecoin | 读取后台采集，不重复烧API/token | mtime过期则标注降级 |

@@ -6,7 +6,7 @@
 
 | 市场 | 品种 | full 步骤 (按序) | quick 步骤 | 主周期 | 数据源 |
 |---|---|---|---|---|---|
-| 加密 | BTCUSDT | tv→binance→cg_pro→macro→x_sent→cron_read→cvd→depth→corr→card | tv→binance→macro→x_sent→card | 15m | TV SVP/ Binance OI Funding Taker / CG / X / Poly / Deribit / Dune |
+| 加密 | BTCUSDT | tv→binance→macro→x_sent→cron_read→cvd→depth→corr→engine→regime→dual→advanced→risk→card（14 步；cg_pro 2026-09-14 退役） | tv→binance→macro→x_sent→card | 15m | TV SVP/ Binance OI Funding Taker / X / Poly / Deribit / Dune |
 | 贵金属 | XAUUSD | tv→macro→x_sent→cron_read→cvd→corr→gold_macro→card | tv→macro→x_sent→card | 5m | TV结构 / gold-api / 金十 / DXY US10Y / GLD GDX TIP / COT |
 | 外汇 | EURUSD | tv→macro→x_sent→cron_read→corr→forex_rate→card | tv→macro→x_sent→card | 15m | TV结构 / DXY 利差 / 央行窗口 / COT / 事件日历 |
 | 股票 | AAPL | tv→macro→x_sent→cron_read→corr→fmp→options_chain→card | tv→macro→x_sent→card | 1h | TV结构 / VIX SPX / 财报基本面 / 板块 / 期权链 |
