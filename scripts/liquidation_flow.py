@@ -230,10 +230,20 @@ def refresh_cache(coins: tuple[str, ...] = DEFAULT_COINS, pages: int = 6,
     for coin in coins:
         coin = coin.upper()
         old_events = ((prev_coins.get(coin) or {}).get("events")) or []
-        try:
-            res = fetch_recent(coin, pages=pages, timeout=timeout)
-        except Exception as exc:
-            errors.append(f"{coin}: {type(exc).__name__}: {exc}")
+        res = None
+        last_exc: Exception | None = None
+        for attempt in (1, 2):
+            # 2026-09-15：实测单次 SSL 抖动（UNEXPECTED_EOF_WHILE_READING）会让整轮降级，
+            # 而该降级此前被写成**顶层** status → 一个品种失败就把 BTC 卡面清算行整行抹掉。
+            try:
+                res = fetch_recent(coin, pages=pages, timeout=timeout)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 1:
+                    time.sleep(1.5)
+        if res is None:
+            errors.append(f"{coin}: {type(last_exc).__name__}: {last_exc}")
             if old_events:
                 # 保留上一轮事件（标注降级），不伪造新数据
                 record["coins"][coin] = {
@@ -241,12 +251,23 @@ def refresh_cache(coins: tuple[str, ...] = DEFAULT_COINS, pages: int = 6,
                     float(CT_VAL_FALLBACK.get(coin, 0.0)),
                     "events": old_events,
                     "stale": True,
+                    "status": "stale_cache",
                 }
             continue
         merged = merge_events(old_events, res["events"], now_ms)
-        record["coins"][coin] = {"ct_val": res["ct_val"], "events": merged, "stale": False}
+        record["coins"][coin] = {"ct_val": res["ct_val"], "events": merged,
+                                 "stale": False, "status": "live"}
+    # 顶层状态 = 品种级聚合：**任一品种 live 即 live**。卡面与看门狗各按自己需要的粒度读：
+    # 卡面读 coins.<COIN>.status（单源失败只影响该品种），看门狗读顶层 status。
+    live_coins = [c for c, v in (record["coins"] or {}).items() if (v or {}).get("status") == "live"]
+    if live_coins:
+        record["status"] = "live"
+        record["live_coins"] = live_coins
+    elif record["coins"]:
+        record["status"] = "stale_cache"
+    else:
+        record["status"] = "unavailable"
     if errors:
-        record["status"] = "stale_cache" if record["coins"] else "unavailable"
         record["error"] = " | ".join(errors)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.tmp"
@@ -434,11 +455,13 @@ def multi_source_text(coin: str = "BTC", okx_cache_path: str | None = None,
     now_s = now if now is not None else time.time()
     rec = load_cache(okx_cache_path)
     okx_events: list[list[Any]] = []
+    okx_stale = False
     if rec and (now_s - float(rec.get("fetched_at") or 0)) <= max_age_s:
         info = ((rec.get("coins") or {}).get(coin)) or {}
         raw = info.get("events") or []
         ct_val = float(info.get("ct_val") or CT_VAL_FALLBACK.get(coin, 0.0))
         okx_events = okx_usd_events(raw, ct_val)
+        okx_stale = bool(info.get("stale"))
     ws = load_ws_usd_events(coin, cache_path=ws_cache_path, now=now_s)
     ws_events = ws["events"] if ws["status"] == "live" else []
     ws_note = ""
@@ -463,6 +486,8 @@ def multi_source_text(coin: str = "BTC", okx_cache_path: str | None = None,
     if last:
         bits.append(f"近笔 {last['price']:,.0f} {'多' if last['side'] == 'long' else '空'}"
                     f"{_fmt_usd(last['notional_usd'])}")
+    if okx_stale:
+        bits.append("OKX沿用上轮")
     if ws_note:
         bits.append(ws_note)
     return " · ".join(bits) + "（估算）"

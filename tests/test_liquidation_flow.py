@@ -221,3 +221,61 @@ def test_ws_events_are_usd_converted_from_coins(tmp_path):
                     updated_epoch=int(now_s - lf.WS_MAX_AGE_S - 60))
     stale = lf.load_ws_usd_events("BTC", cache_path=str(ws), now=now_s)
     assert stale["status"] == "stale_cache"
+
+
+# ── 单源失败不得拖垮全局（2026-09-15 线上实测缺陷）─────────────────────────
+
+
+def test_refresh_cache_keeps_live_when_one_coin_fails(tmp_path, monkeypatch):
+    """一个品种失败不能把整轮降级成 stale。
+
+    线上实测：ETH 的 SSL 抖动会让顶层 status=stale_cache，而卡面按顶层判定 →
+    **BTC 的清算行整行消失**（数据其实是新鲜的）。顶层改为品种级聚合。
+    """
+    def fake_fetch(coin, pages=6, limit=100, timeout=20):
+        if str(coin).upper() == "ETH":
+            raise RuntimeError("SSL EOF")
+        return {"coin": coin, "ct_val": 0.01,
+                "events": [[NOW_MS - 60_000, "long", 70_000.0, 10.0]]}
+
+    monkeypatch.setattr(lf, "fetch_recent", fake_fetch)
+    rec = lf.refresh_cache(("BTC", "ETH"), cache_path=str(tmp_path / "c.json"))
+    assert rec["status"] == "live"                 # 任一品种 live 即 live
+    assert rec["coins"]["BTC"]["status"] == "live"
+    assert rec["live_coins"] == ["BTC"]
+    assert "ETH" in (rec["error"] or "")           # 失败仍可见，不静默
+
+
+def test_transient_error_is_retried_once(tmp_path, monkeypatch):
+    """单次 SSL 抖动重试一次即可恢复，不该直接判失败。"""
+    state = {"n": 0}
+
+    def flaky(coin, pages=6, limit=100, timeout=20):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("SSL EOF")
+        return {"coin": coin, "ct_val": 0.01,
+                "events": [[NOW_MS - 60_000, "long", 70_000.0, 1.0]]}
+
+    monkeypatch.setattr(lf, "fetch_recent", flaky)
+    rec = lf.refresh_cache(("BTC",), cache_path=str(tmp_path / "c.json"))
+    assert rec["status"] == "live" and state["n"] == 2
+
+
+def test_failed_coin_reuses_previous_events_and_card_flags_it(tmp_path, monkeypatch):
+    """失败品种沿用上轮事件要标 stale，且卡面必须显示「OKX沿用上轮」。"""
+    p = tmp_path / "c.json"
+    now_s = NOW_MS / 1000
+    _write_okx_cache(p, [[NOW_MS - 60_000, "long", 70_000.0, 10.0]], fetched_at=now_s)
+
+    def boom(coin, pages=6, limit=100, timeout=20):
+        raise RuntimeError("SSL EOF")
+
+    monkeypatch.setattr(lf, "fetch_recent", boom)
+    lf.refresh_cache(("BTC",), cache_path=str(p))
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    assert rec["status"] == "stale_cache"
+    assert rec["coins"]["BTC"]["stale"] is True
+    text = lf.multi_source_text("BTC", okx_cache_path=str(p),
+                                ws_cache_path=str(tmp_path / "none.json"), now=now_s)
+    assert "沿用上轮" in text
