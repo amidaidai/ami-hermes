@@ -483,6 +483,13 @@ def multi_source_text(coin: str = "BTC", okx_cache_path: str | None = None,
             f"/空{_fmt_usd(w1['short_usd'])}",
             f"{_span_label(covered_h, 24)} 多{_fmt_usd(w24['long_usd'])}"
             f"/空{_fmt_usd(w24['short_usd'])}"]
+    # 近 1h 为 0 且最新事件已超 1 小时：这是「上游停更/接口冻结」而非「市场无强平」。
+    # 只印 $0/$0 会被读成后者（实测 2026-09-16 OKX BTC 腿停更 162 分，卡面照印 0）。
+    # 数据本身照旧展示，只在读数后面追加事件年龄 —— 降级必须可见，不许静默零值。
+    if w1["count"] == 0 and st.get("last"):
+        _last_age_min = (now_s * 1000 - float(st["last"]["ts"])) / 60000.0
+        if _last_age_min >= 60:
+            bits.append(f"⚠最新事件{_last_age_min:.0f}分前(疑似停更)")
     last = st["last"]
     if last:
         bits.append(f"近笔 {last['price']:,.0f} {'多' if last['side'] == 'long' else '空'}"

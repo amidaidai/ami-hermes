@@ -175,6 +175,19 @@ def _lease_holder_alive(pid) -> bool | None:
         return None
 
 
+# 分析管线「自持采集」标记 —— 单点定义，别再各写一份常量。
+# 语义：auto_card 声明自持租约后 spawn 的子采集带这个变量 = 本次采集属于分析自己；
+# 外部后台（cron / btc_tv_refresh / xau_tv_sync 的定时轮）不带 → 照旧让路。
+ANALYSIS_OWNER_ENV = "TANGXI_ANALYSIS_OWNER"
+
+
+def is_analysis_owner() -> bool:
+    """本次进程是否由分析管线自己发起（自持租约的持有者）。"""
+    import os
+
+    return str(os.environ.get(ANALYSIS_OWNER_ENV) or "").strip() == "1"
+
+
 def analysis_lease_status(now=None) -> dict:
     """租约状态。文件缺失 / active 非真 / 已过期 / （pid 模式）持有进程已死，一律视为「无分析」。
 

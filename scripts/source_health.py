@@ -56,6 +56,22 @@ def payload_timestamp(payload: dict[str, Any]) -> datetime | None:
 
 def canonical_symbol(value: Any) -> str:
     text = str(value or "").strip().upper()
+    # 黄金口径单点（2026-09-16 起 TV 图表符号 = TVC:GOLD，见 scripts/tv_symbols.py）：
+    # TVC:GOLD / OANDA:XAUUSD / GOLD 与 XAUUSD 是**同一身份**，否则换口径当刻
+    # 旧缓存会被判成「别的品种」而被门禁拦下（audit_preflight 曾因此恒 FAIL）。
+    # 归一规则只允许来自 tv_symbols —— 别在这里再写一份平行实现。
+    try:
+        import sys
+
+        _scripts = str(Path(__file__).resolve().parent)
+        if _scripts not in sys.path:
+            sys.path.insert(0, _scripts)
+        from tv_symbols import GOLD_CACHE_KEY, is_gold
+
+        if is_gold(text):
+            return GOLD_CACHE_KEY
+    except Exception:
+        pass
     if ":" in text:
         text = text.rsplit(":", 1)[-1]
     text = text.replace(".P", "").replace("PERPETUAL", "").replace("PERP", "")

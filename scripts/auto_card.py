@@ -3668,10 +3668,16 @@ def _parse_bjt_dt(value) -> datetime | None:
 
 
 def _norm_symbol_for_cache(symbol: str) -> str:
-    s = str(symbol or "").upper()
-    s = s.replace("BINANCE:", "").replace("OANDA:", "").replace("TVC:", "")
-    s = s.replace(".P", "")
-    return s
+    """跨缓存品种身份归一 —— 唯一实现是 ``tv_symbols.norm_identity``（口径单点）。
+
+    2026-09-16 黄金口径切 TVC:GOLD 时本函数漏改（自带一份 strip 前缀的副本），
+    ``TVC:GOLD`` 被归成 ``GOLD``，与期望的 ``XAUUSD`` 不等 → XAU 卡门2
+    「TV现场确认」恒为红灯、管线审计判「TV主周期可用=False」，而同一次分析的
+    ① 表照常显示 TV 现场（卡内自相矛盾）。换口径只动 tv_symbols.py。
+    """
+    from tv_symbols import norm_identity
+
+    return norm_identity(symbol)
 
 
 def _tv_cache_status(cache: dict, symbol: str, max_age_minutes: int = 10) -> dict:
@@ -3955,6 +3961,17 @@ def _safe_import(module, func):
         return None
 
 
+def _orphan_source_label(orphan_results: dict) -> str:
+    """孤儿集成层的出处标签（卡面「相关性乘数…·来源X」）。
+
+    生产者（``orphan_integration``）写的是 ``_meta["source"]``；早期消费端读的是
+    ``_meta["_source"]``，于是卡面恒印占位符「来源?」（2026-09-16 BTC/XAU 卡实测）。
+    """
+    meta = orphan_results.get("_meta") if isinstance(orphan_results, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+    return str(meta.get("_source") or meta.get("source") or "孤儿集成")
+
+
 def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict) -> dict:
     """v4.4: 接通5个闲置分析模块 — 吸收/FVG/OB/相关性/Meta门控 + 多周期共振闸门。
 
@@ -4178,7 +4195,10 @@ def _advanced_orderflow(symbol: str, engine_data: dict, merged: dict, meta: dict
         corr_mult = orphan_results.get("corr_multiplier", 1.0)
         if corr_mult != 1.0:
             adj = "减小" if corr_mult < 1.0 else "增大"
-            lines.append(f"- **相关性乘数：{corr_mult:.2f}（组合风险{adj}·来源{orphan_results.get('_meta',{}).get('_source','?')}）**")
+            # 孤儿层把出处写成 _meta["source"]（不是 _source）；只读 _source 会让卡面
+            # 印出「来源?」占位符（2026-09-16 实测 BTC/XAU 卡均复现）。
+            _corr_src = _orphan_source_label(orphan_results)
+            lines.append(f"- **相关性乘数：{corr_mult:.2f}（组合风险{adj}·来源{_corr_src}）**")
 
         lines.append(f"- 孤儿信号已写入 data/orphan_signals_{symbol}.json")
     except Exception as e:
@@ -4279,7 +4299,9 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
         tf_main = str(timeframe_info(symbol).get("main") or "15m")
         tf_code = {"5m": "5", "15m": "15", "1h": "60", "4h": "240", "D": "D"}.get(tf_main, "15")
         if _asset_class(symbol) == "gold":
-            xau_env = os.environ.copy()
+            # 自持租约：本次前置采集属于分析自己 → 带 TANGXI_ANALYSIS_OWNER=1，
+            # 否则 xau_tv_sync 会让路给这张卡刚声明的那份租约（实测门2恒红）。
+            xau_env = _analysis_owner_env()
             xau_env["XAU_TV_NO_PUSH"] = "1"
             # 前置决策用「读取窗口 − 出卡余量」判新鲜，确保出卡期间不会跨过
             # 读取阈值（避免同一张卡「前置跳过 / 读取拒绝」自相矛盾）。
@@ -5729,7 +5751,17 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                                             cron_source_max_age, cron_source_file)
                 from source_health import inspect_json_file
                 for source_name in cron_sources(symbol):
-                    source_path = ROOT / "data" / cron_source_file(source_name)
+                    source_file = cron_source_file(source_name)
+                    # 源文件可能落在两个数据根：仓库 data/（多数采集器）与
+                    # Hermes 运行态 data/（coinlobster_collector 的工件在此）。
+                    # 只按仓库路径拼会把**活着的**源永久判成「缺失」—— 实测
+                    # 同一张卡 ③ 表「外部验证」有数、完成度表却写 coinlobster(not_run)。
+                    # 消费方读哪儿，审计就核哪儿（与 data_freshness_watchdog 的双路径同约定）。
+                    _candidates = [
+                        ROOT / "data" / source_file,
+                        Path.home() / "AppData/Local/hermes" / "data" / source_file,
+                    ]
+                    source_path = next((p for p in _candidates if p.exists()), _candidates[0])
                     source_health = inspect_json_file(
                         source_path, max_age_hours=cron_source_max_age(source_name))
                     if source_health.get("fresh"):

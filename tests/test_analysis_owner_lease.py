@@ -124,8 +124,24 @@ def test_five_tf_refresh_passes_owner_env(monkeypatch):
     assert "keylevels_collect.py" in " ".join(str(x) for x in captured["cmd"])
 
 
-def test_background_jobs_do_not_claim_analysis_owner():
-    """后台续航脚本不得自称分析所有者——否则防抢图会让路失效。"""
+def test_background_jobs_never_self_claim_analysis_owner():
+    """后台续航脚本不得**自称**分析所有者——否则防抢图会让路失效。
+
+    2026-09-16 契约细化（原断言是「源码里不得出现该标记字符串」，过于粗糙）：
+    - 任何后台脚本都不许自己把标记置 1 —— 只有 auto_card 通过
+      ``_analysis_owner_env()`` 把它传给自己的子进程；
+    - 但 xau_tv_sync **允许读取**该标记：分析管线的前置同步是它自己 spawn 的，
+      若仍按「有租约就让路」，XAU 卡永远拿不到新鲜缓存（实测门2「TV现场确认」
+      恒红 + 管线审计判 TV主周期可用=False）。读取必须走单点判定
+      ``tv_data_bridge.is_analysis_owner``，不得自己写死字符串比较。
+    """
     for name in ("btc_tv_refresh.py", "xau_tv_sync.py"):
         src = (scrIPTS / name).read_text(encoding="utf-8")
-        assert "TANGXI_ANALYSIS_OWNER" not in src, name
+        for claim in ('[ANALYSIS_OWNER_ENV] = "1"', "[ANALYSIS_OWNER_ENV] = '1'",
+                      '["TANGXI_ANALYSIS_OWNER"] = "1"', "['TANGXI_ANALYSIS_OWNER'] = '1'"):
+            assert claim not in src, f"{name} 不得自称分析所有者: {claim}"
+
+    xau_src = (scrIPTS / "xau_tv_sync.py").read_text(encoding="utf-8")
+    assert "is_analysis_owner" in xau_src, "XAU 前置采集必须用单点判定读标记"
+    # 后台脚本里不该再出现裸标记名（审计时 grep 该串 = 有人在自己比对，属漂移）
+    assert "TANGXI_ANALYSIS_OWNER" not in xau_src

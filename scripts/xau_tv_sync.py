@@ -344,7 +344,22 @@ def published_xau_cache_usable() -> dict[str, Any]:
 
 
 def analysis_lease_defer_exit() -> int | None:
-    """None=无租约；0=让路且缓存仍可用；1=让路但已发布缓存已过期，调度器必须看见。"""
+    """None=无租约（放行）；0=让路且缓存仍可用；1=让路但已发布缓存已过期，调度器必须看见。
+
+    2026-09-16：**分析管线自己的前置采集必须放行**。auto_card 会在声明自持租约之后
+    再 spawn 本脚本做前置同步；若这里只看「有租约就让路」，XAU 卡永远拿不到新鲜缓存
+    （实测 13:27 轮 defer:cache_usable → 读侧 5 分钟窗口拒绝 → 门2「TV现场确认」恒红、
+    管线审计判「TV主周期可用=False」，而同卡 ① 表照常显示 TV 现场）。
+    约定与 keylevels_collect 一致：``tv_data_bridge.ANALYSIS_OWNER_ENV == "1"`` = 本次采集
+    属于分析自己，外部后台（cron 定时轮 / btc_tv_refresh）不带该变量，照旧让路。
+    """
+    try:
+        from tv_data_bridge import is_analysis_owner
+        if is_analysis_owner():
+            _audit_marker("proceed:analysis_owner")
+            return None
+    except Exception:
+        pass
     try:
         from tv_data_bridge import analysis_lease_status
         lease = analysis_lease_status()
@@ -781,7 +796,7 @@ def _parse_ohlcv(ohlcv_text: str, state_text: str, *, expected_tf: str | None = 
     return None
 
 
-def main() -> int:
+def _sync_main() -> int:
     """Run the TV sync with a cron-safe three-level degradation path."""
     global _PREVIOUS_CHART
     _audit_marker("enter", argv=sys.argv[1:])
@@ -909,6 +924,23 @@ def main() -> int:
         # 同步失败必须向调度器返回非零；否则 Cron 会把明确的 stale/
         # 不可用状态记成成功，导致业务健康检查被掩盖。
         return 1
+
+
+def main() -> int:
+    """同步入口 —— 包一层终态取证，让「静默轮次」可诊断。
+
+    2026-09-16 实测异常样本：一轮有 `enter` 却既无 `published` / `defer:*` 也无错误
+    输出，cron 记 exit 0（13:15:50 轮，产物未更新）。只有 `enter` 标记时分不清
+    「走了哪条 return」与「进程被外部终止」。包一层后判据明确：
+    正常退出必留 `exit` 行（带 rc）；**有 enter、无 exit** = 异常终止。
+    """
+    try:
+        rc = _sync_main()
+    except BaseException as exc:  # noqa: BLE001 — 记录后原样抛出，不改退出语义
+        _audit_marker("exit:exception", error=f"{type(exc).__name__}: {exc}"[:200])
+        raise
+    _audit_marker("exit", rc=rc)
+    return rc
 
 
 if __name__ == "__main__":

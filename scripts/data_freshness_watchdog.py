@@ -104,6 +104,15 @@ WATCH_FILES = {
         "threshold": 0.7,
         "paths": [PROJECT_DATA / "liquidation_flow.json", HERMES_DATA / "liquidation_flow.json"],
     },
+    # 外部验证层（2026-09-16 接入）：no-agent cron「CoinLobster外部验证层刷新」每 20 分钟一跑，
+    # 工件落在 **Hermes 运行态** data/（coinlobster_collector.ARTIFACT）。阈值 0.6h(36 分)
+    # = 只在整整漏掉约两轮时才报。新鲜度取自五态信封的 `_source_contract.timestamp`。
+    # ⚠ 只盯「采集器有没有跑」；读侧时效（25/90 分三态）由卡面 read_state() 判定，别把两者混用。
+    "coinlobster_snapshot.json": {
+        "threshold": 0.6,
+        "paths": [PROJECT_DATA / "coinlobster_snapshot.json",
+                  HERMES_DATA / "coinlobster_snapshot.json"],
+    },
     # 币安强平流采集器（20260915 新增）：常驻进程 + cron `清算WS采集保活`(*/5) 守护。
     # 缓存阈值 0.7h；心跳阈值 0.3h(18 分) 才能区分「采集器卡住」与「市场没有强平」。
     "liquidation_ws.json": {
