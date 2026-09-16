@@ -51,6 +51,17 @@ FIN_UNITS = ("亿", "万", "美元", "USD", "usd", "%", "％", "点", "张", "�
 UNIT_MULT = {"亿": 1e8, "万": 1e4}
 LINE_REF_RE = re.compile(r"(第\s*\d+(?:[-–~]\d+)?\s*行|L\d+|行\s*\d+|v\d+\.\d+|\d+\.\d+\s*(?:flash|pro|turbo|token))")
 
+# 代码/文件引用不是外部数字断言。2026-09-16 实测：审计回复里的
+# `scripts/card_reformat.py:311-331,388-396` 被读成数字 `331,388` 并记成硬违规，
+# 连带把「作业已恢复」的失败记成新 incident。抽数前把「路径本体 + 可选 :行号/范围」整段抹掉，
+# 而不是整句跳过 —— 同句里的真实外部数字仍然要被抓。
+CODE_PATH_EXT = ("py|md|json|jsonl|js|ts|tsx|sh|bash|ps1|yaml|yml|toml|ini|cfg|db|sql|"
+                 "pine|txt|csv|log")
+CODE_REF_RE = re.compile(
+    rf"[\w./\\-]*\.(?:{CODE_PATH_EXT})"                 # 路径本体（含扩展名）
+    r"(?::\d{1,5}(?:\s*[-–~]\s*\d{1,5})?"              # :311 或 :311-331
+    r"(?:[，,]\s*\d{1,5}(?:\s*[-–~]\s*\d{1,5})?)*)?")  # 续接 ,388-396
+
 # ---- 来源身份归一（多源交叉用）----
 # 幻觉的典型形态是「一条二手摘要支撑整条因果链」。所以关键因果断言要求 ≥2 个**独立**来源；
 # 同一家的不同写法（Reuters / 路透 / reuters.com）只能算 1 个。
@@ -265,6 +276,7 @@ def lint(text: str, local: list[float], asof: date, tol: float = 0.0005,
             bare = URL_RE.sub(" ", sent)
             bare = ISO_RE.sub(" ", bare)
             bare = MD_RE.sub(" ", bare)
+            bare = CODE_REF_RE.sub(" ", bare)   # 代码/文件引用（含 :行号范围）先屏蔽
             nums = [(m.group(1), m.group(3)) for m in NUM_RE.finditer(bare)]
             # 过滤时间/纯周期噪声
             keep = []

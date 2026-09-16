@@ -273,3 +273,33 @@ def test_freshness_watchdog_tracks_gate_heartbeat():
     cfg = fdw.WATCH_FILES.get("claim_watchdog_heartbeat.json")
     assert cfg, "新鲜度看门狗未登记闸门心跳"
     assert cfg["threshold"] == 0.7
+
+
+# ── 代码/文件引用不得被当成外部数字（2026-09-16 实测误报） ───────────────
+
+def test_code_line_range_is_not_an_external_number():
+    """实测：审计回复里 `card_reformat.py:311-331,388-396` 被读成 `331,388` 记成硬违规。"""
+    txt = "| ○横盘行与「怎么做」照常输出 | card_reformat.py:311-331,388-396 | 每张黄金/横盘卡 |\n"
+    res = lint(txt, local=[], asof=ASOF)
+    assert not res["violations"], f"代码行号引用被当成外部数字断言：{res['violations']}"
+
+
+def test_single_line_ref_and_paths_are_not_numbers():
+    txt = ("修复见 scripts/render_v96.py:993 与 docs/分析卡模板-v7.md；"
+           "脚本 scripts/price_format.py 为唯一实现。\n")
+    res = lint(txt, local=[], asof=ASOF)
+    assert not res["violations"], res["violations"]
+
+
+def test_masking_code_refs_keeps_real_numbers_in_same_sentence():
+    """屏蔽代码引用 ≠ 整句跳过：同句里的真实外部数字仍须被抓。"""
+    txt = "审查了 card_reformat.py:311-331,388-396；全市场 24 小时清算 4.73 亿美元。\n"
+    res = lint(txt, local=[], asof=ASOF)
+    nums = {v.get("num") or "" for v in res["violations"]}
+    assert any("4.73" in n for n in nums), f"真实外部数字被连带放过：{res['violations']}"
+
+
+def test_filename_with_digits_is_not_a_number():
+    txt = "新增 tests/test_card_presentation_20260916.py，共 24 项定向测试。\n"
+    res = lint(txt, local=[], asof=ASOF)
+    assert not any("20260916" in (v.get("num") or "") for v in res["violations"]), res["violations"]

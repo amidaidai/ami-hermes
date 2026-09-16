@@ -131,13 +131,14 @@ def _mkdb_with_executions(tmp_path: Path, incidents, executions):
 
 
 def test_auto_close_marks_recovered_incidents_closed(monkeypatch, tmp_path):
-    """作业在失败之后又成功跑过 = 已恢复；不能一直挂在 total_unclosed 上被读成「在坏」。"""
+    """连续成功 ≥2 轮 = 已恢复；不能一直挂在 total_unclosed 上被读成「在坏」。"""
     db = _mkdb_with_executions(
         tmp_path,
         [("1", "aaa", "s1", "detected", "script", "2026-09-16T10:28:00", "2026-09-16T10:28:00",
           None, None, "Script exited with code 1", None)],
         [("e1", "aaa", "completed", "2026-09-16T10:48:00+08:00", None),
-         ("e2", "aaa", "failed", "2026-09-16T10:28:00+08:00", "boom")],
+         ("e2", "aaa", "completed", "2026-09-16T11:08:00+08:00", None),
+         ("e3", "aaa", "failed", "2026-09-16T10:28:00+08:00", "boom")],
     )
     monkeypatch.setattr(cw, "DB", db)
     out = cw.auto_close_recovered()
@@ -148,6 +149,67 @@ def test_auto_close_marks_recovered_incidents_closed(monkeypatch, tmp_path):
     con.close()
     assert state == "closed" and closed_at
     assert err == "Script exited with code 1"      # 明细一个字不删
+
+
+def test_single_success_is_not_enough_to_close(monkeypatch, tmp_path):
+    """只成功过一轮不算恢复（下一轮可能又挂）→ 保持 open。"""
+    db = _mkdb_with_executions(
+        tmp_path,
+        [("1", "aaa", "s1", "detected", "script", "2026-09-16T10:28:00", "2026-09-16T10:28:00",
+          None, None, "boom", None)],
+        [("e1", "aaa", "completed", "2026-09-16T10:48:00+08:00", None)],
+    )
+    monkeypatch.setattr(cw, "DB", db)
+    assert cw.auto_close_recovered()["closed"] == 0
+    con = sqlite3.connect(db)
+    assert con.execute("select state from cron_incidents").fetchone()[0] == "detected"
+    con.close()
+
+
+def test_any_failure_since_the_incident_keeps_it_open(monkeypatch, tmp_path):
+    """失败之后又挂过 → 仍在复发，绝不能被「最近两轮成功」洗白。"""
+    db = _mkdb_with_executions(
+        tmp_path,
+        [("1", "aaa", "s1", "detected", "script", "2026-09-16T10:00:00", "2026-09-16T10:00:00",
+          None, None, "boom", None)],
+        [("e1", "aaa", "completed", "2026-09-16T11:20:00+08:00", None),
+         ("e2", "aaa", "completed", "2026-09-16T11:00:00+08:00", None),
+         ("e3", "aaa", "failed", "2026-09-16T10:40:00+08:00", "boom")],
+    )
+    monkeypatch.setattr(cw, "DB", db)
+    assert cw.auto_close_recovered()["closed"] == 0
+
+
+def test_close_prefers_hermes_official_api_when_same_ledger(monkeypatch, tmp_path):
+    """账本一致时必须走 Hermes 自己的 set_incident_state（它守 closed 终态与事务）。"""
+    db = _mkdb_with_executions(
+        tmp_path,
+        [("1", "aaa", "s1", "detected", "script", "2026-09-16T10:28:00", "2026-09-16T10:28:00",
+          None, None, "boom", None)],
+        [("e1", "aaa", "completed", "2026-09-16T11:08:00+08:00", None),
+         ("e2", "aaa", "completed", "2026-09-16T10:48:00+08:00", None)],
+    )
+    called = []
+
+    class _FakeIncidents:
+        @staticmethod
+        def _db_path():
+            return db
+
+        @staticmethod
+        def set_incident_state(iid, state):
+            called.append((iid, state))
+            con = sqlite3.connect(db)
+            con.execute("update cron_incidents set state=? where id=?", (state, iid))
+            con.commit()
+            con.close()
+            return True
+
+    monkeypatch.setattr(cw, "DB", db)
+    monkeypatch.setitem(sys.modules, "cron.incidents", _FakeIncidents)
+    out = cw.auto_close_recovered()
+    assert called == [("1", "closed")], called
+    assert out["closed"] == 1
 
 
 def test_auto_close_does_not_whitewash_still_failing_jobs(monkeypatch, tmp_path):

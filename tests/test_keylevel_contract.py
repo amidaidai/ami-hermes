@@ -171,7 +171,12 @@ def test_btc_collector_does_not_overwrite_candidate_file_with_partial_tf_data():
     assert source.index("missing_timeframes =") < source.index("atomic_write_json(OUT, payload)")
 
 
-def test_collector_supervisor_rejects_false_zero_exit_without_new_publication(tmp_path, monkeypatch):
+def test_collector_supervisor_classifies_false_zero_exit_by_contract(tmp_path, monkeypatch):
+    """rc=0 却无新发布：现网仍在合同内 → 让路(7) 且不重试；已超合同 → 失败(1) 重试一次。
+
+    2026-09-16：旧契约把这两个情形一律算 1，于是「合同内没刷成」被记成 cron 失败
+    （实测 16:07 age=1053s，远在 30 分合同内）。判据统一走 `_published_within_contract()`。
+    """
     collector = load("keylevels_collect.py")
     out = tmp_path / "keylevels_candidates.json"
     out.write_text(
@@ -179,6 +184,7 @@ def test_collector_supervisor_rejects_false_zero_exit_without_new_publication(tm
         encoding="utf-8",
     )
     monkeypatch.setattr(collector, "OUT", out)
+    monkeypatch.setattr(collector, "DIAGNOSTIC_FILE", tmp_path / "diag.json")
 
     class Child:
         returncode = 0
@@ -186,9 +192,17 @@ def test_collector_supervisor_rejects_false_zero_exit_without_new_publication(tm
         stderr = ""
 
     calls = []
-    monkeypatch.setattr(collector.subprocess, "run", lambda *args, **kwargs: calls.append(args) or Child())
+    monkeypatch.setattr(collector.subprocess, "run",
+                        lambda *args, **kwargs: calls.append(args) or Child())
+
+    monkeypatch.setattr(collector, "_published_within_contract", lambda *a, **k: True)
+    assert collector._run_cli() == collector.DEFER_EXIT_CODE
+    assert len(calls) == 1, "合同内的未完成刷新按让路交回上层，不重试（省一次抢图）"
+
+    calls.clear()
+    monkeypatch.setattr(collector, "_published_within_contract", lambda *a, **k: False)
     assert collector._run_cli() == 1
-    assert len(calls) == 2
+    assert len(calls) == 2, "现网已超合同仍不发布 → 真失败，重试一次后放弃"
 
 
 def test_watchdog_persisted_policy_renews_only_existing_approved_levels(monkeypatch, tmp_path):
@@ -288,10 +302,11 @@ def test_watchdog_caps_level_expiry_at_structure_review_deadline(monkeypatch, tm
     assert written["symbols"]["BTCUSDT"]["levels"][0]["valid_until"] == (reviewed + timedelta(hours=24)).isoformat()
 
 
-def test_btc_refresh_skips_when_both_contracts_are_fresh(monkeypatch):
+def test_btc_refresh_skips_when_both_contracts_are_fresh(monkeypatch, tmp_path):
     refresh = load("btc_tv_refresh.py")
     monkeypatch.setattr(refresh, "btc_five_tf_status", lambda: {"usable": True})
     monkeypatch.setattr(refresh, "source_snapshot_status", lambda: {"fresh": True})
+    monkeypatch.setattr(refresh, "YIELD_STATE", tmp_path / "yield_state.json")
     called = []
     monkeypatch.setattr(refresh, "run_collector", lambda: called.append("collector") or 0)
     monkeypatch.setattr(refresh, "refresh_source_snapshot", lambda: called.append("snapshot") or True)
@@ -300,12 +315,17 @@ def test_btc_refresh_skips_when_both_contracts_are_fresh(monkeypatch):
     assert called == []
 
 
-def test_btc_refresh_runs_only_the_stale_contract(monkeypatch):
+def test_btc_refresh_runs_only_the_stale_contract(monkeypatch, tmp_path):
     refresh = load("btc_tv_refresh.py")
     monkeypatch.setattr(refresh, "btc_five_tf_status", lambda: {"usable": False})
     monkeypatch.setattr(refresh, "source_snapshot_status", lambda: {"fresh": True})
+    # 2026-09-16：让路判定改看合同口径（30 分），这里给一个仍在让路上限内的年龄。
+    monkeypatch.setattr(refresh, "five_tf_contract_status",
+                        lambda: {"usable": True, "age_seconds": 17.5 * 60.0})
+    monkeypatch.setattr(refresh, "YIELD_STATE", tmp_path / "yield_state.json")
     called = []
-    monkeypatch.setattr(refresh, "run_collector", lambda: called.append("collector") or 0)
+    monkeypatch.setattr(refresh, "run_collector",
+                        lambda: called.append("collector") or (0, "publish:success"))
     monkeypatch.setattr(refresh, "refresh_source_snapshot", lambda: called.append("snapshot") or True)
 
     assert refresh.main() == 0

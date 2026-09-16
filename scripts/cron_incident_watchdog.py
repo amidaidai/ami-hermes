@@ -118,55 +118,87 @@ def collect(hours: float, include_backlog: bool) -> dict:
     return payload
 
 
-def auto_close_recovered() -> dict:
-    """把「同一作业在失败之后又成功跑过」的 incident 自动关闭（自愈闭环）。
+def _close_incident(incident_id: str) -> bool:
+    """关闭一条 incident：优先走 Hermes 自己的 API（遵守 closed 终态与事务），
+    不可用/指向别的账本时退回等价的 SQL（与 ``cron.incidents.set_incident_state`` 同一语句）。
+
+    只在**官方 API 的账本与本看门狗的 DB 是同一个文件**时才用它 —— 否则会去关另一个库里的
+    单子（测试里 DB 指向 tmp 文件，就是这个情形）。
+    """
+    try:
+        from cron.incidents import _db_path, set_incident_state      # noqa: PLC0415
+        if Path(_db_path()).resolve() == DB.resolve():
+            return bool(set_incident_state(incident_id, "closed"))
+    except Exception:
+        pass
+    try:
+        con = sqlite3.connect(f"file:{DB.as_posix()}?mode=rw", uri=True, timeout=5.0)
+        try:
+            now = datetime.now().astimezone().isoformat()
+            cur = con.execute(
+                "update cron_incidents set state='closed', closed_at=?, acked_at=? "
+                "where id=? and state != 'closed'", (now, now, incident_id))
+            con.commit()
+            return bool(cur.rowcount)
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
+def auto_close_recovered(min_stable_runs: int = 2) -> dict:
+    """把「作业失败之后又**连续成功**跑过」的 incident 自动关闭（自愈闭环）。
 
     2026-09-16：此前闭环只能靠人工批量 UPDATE（实测大量 closed_at 集中在同一秒
     `2026-09-15T12:18:51`），于是已恢复的失败长期挂在 `total_unclosed` 上，被读成
     「系统在坏」。两类常见「非故障」也因此不清零：
       · 叙事断言闸门按设计在**命中**时 exit 1（业务检测，不是脚本崩溃）；
-      · BTC续航「让路」路径在让给交互式分析后 exit 1（设计性跳过）。
-    只关「后续同一作业已成功」的行 —— 仍在失败的作业保持 open，语义仍是「当前未恢复」，
-    所以本函数不会把真故障洗白。明细一个字不删（error/output_file 原样保留）。
+      · BTC续航「让路」路径在让给交互式分析后 exit 1（设计性跳过，已另修口径）。
+
+    关闭条件刻意保守：失败之后**连续 ≥ min_stable_runs 轮 completed** 才算恢复 ——
+    一次成功不算（可能下一轮又挂），真正还在复发的作业保持 open，语义仍是「当前未恢复」。
+    关闭是终态：同一签名再次出问题会由 Hermes 铸成新 incident，不会因为关旧单而失明。
+    明细一个字不删（error/output_file 原样保留）。
     """
     if not DB.exists():
         return {"closed": 0, "db_ok": False, "items": []}
     try:
-        con = sqlite3.connect(f"file:{DB.as_posix()}?mode=rw", uri=True, timeout=5.0)
+        con = sqlite3.connect(f"file:{DB.as_posix()}?mode=ro", uri=True, timeout=5.0)
     except sqlite3.Error as e:
         return {"closed": 0, "db_ok": False, "error": str(e), "items": []}
-    closed: list[dict] = []
+    stale: list[dict] = []
     try:
-        rows = con.execute("select job_id, error_sig, last_seen_at, state "
+        rows = con.execute("select id, job_id, error_sig, last_seen_at, state "
                            "from cron_incidents where state != 'closed'").fetchall()
-        for jid, sig, last_seen, state in rows:
+        for iid, jid, sig, last_seen, state in rows:
             ref = _parse(last_seen)
             if ref is None:
                 continue
-            recovered = False
-            for started, status in con.execute(
+            try:
+                raw_runs = con.execute(
                     "select started_at, status from executions where job_id=? "
-                    "order by started_at desc limit 20", (jid,)):
-                if status != "completed":
-                    continue
-                dt = _parse(started)
-                if dt and dt > ref:
-                    recovered = True
-                    break
-            if not recovered:
+                    "order by started_at desc limit 50", (jid,)).fetchall()
+            except sqlite3.Error:
+                # 老库/测试库没有 executions 表：读不到就不关（fail-closed，不猜）
                 continue
-            now = datetime.now().astimezone().isoformat()
-            con.execute("update cron_incidents set state='closed', closed_at=?, "
-                        "acked_at=coalesce(acked_at, ?) "
-                        "where job_id=? and error_sig=? and state != 'closed'",
-                        (now, now, jid, sig))
-            closed.append({"job_id": jid, "error_sig": sig,
-                           "was": state, "recovered_after": last_seen})
-        con.commit()
+            # 按时间解析后比较（两张表的字符串格式可能不同：一个带 +08:00、一个是裸时间）
+            runs: list[str] = []
+            for started, st in raw_runs:
+                dt = _parse(started)
+                if dt is not None and dt > ref:
+                    runs.append(st)
+            if len(runs) < min_stable_runs:
+                continue
+            if any(st != "completed" for st in runs):
+                continue
+            stale.append({"id": iid, "job_id": jid, "error_sig": sig,
+                          "was": state, "recovered_after": last_seen,
+                          "stable_runs": len(runs)})
     except sqlite3.Error as e:
-        return {"closed": 0, "db_ok": True, "error": str(e), "items": closed}
+        return {"closed": 0, "db_ok": True, "error": str(e), "items": []}
     finally:
         con.close()
+    closed = [it for it in stale if _close_incident(it["id"])]
     return {"closed": len(closed), "db_ok": True, "items": closed}
 
 

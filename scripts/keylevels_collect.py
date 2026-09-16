@@ -57,7 +57,21 @@ _TF_SET_ATTEMPTS = 4
 _TF_SET_RETRY_WAIT = 5
 # 本轮让路（交互式分析进行中）的专用退出码：cron 侧必须能区分「让路」与「失败」。
 DEFER_EXIT_CODE = 7
+# 生产合同能容忍的最大年龄（与 tv_five_tf_contract 默认一致）：决定「本轮没刷新成功」
+# 算让路还是失败。2026-09-16 前用触发口径（12 分）判失败，把 17.5 分龄（合同内）的
+# 让路轮次记成了 cron 失败（实测 12:07/13:27/16:07 三轮）。
+CONTRACT_MAX_AGE_MIN = 30.0
 TV_CLI = ROOT / "tools" / "tradingview-mcp" / "src" / "cli" / "index.js"
+
+
+def _published_within_contract(max_age_minutes: float = CONTRACT_MAX_AGE_MIN) -> bool:
+    """现网五周期快照是否仍在生产合同内（让路 vs 失败的判据）。读不到一律不算内。"""
+    try:
+        from tv_five_tf_contract import load_five_tf_snapshot
+        snap = load_five_tf_snapshot("BTCUSDT", data_dir=DATA, max_age_minutes=max_age_minutes)
+        return bool(snap.get("usable"))
+    except Exception:
+        return False
 
 
 async def _mcp_call(label: str, awaitable, *, timeout: float = MCP_CALL_TIMEOUT_SECONDS):
@@ -898,6 +912,17 @@ def _run_cli() -> int:
             changed = valid = False
         if child.returncode == 0 and changed and valid:
             return 0
+        if child.returncode == 0 and _published_within_contract():
+            # 子进程 rc=0 却没形成新发布 = 早期退出路径（尚未定位，实测 2026-09-16
+            # 16:07 死在 timeframe:240:start）。只要现网候选池仍在生产合同内，本轮就是
+            # 「没刷新成功」而不是失败：按让路交回上层（上层再用合同口径判让路/失败）。
+            # 不重试：图此刻还在被抢，再跑一轮只是加倍争用。
+            print("⚠ 采集子进程 rc=0 但未形成新发布（早退路径未定位）"
+                  f"；现网候选池仍在 {CONTRACT_MAX_AGE_MIN:.0f} 分合同内 → 按让路处理",
+                  file=sys.stderr, flush=True)
+            _diagnostic("cli:child_early_exit", status="defer",
+                        error=f"rc=0 无新发布（attempt {attempt + 1}）")
+            return DEFER_EXIT_CODE
         print(
             f"BTC关键位采集未发布新快照(第{attempt + 1}次, rc={child.returncode})",
             file=sys.stderr, flush=True,
