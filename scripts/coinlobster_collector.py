@@ -44,6 +44,109 @@ SOURCE_ID = "coinlobster_snapshot"
 PROXY = "http://127.0.0.1:7897"
 LIVE_THRESHOLD_MIN = 5.0      # 超过这个年龄就不许当实时用
 
+# ── 额度自保（2026-09-16）───────────────────────────────────────────────
+# 免费档 200 次/日。实测被 cron（core 2 次/轮）+ 按需深采（full 6 次/轮）吃满后，
+# 之后每一轮都返回 429 并 exit 1 → 每 30 分钟铸造一条 incident、把 preflight 拖红。
+# 额度打满是**状态**不是故障：归为 quota_cooldown、可见降级、exit 0、冷却到次日。
+DAILY_CALL_BUDGET = int(os.environ.get("COINLOBSTER_DAILY_BUDGET", "200"))
+QUOTA_BREAKER = DATA_DIR / ".coinlobster_quota_breaker.json"
+BUDGET_STATE = DATA_DIR / ".coinlobster_daily_budget.json"
+
+
+def is_daily_quota_error(errors: dict) -> bool:
+    """429 + 「当日额度用尽」→ True。
+
+    区分两类 429：短时限流（等几分钟就好）与当日额度打满（今天不会恢复）。
+    只有后者才冷却到次日；短时限流仍按失败上报，不用 cooldown 掩盖真问题。
+    判据取服务端原文：`code -32029` / `Daily limit reached` / `calls a day`。
+    """
+    text = " ".join(str(v) for v in (errors or {}).values())
+    low = text.lower()
+    if "429" not in text and "-32029" not in text:
+        return False
+    return ("-32029" in text) or ("daily limit" in low) or ("calls a day" in low)
+
+
+def _next_reset_iso() -> str:
+    """冷却终点：次日 00:05（额度按自然日恢复，留 5 分钟余量）。"""
+    nxt = datetime.now(TZ).replace(hour=0, minute=5, second=0, microsecond=0) + timedelta(days=1)
+    return nxt.isoformat(timespec="seconds")
+
+
+def quota_breaker_active() -> dict | None:
+    """额度冷却中 → 返回 breaker 内容；未冷却/文件坏 → None（不因坏文件停采）。"""
+    try:
+        payload = json.loads(QUOTA_BREAKER.read_text(encoding="utf-8"))
+        until = str(payload.get("until") or "")
+        if until and datetime.fromisoformat(until) > datetime.now(TZ):
+            return payload
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        pass
+    return None
+
+
+def arm_quota_breaker(reason: str) -> str:
+    until = _next_reset_iso()
+    try:
+        QUOTA_BREAKER.write_text(json.dumps(
+            {"until": until, "reason": reason,
+             "armed_at": datetime.now(TZ).isoformat(timespec="seconds")},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+    return until
+
+
+def calls_used_today() -> int:
+    try:
+        payload = json.loads(BUDGET_STATE.read_text(encoding="utf-8"))
+        if payload.get("date") == datetime.now(TZ).strftime("%Y-%m-%d"):
+            return int(payload.get("calls") or 0)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        pass
+    return 0
+
+
+def record_calls(n: int) -> int:
+    """记当日成功调用数（只有成功调用才吃额度）。返回累计值。"""
+    total = calls_used_today() + max(0, int(n))
+    try:
+        BUDGET_STATE.write_text(json.dumps(
+            {"date": datetime.now(TZ).strftime("%Y-%m-%d"), "calls": total,
+             "budget": DAILY_CALL_BUDGET,
+             "updated_at": datetime.now(TZ).isoformat(timespec="seconds")},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+    return total
+
+
+def write_degraded_artifact(status: str, *, errors: dict | None = None,
+                           note: str = "", extra: dict | None = None) -> None:
+    """降级落盘：保留上次工件、状态进信封（不静默、不伪装 live、不丢旧数据）。
+
+    注意：旧工件里带 `_source_contract`，直接回灌会被 `_raw_payload` 拆包成
+    **旧 payload**，把本轮要写的注记/标记丢掉（实测 degraded_note 消失）。
+    所以先把元数据键剥掉再合并。
+    """
+    prev_payload = {}
+    try:
+        prev = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+        prev_payload = prev.get("payload", prev) if isinstance(prev, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        prev_payload = {}
+    payload = {k: v for k, v in prev_payload.items() if not str(k).startswith("_")} \
+        if isinstance(prev_payload, dict) else {}
+    if note:
+        payload["degraded_note"] = note
+    if extra:
+        payload.update({k: v for k, v in extra.items() if v is not None})
+    write_source_artifact(
+        str(ARTIFACT), SOURCE_ID, payload or {"btc": {}},
+        status=status, captured_at=None,
+        error=json.dumps(errors, ensure_ascii=False)[:300] if errors else (note or None),
+        cached=bool(prev_payload), symbol="BTC")
+
 # 免费档 200 次/日。core = 只采「接进管线」的两格（2 次/轮），
 # 按每 20 分钟一次 = 144 次/日，余量留给按需深采；full = 全量 6 次/轮。
 PROFILES = {
@@ -329,6 +432,33 @@ def main() -> int:
     ts = f"{now.year}年{now.month}月{now.day}日{now.hour:02d}:{now.minute:02d}"
     key = load_key()
 
+    # ① 额度冷却中（当日已打满）→ 不打 RPC、不刷日志，写 quota_cooldown 后 exit 0。
+    brk = quota_breaker_active()
+    if brk:
+        write_degraded_artifact("quota_cooldown",
+                                note=f"当日免费额度已用尽，冷却到 {brk.get('until')}",
+                                extra={"profile": args.profile, "call_cost": 0})
+        print(f"CoinLobster {ts} | 当日免费额度冷却中（到 {brk.get('until')}）→ 本轮不调用，"
+              f"保留上次工件（quota_cooldown，不计失败）")
+        return 0
+
+    # ② 额度自保：当日剩余额度不够跑完整计划时，按计划顺序保前面（=核心格），
+    #    跳过哪些工具**写进工件**（skipped_tools），绝不静默削源。剩余为 0 → 软冷却。
+    used = calls_used_today()
+    remaining = max(0, DAILY_CALL_BUDGET - used)
+    skipped: list[str] = []
+    if remaining < len(plan):
+        skipped = [tool for tool, _ in plan[remaining:]]
+        plan = plan[:remaining]
+    if not plan:
+        write_degraded_artifact("quota_cooldown",
+                                note=f"当日额度已用 {used}/{DAILY_CALL_BUDGET}，剩余不足一次采集",
+                                extra={"profile": args.profile, "call_cost": 0,
+                                       "skipped_tools": skipped})
+        print(f"CoinLobster {ts} | 当日额度已用 {used}/{DAILY_CALL_BUDGET}，剩余不足 → "
+              f"本轮不调用（quota_cooldown，不计失败）")
+        return 0
+
     raw, errors = {}, {}
     for tool, params in plan:
         ok, data = _rpc(tool, params, key)
@@ -337,19 +467,21 @@ def main() -> int:
         else:
             errors[tool] = data
         time.sleep(0.25)
+    if raw:
+        record_calls(len(raw))
 
     if not raw:
-        prev_payload = {}
-        try:
-            prev = json.loads(ARTIFACT.read_text(encoding="utf-8"))
-            prev_payload = prev.get("payload", prev) if isinstance(prev, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            prev_payload = {}
-        write_source_artifact(
-            str(ARTIFACT), SOURCE_ID, prev_payload or {"btc": {}},
-            status="unavailable", captured_at=None,
-            error=json.dumps(errors, ensure_ascii=False)[:300],
-            cached=bool(prev_payload), symbol="BTC")
+        if is_daily_quota_error(errors):
+            until = arm_quota_breaker("HTTP 429 daily limit reached")
+            write_degraded_artifact("quota_cooldown", errors=errors,
+                                    note=f"当日免费额度已用尽，冷却到 {until}",
+                                    extra={"profile": args.profile, "call_cost": len(plan),
+                                           "skipped_tools": skipped or None})
+            print(f"CoinLobster {ts} | 当日免费额度已用尽（quota_cooldown）→ 冷却到 {until}，"
+                  f"保留上次工件（降级可见，不计失败）")
+            return 0
+        write_degraded_artifact("unavailable", errors=errors,
+                                extra={"profile": args.profile, "call_cost": len(plan)})
         print(f"CoinLobster {ts} | 全部工具失败，保留上次工件（降级可见）")
         return 1
 
@@ -362,6 +494,10 @@ def main() -> int:
     shaped["partial_errors"] = errors or None
     shaped["call_cost"] = len(plan)
     shaped["profile"] = args.profile
+    # 2026-09-16：额度自保跳过的工具与当日用量必须可见（不静默削源）。
+    shaped["skipped_tools"] = skipped or None
+    shaped["budget_used_today"] = calls_used_today()
+    shaped["budget"] = DAILY_CALL_BUDGET
 
     write_source_artifact(
         str(ARTIFACT), SOURCE_ID, shaped,
