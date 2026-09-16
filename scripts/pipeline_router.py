@@ -203,12 +203,23 @@ STEPS = {
 # ===== cron_read 数据源映射（按资产类别） =====
 CRON_SOURCES = {
     # 这里只列真实落盘文件。仅推TG而没有本地JSON的采集器不得伪装成 cron_read 已消费。
-    "crypto":  ["dune_cache", "deribit_options", "x_sentiment", "qlib_factors", "liquidation_pressure"],
+    "crypto":  ["dune_cache", "deribit_options", "x_sentiment", "qlib_factors"],
     "gold":    ["cot_data", "xau_macro_context", "x_sentiment"],
     "forex":   ["cot_data", "x_sentiment"],
     "stock":   ["cot_data", "x_sentiment"],
     "futures": ["cot_data", "x_sentiment"],
     "other":   ["cot_data", "x_sentiment"],
+}
+
+# 只对覆盖到的品种追加的源：源名 → 真实覆盖的币种集合。
+# 清算双源（20260915 上线，cron `清算双源刷新` */10）产 data/liquidation_flow.json
+# （OKX 逐笔 + Binance WS 流）。它**只覆盖 BTC/ETH**，因此不能挂进 "crypto" 通用
+# 清单 —— 否则分析 SOL 时会拿 BTC 的清算缓存冒充「本品种已消费」。
+# 注意这不是「新源」：清算维度自 2026-09-15 起由 v96 渲染器 ③ 多源表「清算」行
+# 直接读取（docs/系统总览.md「清算双源刷新（卡面路径）」）。列在这里只是让
+# cron_read 步骤的完成度审计能看见它在跑，替掉已退役的 liquidation_pressure。
+CRON_SOURCES_BY_SYMBOL = {
+    "liquidation_flow": frozenset({"BTC", "ETH"}),
 }
 
 # 有意停用的采集源（2026-08-29 binance-only 迁移产物）。
@@ -218,7 +229,7 @@ CRON_SOURCES = {
 CRON_SOURCES_PAUSED = {
     "dune_cache": "Dune 链上采集 cron 已停用",
     "qlib_factors": "QLib 因子采集 cron 已停用",
-    "liquidation_pressure": "清算压力采集 cron 已停用",
+    "liquidation_pressure": "旧清算压力采集 cron 已退役（替代者=清算双源刷新→liquidation_flow.json）",
     "deribit_options": "Deribit 期权采集 cron 已停用",
     "stablecoin_flows": "稳定币流采集 cron 已停用",
     "cot_data": "COT 持仓采集 cron 已停用",
@@ -247,6 +258,7 @@ CRON_SOURCE_MAX_AGE = {
     "xau_macro_context": 24.0,        # trading_system._xau_macro_context 的 TTL
     "cot_data": 24.0 * 7,             # CFTC 周报
     "x_sentiment": 6.0,               # 卡面「超过 6 小时不采用」的同一口径
+    "liquidation_flow": 0.7,          # 对齐 data_freshness_watchdog 的 0.7h(42 分)
 }
 
 
@@ -255,12 +267,18 @@ def cron_source_max_age(name: str, default: float = 6.0) -> float:
 
 
 ASSET_STEP_DESCRIPTIONS = {
+    # 每个键必须覆盖全部资产类别（crypto/gold/forex/stock/futures/index/option/other），
+    # 否则 step_description() 会回退到 STEPS 的通用（加密口径）文案 —— 实测曾把
+    # SPX500 的 corr 写成「BTC-SPX-XAU-DXY」、把 index/option 的 macro 写成「+ FG(加密)」。
     "macro": {
         "crypto": "SPX/VIX/DXY/US10Y + 金十日历 + Polymarket + 加密恐贪",
         "gold": "DXY/US10Y/TIP/SPX/VIX + 金十黄金日历/快讯",
         "forex": "DXY/利率/央行/经济日历 + 风险偏好",
         "stock": "SPX/NDX/VIX/US10Y + 公司/行业/财报事件",
         "futures": "DXY/利率/库存/经济日历 + 风险偏好",
+        "index": "DXY/利率/VIX/成分股广度 + 经济日历",
+        "option": "底层标的的宏观/事件背景（期权跟随底层）",
+        "other": "DXY/利率/风险偏好 + 经济日历",
     },
     "x_sent": {
         "crypto": "x_search实时加密情绪 + 恐贪 + CoinGecko热度",
@@ -268,6 +286,9 @@ ASSET_STEP_DESCRIPTIONS = {
         "forex": "x_search本货币对实时情绪 + 央行/宏观交叉验证",
         "stock": "x_search公司/行业实时情绪 + 新闻催化剂",
         "futures": "x_search对应期货实时情绪 + 库存/宏观交叉验证",
+        "index": "x_search指数/成分板块实时情绪 + 宏观交叉验证",
+        "option": "x_search底层标的情绪（期权自身不单独取情绪）",
+        "other": "x_search本标的实时情绪 + 宏观交叉验证",
     },
     "corr": {
         "crypto": "BTC-SPX-XAU-DXY滚动相关性",
@@ -275,6 +296,9 @@ ASSET_STEP_DESCRIPTIONS = {
         "forex": "本货币对-DXY-利差资产滚动相关性",
         "stock": "AAPL-SPX-NDX-VIX同类矩阵（代码按标的替换）",
         "futures": "本期货-SPX-DXY-相关商品滚动相关性",
+        "index": "本指数-成分板块-DXY-VIX滚动相关性",
+        "option": "底层品种的跨资产相关性（期权跟随底层）",
+        "other": "本标的-DXY-SPX滚动相关性",
     },
 }
 
@@ -471,10 +495,28 @@ def step_description(step: str, asset_class: str) -> str:
     return str(ASSET_STEP_DESCRIPTIONS.get(step, {}).get(asset_class) or STEPS[step]["desc"])
 
 
+def _crypto_base(symbol: str) -> str:
+    """提取币种基准符号（BTCUSDT / BINANCE:BTCUSDT.P → BTC），用于按品种追加源。"""
+    ticker = str(symbol).upper().split(":")[-1].replace(".P", "")
+    for quote in ("USDT", "USDC", "BUSD", "FDUSD", "USD"):
+        if ticker.endswith(quote) and len(ticker) > len(quote):
+            return ticker[: -len(quote)]
+    return ticker
+
+
 def cron_sources(symbol: str) -> list[str]:
-    """返回该品种应读取的 cron 输出文件列表（不含 .json 后缀）"""
+    """返回该品种应读取的 cron 输出文件列表（不含 .json 后缀）
+
+    通用清单按资产类别取；``CRON_SOURCES_BY_SYMBOL`` 里**只覆盖部分币种**的源
+    再按本品种是否落在覆盖范围内追加 —— 避免拿 BTC 的清算缓存冒充别的币已消费。
+    """
     ac = _asset_class(symbol)
-    return CRON_SOURCES.get(ac, CRON_SOURCES["other"])
+    out = list(CRON_SOURCES.get(ac, CRON_SOURCES["other"]))
+    base = _crypto_base(symbol)
+    for name, covered in CRON_SOURCES_BY_SYMBOL.items():
+        if base in covered and name not in out:
+            out.append(name)
+    return out
 
 
 def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
@@ -572,7 +614,9 @@ def _add_option_chain(steps: list[str], identity: dict) -> list[str]:
 
 
 def crypto_full_pipeline() -> list[str]:
-    """Return the canonical fifteen-stage crypto Full route.
+    """Return the canonical fourteen-stage crypto Full route.
+
+    （cg_pro 于 2026-09-14 退役，15 → 14 步；注释曾长期停留在 fifteen。）
 
     Keep this helper as the single fallback source for callers that cannot
     import/execute the normal router path.  It intentionally returns a copy
@@ -740,7 +784,10 @@ def pipeline_summary(symbol: str, mode: str = "full") -> str:
     # 附加 cron 源
     if "cron_read" in steps:
         cs = cron_sources(symbol)
-        lines.append(f"\n  cron_read 将读取: {', '.join(f'data/{c}.json' for c in cs)}")
+        # 源名 ≠ 文件名（x_sentiment → x_sentiment_context.json）：必须走
+        # cron_source_file 映射，按源名拼路径会展示一个不存在的文件。
+        paths = ", ".join(f"data/{cron_source_file(c)}" for c in cs)
+        lines.append(f"\n  cron_read 将读取: {paths}")
     return "\n".join(lines)
 
 

@@ -146,3 +146,63 @@ def test_monitor_mode_stays_event_only_even_for_options():
     router = _load_router()
     assert router.route_pipeline("AAPL240119C150", "monitor") == []
     assert router.route_pipeline("BTC-29MAR24-60000-C", "monitor") == ["binance"]
+
+
+def test_crypto_cron_read_lists_the_live_liquidation_source():
+    """清算维度 2026-09-15 换源：旧 liquidation_pressure 已退役。
+
+    缺陷背景：cron_read 清单仍写 liquidation_pressure（cron 已摘），而真在跑的
+    `清算双源刷新`(*/10) 产出的 liquidation_flow.json 不在契约里 —— 卡面第⑤步
+    完成度因此看不到活跃清算源，脚注还把整条清算读成「已停用」。
+    """
+    router = _load_router()
+    sources = router.cron_sources("BTCUSDT")
+    assert "liquidation_flow" in sources
+    assert "liquidation_pressure" not in sources
+    # 退役源不得再出现在任何资产类别的清单里（只保留在 PAUSED 说明中）。
+    for ac, names in router.CRON_SOURCES.items():
+        assert "liquidation_pressure" not in names, ac
+    assert "liquidation_pressure" in router.CRON_SOURCES_PAUSED
+    # 新鲜度口径必须与 data_freshness_watchdog 的 0.7h(42 分) 对齐，
+    # 否则本步会永久误报过期。
+    assert router.cron_source_max_age("liquidation_flow") == 0.7
+    assert router.cron_source_file("liquidation_flow") == "liquidation_flow.json"
+    # 非加密品种不受影响。
+    assert "liquidation_flow" not in router.cron_sources("XAUUSD")
+    assert "liquidation_flow" not in router.cron_sources("EURUSD")
+
+
+def test_liquidation_source_only_attaches_to_covered_coins():
+    """liquidation_flow 只覆盖 BTC/ETH：别的币不能拿 BTC 的缓存冒充已消费。"""
+    router = _load_router()
+    for symbol in ("BTCUSDT", "BINANCE:BTCUSDT.P", "BTCUSDC", "ETHUSDT"):
+        assert "liquidation_flow" in router.cron_sources(symbol), symbol
+    for symbol in ("SOLUSDT", "DOGEUSDT", "1000PEPEUSDT", "XAUUSD", "SPX500"):
+        assert "liquidation_flow" not in router.cron_sources(symbol), symbol
+
+
+def test_asset_step_descriptions_cover_every_asset_class():
+    """step_description 不得回退到通用（加密口径）文案给 index/option。
+
+    实测缺陷：SPX500 的 corr 被写成「BTC-SPX-XAU-DXY」、index/option 的 macro
+    被写成「+ Polymarket + FG(加密)」—— 卡面/摘要串味。
+    """
+    router = _load_router()
+    classes = set()
+    for step in router.STEPS.values():
+        classes |= set(step["assets"])
+    assert {"index", "option", "other"} <= classes
+    for step, table in router.ASSET_STEP_DESCRIPTIONS.items():
+        missing = classes - set(table)
+        assert not missing, f"{step} 缺资产描述: {sorted(missing)}"
+        for ac in ("index", "option"):
+            assert table[ac].strip()
+            assert router.step_description(step, ac) != router.STEPS[step]["desc"], (step, ac)
+
+
+def test_cron_read_note_says_liquidation_is_a_card_path():
+    """脚注必须写明清算落点在卡面路径，避免「设计性停用」被读成清算停采。"""
+    src = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert "清算=卡面路径(③多源表清算行)" in src
+    assert 'if "liquidation_flow" in cron_fresh' in src
+

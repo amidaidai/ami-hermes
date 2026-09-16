@@ -5789,12 +5789,16 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                         f"五周期可用={tv_step['five_usable']}·覆盖{tv_step['five_coverage']}/5"
                     )
             elif s == "cron_read":
+                notes = [f"新鲜:{','.join(cron_fresh) or '无'}"]
                 if cron_paused:
-                    step_notes[s] = (f"新鲜:{','.join(cron_fresh) or '无'}；"
-                                     f"设计性停用:{','.join(cron_paused)}；"
-                                     f"缺失/过期:{','.join(cron_missing) or '无'}")
-                else:
-                    step_notes[s] = f"新鲜:{','.join(cron_fresh) or '无'}；缺失/过期:{','.join(cron_missing) or '无'}"
+                    notes.append(f"设计性停用:{','.join(cron_paused)}")
+                notes.append(f"缺失/过期:{','.join(cron_missing) or '无'}")
+                if "liquidation_flow" in cron_fresh:
+                    # 清算维度的落点是卡面路径：v96 渲染器 ③ 多源表「清算」行直接读
+                    # liquidation_flow.json / coinglass_liq.json，不靠本行审计。
+                    # 写清楚是为了不让「设计性停用」那一串被误读成清算整体停采。
+                    notes.append("清算=卡面路径(③多源表清算行)")
+                step_notes[s] = "；".join(notes)
             elif s in completed_steps:
                 step_notes[s] = "已完成"
             else:
