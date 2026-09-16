@@ -122,6 +122,15 @@ env key 命名规则：`MCP_` + 服务名大写（非字母数字转 `_`） + `_
 `scripts/coinlobster_refresh.py`（no_agent 入口，默认 core + 8 分钟防重跑）；cron 任务 id `3cb9786b5494`，
 `9,29,49 * * * *`，`--no-agent --deliver local --script coinlobster_refresh.py --workdir "D:/Hermes agent"`。
 
+**额度必须提前入账（2026-09-16 实测教训）**：免费档 200 次/日被 cron（core 2 次/轮 = 96/日）
+加按需深采（full 6 次/轮）吃满后，之后每一轮都 429，而旧实现按 exit 1 上报 →
+**每 30 分钟铸一条 cron incident 并把 `audit_preflight` 的 Cron策略 拖红**，看起来像“源坏了”。
+现在：429 带 daily 字样（`code -32029` / `Daily limit reached`）→ `quota_cooldown` +
+`data/.coinlobster_quota_breaker.json` 冷却到次日 00:05 + **exit 0**；另有当日额度记账
+（`COINLOBSTER_DAILY_BUDGET`），剩余不够一轮计划时按顺序保核心格，跳过项写进工件 `skipped_tools`。
+**接入任何带日额度的 MCP 源时先把这件事做了**：估算“cron 频率 × 每轮调用”是否 < 额度，
+否则第一天白天就会打满。
+
 cron 装配坑：
 
 - `--script` 写 `workdir/scripts/` 下的**裸文件名**；本机 `~/.hermes/scripts/` 与仓库 `scripts/`

@@ -158,6 +158,21 @@ For parallel source collection, a filesystem atomic replace prevents torn JSON b
 
 For source timestamps, `captured_at` must come from the provider/payload and `observed_at` records local observation. Cache write time and filesystem mtime are bookkeeping only; when `captured_at` is absent, keep the source explicitly unavailable/degraded.
 
+## Test-contract hygiene when a doctrine changes
+
+- **新加模块级状态/产物路径（状态文件、诊断文件、缓存）必须在测试里改指 tmp。**
+  否则任何调用 `main()` 的用例都会写进仓库 `data/`，并与其它用例互相污染（顺序依赖、换机漂移）。
+  做法：把路径提成模块常量，测试用 autouse fixture `monkeypatch.setattr(mod, "STATE", tmp_path / "x.json")`。
+- **用例经过读生产状态的函数时必须把这个判定 patch 掉。** 否则通过/失败取决于「跑的时刻数据恰好过期还是新鲜」
+  ——今天过、明天挂（实测同一用例在数据陈旧时通过、数据刷新后失败，看起来像新引入的回归）。
+  要在用例里体现生产口径，就断言「判定函数被以正确参数调用」，不要让它读盘。
+- **改口径就重写编码旧口径的用例**，不要只在旁边加新用例：名字里写着旧规则的
+  （`..._rejects_...`）要么改名并断言新的两分支契约，要么删掉。留着一个反着走的用例比没有更糟。
+- **跨进程共享的常量在测试里钉住相等性**（例：父脚本的让路退出码 == 子进程模块的 `DEFER_EXIT_CODE`；
+  阈值常量 == 下游合同默认值）。任一侧改名都会把「让路」静默读成「失败」。
+- 改完被 cron 引用的脚本，先删 `__pycache__` 再等下一轮；口径变更的验收证据是**下一轮 cron 实跑状态**
+  （`executions` 表的 status + error 全字段，不是只看首行），不是本机单跑。
+
 ## Closure report
 
 Lead with `已完善 / 部分完善 / 未完善`. A self-summary that lists P0/P1 as done is not a closure report — independent live probes first, then those three labels against the probes. Enumerate repaired-and-verified items, current runtime state, blockers/degradation with source/timestamp/freshness, every remaining P0/P1/P2 item with acceptance criteria, and the next single active batch. Preserve the manual-decision boundary: no automatic orders unless separately requested.

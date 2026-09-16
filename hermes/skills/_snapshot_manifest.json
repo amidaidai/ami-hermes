@@ -1,6 +1,6 @@
 {
  "blocked_secrets": {},
- "file_count": 2007,
+ "file_count": 2008,
  "files": {
   "api-dependency-audit/SKILL.md": "abc570d8612ced9d",
   "api-dependency-audit/references/availability-verification-layers.md": "91d9efb21d7c77a7",
@@ -1175,7 +1175,7 @@
   "trading/crypto-exchange-connectors/SKILL.md": "233d867635c91e5b",
   "trading/crypto-market-verification/SKILL.md": "3bb27c76cc8b00ee",
   "trading/crypto-market-verification/references/binance-verification-session-pattern.md": "34599277f544f1c6",
-  "trading/crypto-market-verification/references/card-three-layer-reformat.md": "4de56f585728bbac",
+  "trading/crypto-market-verification/references/card-three-layer-reformat.md": "53a8e1bb41c254af",
   "trading/crypto-market-verification/references/card-value-cross-check.md": "8a39f66223b3eed3",
   "trading/crypto-market-verification/references/event-attribution.md": "b9ebbb95a7ef8d25",
   "trading/crypto-market-verification/references/full-run-execution-and-level-evidence.md": "0e94669f80cecc5c",
@@ -1428,7 +1428,7 @@
   "trading/risk-management-system/SKILL.md": "5bce1a4ba33349de",
   "trading/skill-curation-tangxi/SKILL.md": "9d4cfb68a0abf7fe",
   "trading/skill-curation-tangxi/references/financemcp-evaluation-2026-09.md": "580d23a6decaeead",
-  "trading/skill-curation-tangxi/references/mcp-server-curation.md": "825422db79c21660",
+  "trading/skill-curation-tangxi/references/mcp-server-curation.md": "4c79acdfd95259f1",
   "trading/skill-curation-tangxi/references/tradingview-api-evaluation-2026-09.md": "3fe068c58e6fbddb",
   "trading/stock-multi-factor-screener/SKILL.md": "faaa6566f0cc6ac7",
   "trading/tangxi-analysis-audit-checklist/SKILL.md": "fd94b105784a351b",
@@ -1514,7 +1514,7 @@
   "trading/tangxi-tg-rich-reporting/references/tangxi-tg-inventory.md": "e3e4419a04fb26e3",
   "trading/telegram-delivery-reliability/SKILL.md": "672ec1e46194ac03",
   "trading/telegram-delivery-reliability/references/telegram-delivery-hardening-session.md": "0658f4329d385eaa",
-  "trading/trade-review-pipeline/SKILL.md": "4dfe0ab04b9def46",
+  "trading/trade-review-pipeline/SKILL.md": "f67207a08187ca44",
   "trading/trader-monty-analytics/SKILL.md": "373907ab7475af78",
   "trading/trading-analysis-system-audit-methodology/SKILL.md": "a708c262e0569c5c",
   "trading/trading-analysis-system-audit-methodology/references/collector-isolation-fixes-20260912.md": "f329836be3f8dd3e",
@@ -1614,6 +1614,7 @@
   "trading/trading-system-audit/references/dynamic-model-engine-fix-2026-06-22.md": "842a40f3c230ba91",
   "trading/trading-system-audit/references/equity-tracking-audit.md": "895c77bea6214619",
   "trading/trading-system-audit/references/execution-closed-loop-and-governance.md": "393eb34c7b57f64c",
+  "trading/trading-system-audit/references/external-audit-verification.md": "e155fe91777071c1",
   "trading/trading-system-audit/references/final-audit-2026-06-19.md": "1da33123d20ff8d9",
   "trading/trading-system-audit/references/fix-pattern-write-it-right-not-post-patch.md": "fe1bedba804a16b4",
   "trading/trading-system-audit/references/fix-patterns-catalog.md": "f357b82b8350783f",
@@ -1627,7 +1628,7 @@
   "trading/trading-system-audit/references/multi-asset-symbol-api-audit-2026-06-20.md": "0e893ea9edbcc6a9",
   "trading/trading-system-audit/references/ntp-windows.md": "b4135f158d9b15fd",
   "trading/trading-system-audit/references/p1-tv-cache-and-push-protection.md": "9944b8e60b8d95a3",
-  "trading/trading-system-audit/references/pipeline-contract-drift-audit.md": "f60678badcc9aedb",
+  "trading/trading-system-audit/references/pipeline-contract-drift-audit.md": "ca5fd688507ad543",
   "trading/trading-system-audit/references/proven-fix-patterns.md": "6b099b5798b0366d",
   "trading/trading-system-audit/references/provider-proxy-and-process-hygiene.md": "26c21656d1f5d403",
   "trading/trading-system-audit/references/python-decision-chain-audit-pattern.md": "cdb38438154c4beb",
@@ -1665,7 +1666,7 @@
   "trading/trading-system-audit/references/watchdog-popen-poll-fix-2026-06-21.md": "878bfa3c215970c9",
   "trading/trading-system-audit/references/xau-risk-data-quality-2026-06-18.md": "26e2c7fa7b8ddcc7",
   "trading/trading-system-audit/templates/cron-wrapper.py": "040ff0e6a4e4ace5",
-  "trading/trading-system-implementation-closure/SKILL.md": "5ff30240e86e0f26",
+  "trading/trading-system-implementation-closure/SKILL.md": "ee5de3d684ad8782",
   "trading/trading-system-implementation-closure/references/chart-evidence-closure.md": "719c37c4fe8039e1",
   "trading/trading-system-implementation-closure/references/closure-20260903.md": "c6e8b16141b28a59",
   "trading/trading-system-implementation-closure/references/final-verdict-runtime-contracts.md": "214794d71293fc6e",
@@ -2010,8 +2011,8 @@
   "web/blocked-page-recovery/scripts/recover_page.py": "22b996996ae2bf25",
   "yuanbao/SKILL.md": "239e4875f511124f"
  },
- "generated_at": "2026-09-16T16:37:50+0800",
+ "generated_at": "2026-09-16T17:13:25+0800",
  "oversized": {},
  "source": "C:/Users/Administrator/AppData/Local/hermes/skills",
- "total_bytes": 16570957
+ "total_bytes": 16579566
 }
