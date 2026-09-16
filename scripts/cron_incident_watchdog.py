@@ -118,11 +118,65 @@ def collect(hours: float, include_backlog: bool) -> dict:
     return payload
 
 
+def auto_close_recovered() -> dict:
+    """把「同一作业在失败之后又成功跑过」的 incident 自动关闭（自愈闭环）。
+
+    2026-09-16：此前闭环只能靠人工批量 UPDATE（实测大量 closed_at 集中在同一秒
+    `2026-09-15T12:18:51`），于是已恢复的失败长期挂在 `total_unclosed` 上，被读成
+    「系统在坏」。两类常见「非故障」也因此不清零：
+      · 叙事断言闸门按设计在**命中**时 exit 1（业务检测，不是脚本崩溃）；
+      · BTC续航「让路」路径在让给交互式分析后 exit 1（设计性跳过）。
+    只关「后续同一作业已成功」的行 —— 仍在失败的作业保持 open，语义仍是「当前未恢复」，
+    所以本函数不会把真故障洗白。明细一个字不删（error/output_file 原样保留）。
+    """
+    if not DB.exists():
+        return {"closed": 0, "db_ok": False, "items": []}
+    try:
+        con = sqlite3.connect(f"file:{DB.as_posix()}?mode=rw", uri=True, timeout=5.0)
+    except sqlite3.Error as e:
+        return {"closed": 0, "db_ok": False, "error": str(e), "items": []}
+    closed: list[dict] = []
+    try:
+        rows = con.execute("select job_id, error_sig, last_seen_at, state "
+                           "from cron_incidents where state != 'closed'").fetchall()
+        for jid, sig, last_seen, state in rows:
+            ref = _parse(last_seen)
+            if ref is None:
+                continue
+            recovered = False
+            for started, status in con.execute(
+                    "select started_at, status from executions where job_id=? "
+                    "order by started_at desc limit 20", (jid,)):
+                if status != "completed":
+                    continue
+                dt = _parse(started)
+                if dt and dt > ref:
+                    recovered = True
+                    break
+            if not recovered:
+                continue
+            now = datetime.now().astimezone().isoformat()
+            con.execute("update cron_incidents set state='closed', closed_at=?, "
+                        "acked_at=coalesce(acked_at, ?) "
+                        "where job_id=? and error_sig=? and state != 'closed'",
+                        (now, now, jid, sig))
+            closed.append({"job_id": jid, "error_sig": sig,
+                           "was": state, "recovered_after": last_seen})
+        con.commit()
+    except sqlite3.Error as e:
+        return {"closed": 0, "db_ok": True, "error": str(e), "items": closed}
+    finally:
+        con.close()
+    return {"closed": len(closed), "db_ok": True, "items": closed}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=24.0)
     ap.add_argument("--backlog", action="store_true", help="把窗口外的历史积压也列出来")
     ap.add_argument("--dry", action="store_true", help="不写报告/心跳")
+    ap.add_argument("--no-close", action="store_true",
+                    help="只读诊断：不自动关闭「后续已恢复」的 incident")
     a = ap.parse_args()
 
     if not DB.exists():
@@ -131,6 +185,14 @@ def main() -> int:
         if not a.dry:
             _write_heartbeat(db_ok=False, error="executions.db missing")
         return 2
+
+    autoclean = {"closed": 0, "db_ok": True, "items": []}
+    if not a.no_close and not a.dry:
+        autoclean = auto_close_recovered()
+        if not autoclean.get("db_ok"):
+            print("⚠️ 自愈闭环：incidents 库不可写，本轮只读统计"
+                  f"（{autoclean.get('error') or 'DB缺失'}）")
+
     try:
         payload = collect(a.hours, a.backlog)
     except sqlite3.Error as e:
@@ -139,12 +201,18 @@ def main() -> int:
             _write_heartbeat(db_ok=False, error=str(e))
         return 2
 
+    payload["auto_closed"] = autoclean.get("closed", 0)
     if not a.dry:
         _write_report(payload)
         _write_heartbeat(db_ok=True, window_hours=a.hours,
                          recent_jobs=len(payload["recent_jobs"]),
                          recent_total=payload["recent_total"],
-                         total_unclosed=payload["total_unclosed"])
+                         total_unclosed=payload["total_unclosed"],
+                         auto_closed=payload["auto_closed"])
+    if autoclean.get("closed"):
+        print(f"↷ 自愈闭环：{autoclean['closed']} 条 incident 的作业已再次成功跑过，转为 closed")
+        for it in autoclean["items"][:5]:
+            print(f"   · {it['job_id']}  {it['error_sig']}  失败止于 {it['recovered_after'][:16]}")
 
     if payload["healthy"]:
         return 0                      # 静默：cron 零 token 约定

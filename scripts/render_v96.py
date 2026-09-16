@@ -35,25 +35,23 @@ except (OSError, ValueError):
 
 TZ = timezone(timedelta(hours=8))
 
+# 价格精度：与重排层（card_reformat）共用同一个实现，避免「上游修好外汇小数、
+# 下游又按整数取整」（2026-09-16 抽出 scripts/price_format.py）。
+try:
+    from price_format import fmt_price, fmt_rr
+except ImportError:  # 直接按脚本路径导入而无 sys.path 注入时的兜底
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from price_format import fmt_price, fmt_rr
+
+
 
 def _num(v, digits=0):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return "—"
-    if f >= 1000:
-        return f"{f:,.0f}"
-    if digits:
-        return f"{f:,.{digits}f}"
-    a = abs(f)
-    if 0.01 <= a < 10:
-        # 2026-09-13 FX 精度修复：2 位小数不够——EURUSD 1.1638 曾显示成 "1.16"。
-        # |v|∈[0.01,10)（外汇/小额价格）保留 4 位小数。
-        return f"{f:.4f}"
-    if 0 < a < 0.01:
-        # 极小值（小市值币种）：6 位小数并去掉尾部零。
-        return f"{f:.6f}".rstrip("0").rstrip(".")
-    return f"{f:.2f}"
+    """价格/数值格式化 —— 唯一实现见 ``scripts/price_format.fmt_price``。
+
+    2026-09-16：原内联实现抽到 price_format，让原生卡与 v7 表格版重排器
+    共用同一精度规则（此前重排层自写 ``:,.0f``，把外汇小数价打成 ``1``）。
+    """
+    return fmt_price(v, digits)
 
 
 def _finite_rr(value):
@@ -767,6 +765,25 @@ def _far_levels_note(rest: list[dict], max_items: int = 3) -> str:
     return note
 
 
+def _blocker_headline(final_verdict) -> str:
+    """主拦因文案「主拦因码（家族）」——首屏结论与【裁决】主因行共用同一函数。
+
+    2026-09-16：首屏理由原先取「副指标裁决」（`dual_verdict`），黄金卡因此把
+    「非加密不套HALDRO」当成禁做理由，而真正的硬闸门是
+    `risk_constitution/advanced_confluence` —— 同一张卡出现两组原因。
+    现在首屏只读 FinalVerdict 主拦因，与【裁决】主因行、总结引用同一组原因
+    （格式沿用 2026-09-15 已批准的 `主因 <code>（家族）`，两处由本函数生成，
+    不会再各自漂移）。
+    """
+    fv = final_verdict or {}
+    pb = str(fv.get("primary_blocker") or "")
+    if not pb:
+        return ""
+    groups = fv.get("blocker_groups") or []
+    fam = next((label for label, items in groups if pb in tuple(items)), "")
+    return f"{pb}（{fam}）" if fam else pb
+
+
 def _source_footer(source_matrix) -> str:
     """数据源状态压成一行：已入 FinalVerdict 与 仅展示/辅助 分组。"""
     if not isinstance(source_matrix, list) or not source_matrix:
@@ -913,7 +930,12 @@ def render_v96_card(
             action_summary = "⚠禁做 — 结构禁做"
         recommend_name = "⚠️主推 禁做"
         recommend_trigger = f"等 {_wait_ref} 方向确认后重算；现价无优势"
-        recommend_exec = "不下单；等R:R≥1:2且主副指标重新共振"
+        # 2026-09-16：非加密没有 HALDRO 授权链，不能要求「主副指标重新共振」——
+        # 黄金卡曾照抄加密话术（要求一个在黄金上不存在的模块重新共振）。
+        if ac == "加密":
+            recommend_exec = "不下单；等R:R≥1:2且主副指标重新共振"
+        else:
+            recommend_exec = "不下单；等R:R≥1:2且结构与来源方向确认"
         recommend_rr = "—"
         backup_name = f"🔁备选/观察 {dir_a}"
         if dir_a == "多" and _up_name:
@@ -929,7 +951,7 @@ def render_v96_card(
         recommend_name = f"⭐主推 {dir_a}"
         recommend_trigger = f"{_price(st_a.get('entry'))}确认"
         recommend_exec = f"{dir_a} {_price(st_a.get('entry'))} 损{_price(st_a.get('stop'))} 标{_price(st_a.get('target'))}"
-        recommend_rr = f"1:{_rr_num:.1f}"
+        recommend_rr = fmt_rr(_rr_num)
         backup_name = f"🔁备选 {dir_b}"
         backup_trigger = "主推失效后反向确认"
         backup_exec = f"{dir_b}失效路径；不与主推平权"
@@ -990,9 +1012,17 @@ def render_v96_card(
     # 主推行只给「结论 + 理由」（触发/动作留在 ④），同一句话不写两遍；
     # ⭐ 只在真正可执行（GO-A）时点亮，等待/禁做沿用角色前缀，避免未授权卡
     # 渲染得像可下单卡（test_render_tv_card 同名契约）。
-    _reason = _cell(dual_verdict) if dual_verdict and dual_verdict != "待裁决" else ""
+    _dual_txt = _cell(dual_verdict) if dual_verdict and dual_verdict != "待裁决" else ""
+    # 2026-09-16：首屏理由只认 FinalVerdict 主拦因。「副指标不适用」是来源说明，
+    # 不是禁做理由——黄金卡曾把「非加密不套HALDRO」印成首行原因，与后文真正的
+    # 硬闸门（risk_constitution/advanced_confluence）打架。
+    _dual_na = (("不适用" in _dual_txt) or ("非加密不套" in _dual_txt)
+                or ("不适用" in str(haldro_short))
+                or (isinstance(dual_indicator, dict) and dual_indicator.get("asset_is_crypto") is False))
+    _pb_txt = _blocker_headline(final_verdict)
+    _reason = _pb_txt or ("" if _dual_na else _dual_txt)
     if final_state == "GO-A" and final_executable:
-        lines.append(f"⭐主推 {dir_a} — {_reason or '主副同向'}·可执行")
+        lines.append(f"⭐主推 {dir_a} — {_dual_txt or '主副同向'}·可执行")
     elif _reason:
         lines.append(f"{recommend_name} — {_reason}")
     else:
@@ -1010,7 +1040,10 @@ def render_v96_card(
         strip_parts.append(f"{tf}{star}{_tf_emoji(k)}{_compact_state(_short_tf_text(k))}")
         sub_parts.append(f"{tf}{_sub_strip(k, dual_indicator)}")
     lines.append("① 周期体温 " + " · ".join(strip_parts))
-    lines.append("副读 " + " · ".join(sub_parts))
+    # 2026-09-16：非加密（黄金/外汇/股票/期货）的副读恒为「—」，整行不占正文；
+    # 不适用模块的披露下沉到 ③ 之后一行「来源说明」，位置留给黄金宏观与合约 CVD。
+    if not _dual_na:
+        lines.append("副读 " + " · ".join(sub_parts))
     lines.append("")
 
     lines.append("② 关键位 / 结构关键位")
@@ -1035,7 +1068,10 @@ def render_v96_card(
     lines.append("| 能力 | 读数 | 裁决 |")
     lines.append("|:---|:---|:---|")
     lines.append(f"| SVP主驾驶 | {_cell(svp_short)} | 结构/入场/止损/目标优先 |")
-    lines.append(f"| HALDRO副驾驶 | {_cell(haldro_short)} | {_cell(dual_verdict)} |")
+    # 2026-09-16：不适用模块不占正文（黄金卡曾保留「HALDRO副驾驶｜HALDRO不适用」整行）。
+    # 披露不静默：③ 之后补一行「来源说明」，读者仍能看到副指标为何缺席。
+    if not _dual_na:
+        lines.append(f"| HALDRO副驾驶 | {_cell(haldro_short)} | {_cell(dual_verdict)} |")
     lines.append(f"| 订单流 | {_cell(multi_src_line)} | CVD/OI不配则降级 |")
     _liq_line = _liquidation_line(symbol)
     if _liq_line:
@@ -1048,6 +1084,8 @@ def render_v96_card(
     _src_footer = _source_footer(source_matrix)
     if _src_footer:
         lines.append(_src_footer)
+    if _dual_na:
+        lines.append("来源说明：HALDRO 副驾驶不适用于本市场（不参与裁决·占位让给本市场源）")
     lines.append("")
 
     lines.append("④ 最推荐方案")
@@ -1099,13 +1137,12 @@ def render_v96_card(
     lines.append(f"失效 {inv_display} · 价格共识{data_grade}（非全源健康度） · 源状态见③")
     # 拦因归并（2026-09-15）：同一个「现在不做」常被 5-7 条同义门各记一笔，
     # 【裁决】行只给主因 + 家族口径；blockers 证据层一个字不减，明细照旧可查。
-    _pb = str((final_verdict or {}).get("primary_blocker") or "")
-    _bg = (final_verdict or {}).get("blocker_groups") or []
+    _pb = _blocker_headline(final_verdict)
     if _pb:
+        _bg = (final_verdict or {}).get("blocker_groups") or []
         _n = sum(len(items) for _label, items in _bg) if _bg else 1
-        _fam = next((label for label, items in _bg if _pb in tuple(items)), "")
         _k = len(_bg) or 1
-        lines.append(f"主因 {_pb}{('（' + _fam + '）') if _fam else ''} · "
+        lines.append(f"主因 {_pb} · "
                      f"{_k} 类 / {_n} 条拦因（明细见证据层）")
     return "\n".join(lines) + "\n"
 

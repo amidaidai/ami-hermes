@@ -46,7 +46,7 @@ WAIT/NO-GO 执行字段仍清空、X 禁做不显示候选），**不要当成�
 >    末尾固定 **【总结】＝三段大白话**：**最推荐什么方案**（＋一句为什么）／**看哪两个价格**／**具体怎么做**（区间不动作＋等什么）；
 >    **禁止**把原生卡【裁决】行原样搬到总结里（`⚠禁做 — 主线R:R不足(<1:2) · 风控 —（未接账户余额·非真实额度） · Binance 100x` 这种符号串＝用户点名的「一堆符号」）。
 >    符号转人话由 `_plain()` 机械完成，只换措辞不改结论：`⚠️主推 禁做`→等待，不做单 · `副S3冲突`→副指标 S3 冲突（主副方向不一致）· `CVD/OI背离`→CVD 与 OI 背离（量价不一致）· `R:R不足(<1:2)`→盈亏比不足 1:2。最后 `注` 一行（VWAP/EMA/DO + 管线）。
->    渲染：`python scripts/card_reformat.py --style=tables data/auto_card_<SYM>_full.md`（tables 默认；`--style=panel` 仅备用）。
+>    渲染：`python scripts/card_reformat.py data/auto_card_<SYM>_full.md`（**2026-09-16 起 tables 就是默认**，`--style` 可省略；`--style=panel` 才走面板式）。
 > 坑一：**① 三态必须以「现价」为锚**（上方最近位＝收上，下方最近位＝失守），不要以「主观察位」为锚——
 >    否则会出现「收上 78,336」这种价位已在现价下方的荒谬触发。
 > 坑二：**区间位做触发要取边** —— 上方阻力取**上沿**、下方支撑取**下沿**（`78,489–78,542` → 触发写 `收上 78,542`），否则读者不知道该等哪个数。
@@ -76,7 +76,7 @@ R:R 分层是同一个事实、两处定性：`decision_loop` 记等待类 `rr_r
 
 出卡＝先跑原生卡、再机械重排；重排器只搬运原生卡已有的价位/角色/裁决，**不新增、不改写任何结论**。实跑要点：
 
-- 渲染：`python scripts/card_reformat.py --style=tables data/auto_card_<SYM>_full.md > outputs/card_<SYM>.md`（tables 已是默认；`--style=panel` 仅备用）。面板式会在 stderr 打 `[面板最大宽度 N 列]`，**N ≤ 44 才算过**，超了先压角色名/砍目标价再交付；表格版无宽度约束，但每表守 ≤3 列。
+- 渲染：`python scripts/card_reformat.py data/auto_card_<SYM>_full.md > outputs/card_<SYM>.md`（**tables 是默认**，无需传 `--style`；`--style=panel` 仅备用）。面板式会在 stderr 打 `[面板最大宽度 N 列]`，**N ≤ 44 才算过**，超了先压角色名/砍目标价再交付；表格版无宽度约束，但每表守 ≤3 列。
 - 三态（↓↑○）以**现价**为锚推导：上方最近位＝「收上」，下方最近位＝「失守」，两者之间＝不动手。近位不足时回退卡面「远端 …」行里已有的更远结构位补目标 —— 否则 ↓ 腿（或 ↑ 腿）整条消失，读者会误以为只有单边路径。
 - 区间位做**触发**要取边：上方阻力取**上沿**、下方支撑取**下沿**（`78,489–78,542` → `收上 78,542`）；区间位做**目标**时保留整段（`下看 77,757–77,781、77,624`）。
 - 目标价位**装不下就少放一个**（面板式按视觉宽度累加，超 44 即停），禁按字符硬切：硬切会把 `78,032` 切成 `7`、把角色名切成 `近端转撑 15m V` 这种半截内容，比少写一个目标更糟。
@@ -84,6 +84,7 @@ R:R 分层是同一个事实、两处定性：`decision_loop` 记等待类 `rr_r
 - **聊天回复里不要贴那张 50 行的附录/闸门表**：markdown 客户端不渲染 `<details>` 折叠，贴全文＝用户最反感的「东西太多」。聊天版压到 ≤6 行关键表（多源质量 4 行足够）＋ 指向 `data/auto_card_<SYM>_full.md` 的链接，写明全文在此。
 - 阶梯与三态里的数字必须来自原生卡原文；卡面值与现场实测冲突时（恐贪这类）**卡后加一行注明，不动卡面**。
 - 用户明确说「换个版式/要表格」才改版式，改完先给他看再固化；不要自己起新版式。
+- **重排层缺陷已于 2026-09-16 修复**（历史清单留档，出卡前不必再逐条目视）：① 首行/区间边/远端位统一走 `price_format.fmt_price`，外汇 4 位小数不再被打成 `1`；② 远端位先剔周期标记再取数，不再 `n > 100` 过滤；③ 「主观察」不再打 ⭐（⭐ 只在 GO-A）；④ GO-A 卡的 ④ 执行三件套会原样搬进重排卡，总结不再说「当前不给入场价」；⑤ 「怎么做」的主周期取 ① 体温行的 ⭐（黄金 5m），非加密不再要求「主副指标重新共振」；⑥ 首屏理由只读 FinalVerdict 主拦因，「本模块不适用」只进来源说明；⑦ 三态无相邻位时用现价带上下沿，缺目标写「暂无具名结构位」（不再印 `上沿`/`区间外`）。回归：`tests/test_card_presentation_20260916.py`。逐条代码锚点见 `references/card-three-layer-reformat.md`。
 - 模板与字段映射：仓库 `docs/分析卡模板-v7.md`（可复制）＋本技能 `templates/card-skeleton.md` v7；实现细节与边界（含 `_plain()` 映射表、两模式差异）见 `references/card-three-layer-reformat.md`。
 
 ## 发布前闸门（带外部归因的回复必跑）
@@ -111,11 +112,12 @@ python scripts/claim_lint.py --file outputs/draft_reply.md --asof <YYYY-MM-DD> \
 
 | 事实 | 说明 |
 |:--|:--|
-| 现货源优先级 | OANDA（与图表 OANDA:XAUUSD 同源）→ TwelveData（现货，实测差 ~0.1%） |
+| 现货源优先级 | **TwelveData（现役唯一）** → OANDA（备源；token 从未配置，长期跳过）。2026-09-16 起 TV 图表口径由 `OANDA:XAUUSD` 切到 `TVC:GOLD`，OANDA 不再具备「与图表同源」的优先理由 |
 | 2026-09-15 修的坑 | TwelveData **日线的 datetime 是纯日期**（`2026-09-15`），原实现无条件拼 `+00:00` → 解析恒失败 → **日线一根坏掉就把五周期整条链路打死** → XAU 每次退回切图（密钥其实是好的）。修后 `--probe` 应显示 ✅ |
 | 五周期 vs 多根历史 | `fetch_all()` 只返回每周期**最新一根**；要多根历史（如 30 日相关性）用 `fetch_daily_closes(count)` |
 | 限流 | TwelveData 免费档约 8 次/分；连续自检会打 429 → 源级熔断 15 分钟（`data/.xau_ohlcv_breaker.json`）。自检不要连刷 |
-| XAU 定时同步 | 2026-09-15 起**已暂停**（用户：「XAU 暂停，只要 BTC 的」）；XAU 分析时由 `auto_card.py` 按需单跑 `xau_tv_sync.py` |
+| XAU 定时同步 | 2026-09-16 起**已恢复**（cron `XAU TV现场同步` 113655ad34b5，`*/15`；此前 2026-09-15 曾暂停）|
+| TV 口径 | `TVC:GOLD`（TradingView Continuous 现货连续合约），单点定义在 `scripts/tv_symbols.py`，缓存仍写 `tv_live_XAUUSD.json`。**成交量按周期分化：5m 有 tick volume、日线为 0**；AggVol 在黄金上恒空（只覆盖加密交易所），量价由 Binance `XAUUSDT` 合约 CVD 承担 |
 | 相关性黄金腿 | 现货源可用走 `oanda_spot`/`twelvedata_spot`；否则退 Binance `XAUUSDT` **代理腿**并明标 + 与现货基准比偏差（>1% 降级不给仓位建议；基准文件停更 >60 分钟视为不可用） |
 
 ## “现在呢/看哪个位置”专用输出规则
@@ -180,7 +182,7 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 完整档不要手写数据采集序列 —— 跑仓库自带入口更准，但它有陷阱：
 
 - **`python scripts/auto_card.py --help` 不打印帮助，它会直接跑一张 quick 卡**（实测：打印「一键分析卡 · BTCUSDT · quick / 3步路由」并真去刷 TV）。想看用法读源码或直接用下一条命令。
-- 完整（L3）调用：`HANGQING_NO_SEND=1 TANGXI_ENABLE_AUTOMATED_TG=0 python scripts/auto_card.py <SYM> --mode-auto --message "分析 <SYM>"`。回执看第 3 行的 `档位=full` 与 `管线路由：14步`（加密，2026-09 起 cg_pro 退役后由 15 步降为 14 步；步数按 `pipeline_router.route_pipeline(sym,'full')` 现算，别背旧数）；不带 `--mode-auto --message` 就是静默 quick。
+- 完整（L3）调用：`HANGQING_NO_SEND=1 TANGXI_ENABLE_AUTOMATED_TG=0 python scripts/auto_card.py <SYM> --mode-auto --message "分析 <SYM>"`。回执看第 3 行的 `档位=full` 与 `管线路由：14步`（加密，2026-09 起 cg_pro 退役后由 15 步降为 14 步；步数按 `pipeline_router.route_pipeline(sym,'full')` 现算，别背旧数）。**full 档实测步数**：加密 14 · 贵金属 8 · 外汇 7 · 股票 8 · 期货/指数 6（期权=底层+`options_chain`）；`quick` 与 `standard` 目前同长（加密 3、其余 2）—— 别把 two 档差异说成步数差异。不带 `--mode-auto --message` 就是静默 quick。
 - 耗时 2-3 分钟，**后台跑 + wait**，不要前台阻塞；卡落在 `data/auto_card_<SYM>_full.md`，尾部自带管线完成度审计（直接用它写“完成 N/M”）。
 - **轻量（L1）档的产物文件名不同：`data/auto_card_<SYM>.md`（没有 `_full` 后缀）**。命令 `python scripts/auto_card.py <SYM> --quick --message "现在呢"`（路由 `tv → binance → card`，约 70s）。踩过的坑：跑完 quick 后去看 `data/auto_card_<SYM>_full.md` 的 mtime，会把**上一轮完整卡**当成本轮产物（mtime 停在几小时前，且 "结构：" 行还是旧价）——先 `ls -t data/auto_card_<SYM>*.md` 看两个候选再读。
 - **轻量档的降级要写成「档位未刷新」而不是「源失败」**：轻量卡里 `宏观/事件 not_run · X情绪 not_run · 跨资产相关性 not_run` 属该档不跑那几步（不是采集失败），③ 覆盖 `3.0`、`主导 76% ⚠` 是只聚合 3 源所致，`TV五周期 live` 落在「仅展示/辅助」列也只是档位未入裁决；交付时说明「轻量档：宏观/X情绪/相关性 not_run，体温与高周期为继承」，不要把 not_run 报成 unavailable，也不要少报这一条。

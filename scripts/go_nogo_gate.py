@@ -9,6 +9,16 @@ v9.6 增加双指标共振闸门后为8问。
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 import math
+import sys
+from pathlib import Path
+
+# R:R 显示精度：与卡面共用同一个实现（临界值 2 位小数，避免「不足1:2」与「1:2.0」
+# 同时出现在一张卡上）。2026-09-16。
+try:
+    from price_format import fmt_rr
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from price_format import fmt_rr
 
 TZ = timezone(timedelta(hours=8))
 
@@ -190,13 +200,13 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
     rr_a = _finite_rr(raw_rr)
     rr_b = _finite_rr(meta.get("rr_b") if "rr_b" in meta else meta.get("rr2"))
     if rr_a > 0 and rr_a >= 2.0:
-        gates["rr_ratio"] = {"status": "green", "reason": f"主线R:R 1:{rr_a:.1f}·≥1:2"}
+        gates["rr_ratio"] = {"status": "green", "reason": f"主线R:R {fmt_rr(rr_a)}·≥1:2"}
     elif rr_a > 0:
-        gates["rr_ratio"] = {"status": "red", "reason": f"{GATE_RULES['rr_ratio']['red_light']} 当前主线1:{rr_a:.1f}"}
+        gates["rr_ratio"] = {"status": "red", "reason": f"{GATE_RULES['rr_ratio']['red_light']} 当前主线{fmt_rr(rr_a)}"}
         red_gates.append("rr_ratio")
         go = False
     else:
-        _fallback_note = f"（反侧参考1:{rr_b:.1f}·不得用作放行依据）" if rr_b > 0 else ""
+        _fallback_note = f"（反侧参考{fmt_rr(rr_b)}·不得用作放行依据）" if rr_b > 0 else ""
         gates["rr_ratio"] = {"status": "red", "reason": f"主推方向R:R缺失·禁止以反侧兜底{_fallback_note}"}
         red_gates.append("rr_ratio")
         go = False
