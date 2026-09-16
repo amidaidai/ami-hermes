@@ -35,6 +35,8 @@ TV_LIVE_PRE_SYNC_MAX_AGE_MIN = TV_LIVE_READ_MAX_AGE_MIN - TV_LIVE_PRE_SYNC_MARGI
 DATA = ROOT / "data"
 sys.path.insert(0, str(ROOT / "scripts"))
 from atomic_json import append_text_line, atomic_write_json, atomic_write_text
+# 价格/R:R 显示精度唯一实现（与 render_v96 / card_reformat 同源，2026-09-16）
+from price_format import fmt_price, fmt_rr
 
 # v7.5: 中文本地化
 from zh_locale import T, CARD_LABELS, KILL_ZONE_ZH, DIR_ZH, STRATEGY_ZH, SYMBOL_ZH, asset_name
@@ -318,15 +320,12 @@ def render_machine_fields(meta: dict) -> str:
 
 
 def _fmt_price(v) -> str:
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return "`—`"
-    if f >= 1000:
-        return f"`{f:,.0f}`"
-    if f >= 1:
-        return f"`{f:,.2f}`"
-    return f"`{f:.4f}`"
+    """价格显示（反引号包裹）—— 精度走 price_format 单点。
+
+    2026-09-16：原实现在 [1,10) 区间用 2 位小数，与 render_v96 的 4 位小数口径
+    不一致（EURUSD 1.1638 会印成 1.16）。同一条链路上的第三份格式化实现，一并收口。
+    """
+    return f"`{fmt_price(v)}`"
 
 
 def _market_one_liner(merged: dict, regime_name: str | None = None) -> str:
@@ -6177,11 +6176,12 @@ def _compact_card(symbol: str, price, status: str, direction: str, model_id: str
     stop_a, tp_a, rr_a = st_a["stop"], st_a["target"], st_a["rr"]
     stop_b, tp_b, rr_b = st_b["stop"], st_b["target"], st_b["rr"]
     
+    from price_format import fmt_rr
     rr_a_note = "" if rr_a >= 2.0 else " ⚠R:R不足"
     rr_b_note = "" if rr_b >= 2.0 else " ⚠R:R不足"
     
-    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}{rr_a_note}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R 1:{rr_a:.1f}{rr_a_note}"
-    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}{rr_b_note}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R 1:{rr_b:.1f}{rr_b_note}"
+    plan_a = f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R {fmt_rr(rr_a)}{rr_a_note}" if bearish else f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_a)} 止盈{_fmt_price(tp_a)} R:R {fmt_rr(rr_a)}{rr_a_note}"
+    plan_b = f"→ 守{nl_fmt}：多 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R {fmt_rr(rr_b)}{rr_b_note}" if bearish else f"→ 破{nl_fmt}：空 止损{_fmt_price(stop_b)} 止盈{_fmt_price(tp_b)} R:R {fmt_rr(rr_b)}{rr_b_note}"
     scale_line = "→ 到了+1.5R先出一半 · 第4根15m无利润减半"
     
     # 社区共识标签

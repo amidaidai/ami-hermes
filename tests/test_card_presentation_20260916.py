@@ -388,6 +388,14 @@ def test_rr_gate_boundary_never_reads_as_pass_or_fail_simultaneously():
     assert "1:2.00" in at["gates"]["rr_ratio"]["reason"]
 
 
+def test_auto_card_price_formatter_delegates_to_single_source():
+    """同一条链路上的第三份格式化实现（auto_card._fmt_price）也必须收口。"""
+    import auto_card
+    assert auto_card._fmt_price(1.16382) == "`1.1638`"
+    assert auto_card._fmt_price(77310.4) == "`77,310`"
+    assert auto_card._fmt_price(None) == "`—`"
+
+
 def test_reformat_reuses_render_v96_precision():
     """重排层不得自写 :,.0f —— 只允许调用共享精度函数（注释/文档串不算代码）。"""
     import re as _re
