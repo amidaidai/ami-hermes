@@ -41,6 +41,9 @@ tags: [audit, runtime, cleanup, script-management, tangxi]
 **含义（对审计/修复类任务）**：
 
 - **不要摆选项让用户选**。发现多个问题就一次全部修完，自选最优方案，并以推荐口径直接给出。
+  **「能力接入」也算在内**（新增数据源/MCP、新增采集器与 cron、接进渲染与路由、回写合同）——
+  它是系统改进的一部分，不是新需求；不要把方案做完了还把最后一步拨回给用户确认，
+  否则只是把同一个动作拆成两轮。
 - **不要中途停下来问“要不要我继续”**。把接口 + 策略 + 文档 + 技能 + 测试 + 提交一次做完。
 - **可以自主提交**（commit），但**不要 push**（除非明确要求）。提交时只捆绑本次相关文件，
   不把工作区里其它未完成改动一起扫进去。
@@ -136,6 +139,73 @@ grep -n "未采到\|not_run" scripts/auto_card.py
 ```
 
 本轮四处（恐慌贪婪 / CoinGecko Top10 / Trending / 宏观）已统一，管线仍 3/3。
+
+### ⚠️ 通用审计项：测试写生产文件（2026-09-16 实锤 · XAU「假成功」根因）
+
+**症状**：某健康检查读的状态文件显示「刚刚成功」，但对应产物 N 小时未更新，
+现场留痕（`data/xau_tv_sync_runs.jsonl`）里也没有对应轮次。
+实测案例：`data/xau_tv_sync_status.json` = `status=ok · last_success_at=now`，
+而 `xau_tv_state.json` / `tv_live_XAUUSD.json` 停在 19.6h 前。
+**先别找外部进程或第二份仓库副本 —— 先怀疑测试。**
+
+**复现法（决定性，一次坐实）**：
+
+```bash
+# 1) 记基准 mtime（纳秒级）
+stat -c '%y %n' data/<可疑文件>
+# 2) 跑一次全量测试
+python -m pytest tests/ -q
+# 3) 再比 mtime：变了 = 测试写的（不是 cron、不是别的进程）
+stat -c '%y %n' data/<可疑文件>
+```
+
+变了的再逐文件定位：对每个 `grep -rl "<模块名>" tests/`（排除 `__pycache__`）单独跑一次并比对 mtime。
+本轮 30 秒内即锁定 `tests/test_xau_tv_sync_degradation.py`。
+
+**常见漏点：隔离了三处，漏第四处**
+
+| 文件 | 已隔离 | 漏掉的那条（= 被污染的落盘） |
+|---|---|---|
+| `test_xau_tv_sync_degradation.py` | `AUDIT_MARKER_FILE` / `STAGED_OUT` / `OUT` | **`STATUS_OUT`** |
+| `test_watchdog_ratelimit.py` 等 | `GUARD_FILE` / `WATCHDOG_STATE_FILE` / `SYSTEM_EVENT_FILE` / `LOCK_FILE` | **`LOG_FILE`** |
+
+→ 铁律：**按落盘目标逐条数，不按文件数。** 同一文件的 fixture 修了三处路径，第四处仍会漏，
+而漏掉的那一处往往恰好是健康检查读的那份。
+
+**危害**：`audit_preflight` 与 `data_freshness_watchdog` 都按 `last_success_at` 判「同步器是否在跑」，
+假成功把停摆糊成绿色；`data/watchdog.log` 里被测试塞进的「重启速率限制…已达上限」行
+会长得像真事故（**本轮排查时就被这批行误导过一轮**）。
+
+**修复两层（缺一不可）**
+1. 用例把漏掉的路径 monkeypatch 到 `tmp_path`（立即止血）；
+2. 类级守卫防复发：`xau_tv_sync._blocked_live_write(path)` / `watchdog._blocked_live_log(path)`
+   —— `PYTEST_CURRENT_TEST` 生效且目标落在本仓库 `data/` 下 → 拒绝落盘（tmp 放行、非测试环境放行），
+   被拦时不落盘但**保持返回契约**。回归用例：`tests/test_live_state_write_isolation.py`（5 例）。
+
+**健康检查铁律：不要对某个字段无条件说 OK**
+`status=ok` 而 `checked_at` 在 19.9h 前，旧 `audit_preflight` 照样打印
+「XAU同步: OK checked=19.9h前」—— 这正是假成功能骗过预检的原因。
+现按 1h 门降级措辞（`audit_preflight.xau_sync_status_line`），超窗只降级、不判 red
+（生产者可能是被有意暂停，真断供由产物新鲜度那条判）。
+
+**镜像情形：测试**读**生产缓存 → 断言随行情飘**
+
+上面是「测试写生产文件」；反方向同样是隔离缺口。实测：用例断言「NO-GO 卡面不含备选价
+`99`」，但它渲染的卡面会去读真实缓存（清算带/强平流），某轮真实数据里恰好出现 `下74,899`
+→ 被一个与本用例无关的数字打红，下一轮又自己变绿。
+
+**判据：断言的对象是「本用例自己构造的输入」，还是「生产环境的当前内容」？** 后者一定会在某个
+时刻假红。修法是 monkeypatch 掉那个外部读取点（`monkeypatch.setattr(render_v96,
+"_liquidation_line", lambda symbol: "")`），**不是**把断言放宽 —— 放宽等于丢掉这条用例要守的东西。
+
+**测试红了先排归属，再排代码**：① 这个文件本轮被我改过吗（`git diff --numstat -- <file>`
+看改动量是否只有自己那一处，并对照测试总数是否被别的作业改过）→ ② 它是读生产状态吗
+→ ③ 才是代码真的坏了。不属于自己的红**不要顺手改**，按上文「审计红了先证明归属」交接。
+
+**附带教训：跑全量测试会与 TV 依赖 cron 抢共享图表**
+本轮 `BTC TV五周期与多源快照续航` 在测试并发的 10:28 单次失败（`TV五周期过期 age=1055s`、
+`BTC关键位采集未发布新快照`），下一轮 10:51 自行恢复 `ok`。
+判据：**看下一轮是否自行恢复** —— 恢复即瞬时抢图，不记系统故障，也不要机械改阈值。
 
 ### 交付约定：交付物是“文件”时，最终消息必须直接给可点链接
 
@@ -417,6 +487,34 @@ python scripts/data_freshness_watchdog.py
    后者才是「监控还活着吗」的直接证据，也是这类事故唯一能提前发现的位置。
 3. **显式记录不监控的源**（`PAUSED_SOURCES` 字典 + 原因），让「为什么没报」有据可查，
    而不是让它们继续制造噪声。恢复某能力时，先恢复 cron，再把文件加回清单。
+
+**暂停/恢复一个数据生产者 = 一次多点变更。** 漏掉任何一点都会留下静默盲区或假告警，
+两侧各有一份固定清单，顺序不能反：
+
+| 步 | 动作 | 漏掉的后果 |
+|---|---|---|
+| 1 | `hermes cron resume <id>`（暂停则 `hermes cron pause <id>`） | — |
+| 2 | `data_freshness_watchdog.py`：把该产出从 `PAUSED_SOURCES` **移出**、加回 `WATCH_FILES`（暂停时反向：移入并写明原因） | 恢复后仍无人监控 = 换了姿势的盲区；暂停后天天假告警 = 报警疲劳 |
+| 3 | `docs/系统总览.md` 的 cron 状态表 + 涉及该品种/口径的行 | 文档写「已暂停」，照做的人以为链路没在跑 |
+| 4 | **所有写了「已暂停/已退役」的技能**：`grep -rln "暂停\|已退役" ~/AppData/Local/hermes/skills/trading/` | 下次审计拿旧知识把恢复后的正常状态报成异常 |
+
+**阈值不要自己拍 —— 用 `git log -S` 找回被删掉的原定义：**
+
+```bash
+git log -S "<文件名>.json" --oneline -- scripts/data_freshness_watchdog.py
+git log -S "<文件名>.json" -p -- scripts/data_freshness_watchdog.py | grep -E "threshold|payload_path"
+```
+
+原条目里常带 `payload_path`（如 `("last_success_at",)`）这类**猜不出来的口径** ——
+自己重写一个「差不多」的条目会盯错字段。恢复后跑一次看门狗，验收标准是
+`healthy: true` 且该条目 `identity_valid: true`。
+
+**验收必须看到生产者的下一轮自动运行，不是手动跑通一次。** `cron resume` 只改状态；
+等到下一个调度点，读生产者自己的审计留痕（`data/*_runs.jsonl` 之类）确认真的
+`enter → published`。**手动跑通 + 状态改了 ≠ 已恢复。**
+
+**方向也要问对**：暂停常是用户有意决定（省资源/只要 BTC）。恢复前确认这不是
+用户有意的暂停；同理**不要**为了追「全绿」去拉起用户有意停掉的生产者。
 4. 交付标准：**健康时零输出**。报一条就是真事故。
 
 本次实测：16 条 → 0 条；cron 从 auto-disabled 恢复 scheduled。
@@ -865,6 +963,28 @@ open(p, 'w', encoding='utf-8', newline='\r\n').write(s)
 ```
 - **curl 单次 000 ≠ API 挂**（2026-09-12 实测）— 同一毫秒内 fapi/spot ping 都回 `000`，改用 python requests 立即 200。网络栈瞬时抖动会让 curl 直接失败而不给 HTTP 码。**判据：报「API 不可达」前必须换第二通道/重测一次**，单次 000 写进审计结论就是假 P0。
 - **data_gatherer.py 改造陷阱（2026-08-29 实测）** — 直接 `#` 整行注释会报 `IndentationError: unexpected indent`，因为下一行是 `headers={...}` 延续。正确做法：**找括号配平的整段赋值，替换为 `<var> = None` 单行**，保留缩进不变。
+
+## 新增 cron 的装配纪律（数据源/报告类 job 通用）
+
+```bash
+hermes cron create "9,29,49 * * * *" --name "<名称>" --script "<脚本.py>" \
+  --no-agent --deliver local --workdir "D:/Hermes agent"
+hermes cron edit <id> --schedule "..."    # 改频率
+hermes cron run <id>                      # 立刻跑一次（下个 tick 执行）
+hermes cron runs <id> / hermes cron incidents
+```
+
+- `--script` 写 **workdir/scripts 下的裸文件名**（可含子目录，如 `maintenance/x.py`）。
+  本机 `~/.hermes/scripts/` 与仓库 `scripts/` 是**同一个目录**（inode 相同），脚本放仓库里即生效。
+- **不要与 TV 租约敏感的 job 同分钟**：`BTC TV五周期与多源快照续航` 占 `7,27,47`、清算双源占 `*/10`，
+  同分钟并发会拉紧 TV 刷新任务的时限（表现为对方那一轮 `error`）。新 job 挑空档（如 `9,29,49`）。
+  与上文「跑全量测试会与 TV 依赖 cron 抢共享图表」是同一个约束的两个来源。
+- **单源降级 ≠ 故障**：部分源失败仍应 exit 0（降级明细进 stdout / 产物字段），
+  只有**全部**不可用才 exit 1；否则单源抖动被记成 incident，掉进上文「监控器报警疲劳」的坑。
+- **验收三层，缺一层不算接好**：job 落盘（`hermes cron list` 有它且 `enabled`）→
+  `hermes cron run <id>` 真跑一次 → **产物时间戳 / 状态信封是刚写的**。
+  只看 list 显 `ok` 不算验过 —— no_agent 脚本同样可能静默空转。
+- 调度类产出同样适用本技能的「先看下一轮是否自行恢复」判据，不要因单轮 error 就改阈值。
 
 ## cron auto-disabled 自相矛盾修复模式（2026-08-31 实测 P0 隐藏根因）
 

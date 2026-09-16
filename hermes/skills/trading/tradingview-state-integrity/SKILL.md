@@ -35,7 +35,7 @@ category: trading
 1. 调用 `chart_get_state` 或 `tv_health_check`。
 2. 比较实际 symbol 与目标品种；不一致时调用 `chart_set_symbol`。
 3. 设置目标主周期：BTC/加密15m（TV参数 `15`），XAU黄金5m（TV参数 `5`）。
-4. 品种切换后再设置周期，等待图表和指标刷新；快速状态通常约1–2秒，SVP/CVD等指标约15–30秒。
+4. 品种切换后再设置周期，等待图表和指标刷新；`chart_set_symbol`/`chart_set_timeframe` 返回 `chart_ready: false` 是**异步加载中的正常中间态**，不代表失败，按有界重试读回确认即可；快速状态通常约1–2秒，SVP/CVD等指标约15–30秒。
 5. 再次读取 `chart_get_state`/`tv_health_check`，确认 symbol、resolution、studies 全部正确。
 6. **校验主→副指标接线**（见下文「指标接线也是图表状态」）：读主、副两个面板，
    主「协同」行的 S-code 必须等于副「信号」行的 S-code。不一致就先重接再继续，
@@ -73,9 +73,11 @@ indicator_set_inputs(
 
 ## 报价与指标污染防护
 
-- `quote_get` 即使传入目标 symbol，也必须检查返回对象的 `symbol`、`description`、`exchange`、`type`。
+- `quote_get` 的 `symbol` 参数**会被忽略**（MCP 工具与 CLI 同样表现：图在 BTC 上时传 `symbol="TVC:GOLD"` 仍返回比特币永续报价）。想读某个品种的报价**只能先切图**，不存在「不切图取任意品种报价」的捷径；拿到后仍必须检查返回对象的 `symbol`、`description`、`exchange`、`type`。
 - 例如目标是 BTC，但返回 `description: Gold`、`exchange: OANDA` 或 `type: commodity`，应丢弃该报价并重新切图/重取，不能使用。
-- **采集器报价身份必须跟 `expect_symbol` 走**（2026-09-12）：不能写死 `BINANCE:BTCUSDT.P` + `exchange=BINANCE` + `type=swap`。写死后黄金报价被拒、BTC 报价反而能给黄金授权。XAU 要 OANDA/cfd 量级，禁止拉 Binance 合约交叉；XAU 只写 `tv_live_XAUUSD.json`，不得覆盖通用 `tv_live.json`。
+- **采集器报价身份必须跟 `expect_symbol` 走**：不能写死 `BINANCE:BTCUSDT.P` + `exchange=BINANCE` + `type=swap`。写死后黄金报价被拒、BTC 报价反而能给黄金授权。**XAU 现口径 = `TVC:GOLD`**（`exchange=TVC` / `type=commodity` / description `GOLD (US$/OZ)`），禁止拉 Binance 合约交叉；XAU 只写 `tv_live_XAUUSD.json`，不得覆盖通用 `tv_live.json`。
+- **黄金上 AggVol 全 0 是设计使然、不是空读**：`TVC:GOLD` 是合成连续合约，AggVol 的 `Coverage Exchanges`/`Composite`/`OI Breadth` 全 0、`Stale Venue Count=5`（AggVol 聚合的是加密交易所，现货黄金不在其覆盖内）。**不要按上文空读重试协议反复重读，也不要判成抢图或指标掉图**。黄金副驾驶位置由 `Binance XAUUSDT` 合约 CVD 承担（独立键、明标、仅展示）。
+- **`TVC:GOLD` 的成交量按周期分化（2026-09-16 实测）**：5m 等低周期有 tick volume（实测 5m `Volume 10708 / Volume MA 10251`），**日线为 0**。所以「黄金无量」只对日线成立；量能判断优先用低周期，别把日线的 0 当成空读故障去重试。
 - TV与Binance属于不同来源、不同时间戳，正常小幅价差不否决；品种错配、资产类型不符或数量级明显不符则硬否决。
 - Pine action grid 的结论只能在 symbol/timeframe 已确认后使用；共享图表被其他任务切换时，旧表格可能格式正确但属于另一品种。
 
@@ -156,6 +158,48 @@ return False
 
 验收必测五个场景：正常路径 / 残留修复 / 连续两次残留不漂移 /
 用户真在看采集目标时不干扰 / 图表状态读不到时不误改。
+
+### ⚠️ 换 TV 品种口径 = 单点映射 + 缓存键稳定（2026-09-16 实操）
+
+把 XAU 从 `OANDA:XAUUSD` 切到 `TVC:GOLD` 时踩到三类点，漏一个就静默坏：
+
+1. **缓存键会跟着符号漂**：`tv_live_{符号尾段}.json` 规则下 `TVC:GOLD` → `tv_live_GOLD.json`，
+   而读取侧仍找 `tv_live_XAUUSD.json` → 读写错位（写入成功、读取永远空）。
+   做法：单点映射模块把黄金所有写法归一到固定缓存键 `XAUUSD`，**缓存文件名不随口径变**。
+2. **契约归一必须同时认新旧写法**：五周期契约的 `_canonical_symbol` 只 strip 交易所前缀时，
+   `GOLD` 与 `XAUUSD` 不匹配 → 换口径当刻五周期整片判「品种不匹配」不可用。
+   做法：归一函数把 `GOLD`/`XAUUSD` 收敛成同一身份；**别把 Binance 合约 `XAUUSDT` 并进来**（合约 ≠ 现货）。
+3. **口径散落点远多于直觉**：`SYMBOL` 常量、evidence `IDENTITIES`、截图符号映射、live dump 别名、
+   缓存路径、身份归一、卡面显示标签、三源共识文档。改前先 grep 建清单，改后跑**全量**回归——
+   测试里的 fixture 也要跟着换，否则测试用旧口径会「假绿」。
+
+单点模块形如 `scripts/tv_symbols.py`（`GOLD_TV_SYMBOL` / `tv_symbol()` / `cache_key_of()` / `norm_identity()`），
+其余文件只引用它，以后换口径只动一行。
+
+**执行序（先建清单再改，不要边改边发现）**：
+
+```bash
+# 旧口径出现过的每一处，含测试 fixture 与文档
+grep -rn "<旧符号>" --include=*.py --include=*.md --include=*.json scripts/ tests/ docs/
+```
+
+| 命中类型 | 处置 |
+|---|---|
+| 常量 / 映射表 | 改为引用单点模块 |
+| 显示标签、裁决文案 | 改成**中性措辞**（写「非现货」而不是「非某交易所」）——否则换个源就要再改一轮 |
+| 历史缓存、旧数据兼容分支 | **保留**，不要删（旧文件还在盘上，删了就报错） |
+
+**换完必须验的四件事**（少一件就等于没做）：
+
+| 验收 | 判据 |
+|---|---|
+| 缓存键没漂 | 缓存目录里**不得出现**新键名的文件（`ls data/tv_live_*.json`） |
+| 新旧写法互认 | 每个别名各自跑一遍路径函数，必须返回**同一个**文件名 |
+| 端到端发布一次 | 手动跑一次生产者，读它自己的审计留痕确认 `enter → published`，并核产物 `symbol` 已是新口径 |
+| 全量回归 | 测试 fixture 里的旧口径**也要换** —— 只换代码不换 fixture 会「假绿」 |
+
+**口径改动落地 ≠ 已生效**：生产者若处于暂停状态，改动只躺在代码里 —— 别声称已生效，
+恢复调度后再看它真跑一轮。
 
 ### ⚠️ 共享缓存被别的品种整份覆盖
 
@@ -244,7 +288,7 @@ grep -rln 'set_timeframe' scripts/ monitor/   # 谁在切图；再核对这些�
 | 在看 5m 的副指标 | 读到的其实是 1D 的表 | 表内容格式正确但有**锚定词**：`月·单所1m…`=1D/4h 层，`日·单所1m…`=15m 层，`本锚` 指当前锚定周期 |
 | 报 4h 就是 4h | 静默读到 5m | `(period.to - period.from) / (bar_count - 1)` 应为 14400s，实为 300s |
 
-**周期写法**：一律用 `"1D"` / `"240"` / `"60"` / `"15"` / `"5"`。带单位的 `"4h"` / `"5m"` 会出现「返回 success 但周期没切过去」；`"5m"` 另会被误解释成异常高周期（OHLCV 只剩极少根、标签蹦出跨年月日期）。`studies[].resolution` 字段会滞后一两拍，同样不能当判据。
+**周期写法**：一律用 `"1D"` / `"240"` / `"60"` / `"15"` / `"5"`。带单位的 `"4h"` / `"5m"` 会出现「返回 success 但周期没切过去」；`"5m"` 另会被误解释成异常高周期（OHLCV 只剩极少根、标签蹦出跨年月日期）。**裸 `"D"` 同样静默空转**（返回 `success:true` / `chart_ready:true`，紧接着 `chart_get_state` 的 `resolution` 仍是上一个周期）——日线必须写全 `"1D"`。仓库里形如 `[("1D", "D")]` 的「标签→TV参数」映射若被直接喂进 `chart_set_timeframe`，日线这一层会静默失败：喂进去前把参数换成 `"1D"`，别让「显示名」当「命令参数」用。`studies[].resolution` 字段会滞后一两拍，同样不能当判据。
 
 **协议**：切周期 → `chart_get_state` 复核 `resolution` → 不一致就重切一次再复核 → **再读 OHLCV 校验 K 线间距**（容差 5%：1D 86400 / 4h 14400 / 1h 3600 / 15m 900 / 5m 300）→ 两项都过才读表。`study_count: 0` 一律按争用处理并重读。
 

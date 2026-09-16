@@ -806,6 +806,22 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 15. **常驻门限与卡时门限必须分家（P1 修复，2026-09-14）** — 5min 门限挂在 15min 节奇上必然周期性假红（每周期约 2/3 时间，假红掩盖真故障）。修法：常驻=cadence-aware（`XAU_LIVE_MAX_AGE_CADENCE_MIN = 节奇 + 余量 = 17`），卡时=5min 由 `auto_card.TV_LIVE_READ_MAX_AGE_MIN` 显式传入（超窗即现场刷新）。两层都要测试钉住：中段 pair 过常驻、拒卡时；超一个节奇仍必须 FAIL（防「永不报警」）。
 16. **新增生产端文件写入必须同步隔离测试** — `xau_tv_sync._audit_marker` 上线后，lease/main 用例会往 `data/xau_tv_sync_runs.jsonl` 追加生产取证行（实测污染）；在根 `conftest.py` 加 autouse fixture 把该路径改写到 tmp_path。原则：**取证/日志类新写入点，上线同时加测试隔离**。
 
+## ⚠️ 2026-09-16 新增三类（口径单点遗留 / 自持标记只落地一半 / 静默零值与静默轮次）
+
+1. **换口径后必须枚举全部身份归一实现（P0）** — 黄金 TV 口径切 `TVC:GOLD` 时新增了单点 `tv_symbols.norm_identity`，但**两处自带副本没跟上**：`auto_card._norm_symbol_for_cache`（把 TVC:GOLD 归成 `GOLD`）与 `source_health.canonical_symbol`。后果不是「报个警」而是场景级污染：XAU 卡门2「TV现场确认」恒红 → 假硬闸门 `tv_live` 把裁决推成 NO-GO；管线审计判「TV主周期可用=False」而同卡 ① 表照常显示 TV 现场（卡内自相矛盾）；`audit_preflight` 退出码恒 1，预检失去信号价值。
+   - **审计检查**：`grep -rn "def _norm_symbol\|def canonical_symbol\|def symbol_matches\|def norm_identity" scripts/` → 逐处确认**委托单点**（`from tv_symbols import norm_identity`），自带 strip-prefix 副本 = P0；再用真实缓存跑一遍卡面判定器：`auto_card._tv_cache_status(json.load(tv_live_XAUUSD.json), "XAUUSD", 13)`，`usable` 必须 True。
+   - **证据格式**：`symbol_matches('XAUUSD','TVC:GOLD') is False` vs `norm_identity('TVC:GOLD') == 'XAUUSD'` —— 两条并存即命中。
+   - 回归：`tests/test_symbol_identity_single_point.py`（黄金全写法 × 五个归一实现必须都给 XAUUSD；Binance 合约 XAUUSDT 不并入）。
+2. **「自持标记」类机制必须双向核验（P1）** — 2026-09-14 的「分析自有采集放行」(`TANGXI_ANALYSIS_OWNER=1`) 只在 `keylevels_collect` 落地，`xau_tv_sync` 没跟上：auto_card 声明自持租约后 spawn 的前置同步照样 `defer:cache_usable` → 读侧 5 分钟窗口拒绝 6 分钟的缓存 → 门2 恒红。判据：`grep -rn "<标记名>" scripts/` 必须同时看到**生产者（谁置 env）**与**消费者（谁读 env）**；只有一侧 = 机制半成品。修法：标记常量与本进程判定收敛到 `tv_data_bridge.ANALYSIS_OWNER_ENV/is_analysis_owner`，后台脚本只许「读」，不许自称。
+3. **静默零值：读侧新鲜度必须用「事件时间」而非「抓取时间」（P1）** — 实测 OKX BTC 逐笔腿停更 162 分钟，但缓存文件 `fetched_at` 每 10 分钟被刷、`status=live`，卡面照印「清算流OKX 近1h 多$0/空$0」——会被读成「市场无强平」。**审计检查**：对事件型缓存另算 `max(event_ts)` 与现在的差，与 `fetched_at` 的差对比；只有前者超窗 = 上游停更。修法：近 1h 为 0 且最新事件 > 60 分 → 追加「⚠最新事件N分前(疑似停更)」（只加标注，不动数据）。
+4. **静默轮次的终态取证** — `xau_tv_sync` 出现「有 `enter` 标记、无 `published`/`defer:*`/`error`、cron 记 exit 0、产物未更新」的轮次（13:15:50 实测一例）。只有入口标记时无法区分「走了哪条 return」与「进程被外部终止」。修法：`main()` 包一层（原逻辑改名 `_sync_main()`），正常退出写 `exit`+rc，`BaseException` 写 `exit:exception` 后原样抛 —— **判据变成「有 enter、无 exit」= 异常终止**。
+5. **新数据源接入的收尾清单（缺一项就出「同一张卡自相矛盾」）** — ① cron 注册 ② 工件落盘且五态信封 ③ 卡面行 ④ **双数据根审计**（`auto_card` 的 cron_read 只按 `ROOT/data` 拼路径，Hermes 运行态工件会被永久判缺失）⑤ 新鲜度看门狗注册 ⑥ 合同文档。实测 ④⑤ 都漏了：卡面 ③ 表「外部验证」有数、完成度表却写 `coinlobster(not_run)`。
+6. **`_meta` 键名漂移会印出可见占位符** — 生产者写 `_meta["source"]`、消费端读 `_meta["_source"]` → 卡面恒印「来源?」（BTC/XAU 都复现）。审计时对卡面出现的 `?`/`—` 占位符做一次反查，别当排版问题放过。
+
+完整证据链与命令原始输出：`references/audit-caliber-single-point-and-silent-rounds-20260916.md`。
+7. **卡面「空信息行」的真凶常在契约层兜底 —— 改前先 trace 谁真正生成这一行** — 实测：XAU ① 体温条印「🔵TV现场·D」（信息量为零），第一反应改 `auto_card` 的 XAU klines 赋值**没生效**——真正渲染的是 `tv_five_tf_contract._normalise_record` 的 `or f"TV现场·{tf}"` 兜底。教训：改文案前先用「同字段的其它可能来源」反查（`grep -rn "<同文案片段>"`），并在修完后**跑一次真卡看那一行**；只看代码不跑卡 = 假修复。同时注意别因此新增第二份实现：位置标签收敛为 `tv_five_tf_contract.position_label` 单点，调用方只许 import。
+8. **「观测即判据」：把等样本的静默现象变成可判定事实** — 无法立刻定根因的静默轮次，不要只留“等下一例”的口头结论：给入口包装终态标记（`exit`/`exit:exception`）+ 写一个 `last_round_unterminated()`（最近一轮有 enter、无终态），再在预检里增一行。**只报不判 red**（观测本身不得把预检打成红，否则上线即永久 FAIL）。判据：`有 enter、无 exit` = 异常终止。
+
 ## 参考文件
 
 - 技能主文档：`trading/tangxi-system-audit/SKILL.md`（完整审计Step 0-12）

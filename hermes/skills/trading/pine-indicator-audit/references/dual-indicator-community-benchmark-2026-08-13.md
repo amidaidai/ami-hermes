@@ -102,3 +102,27 @@ Pine 社区已知限制（Reddit r/pinescript 有 5000 行脚本被 550 scopes �
 | MCP 总线 | 26 个 data_window plot 全量导出（OI/Flow/State Pack），行动格只是摘要 ✓ |
 
 关键论证：CVD 与聚合量同源合并是"诚实"，不是"砍信息"——若未来有人建议把 CVD 行拆回独立行，用"同源假汇合"反驳（两个派生自同一 volume 的维度并列=伪独立确认）。
+
+## 2026 社区 Top SMC 基准脚本对比表（"我有什么 / 缺什么"）
+
+| 脚本 | URL 关键词 | 差异化卖点 | 当前主指标缺口 |
+|---|---|---|---|
+| Quant SMC Pro [JOAT] | `ugOBLSa3-Quant-SMC-Pro-JOAT` | 自适应 ATR pivot + iFVG + Mitigation Rule/Tag + EQL + AVWAP PD + Confluence Score 0-100 | 真缺 iFVG / EQL / Adaptive Pivot；**MB标签不构成缺口**：当前 OB 本来只在 BOS/CHoCH break 后创建，重标 MB 几乎无区分度 |
+| Unicorn ICT Signals [TradingFinder] | `9uGRHvXH-Unicorn-ICT-Signals` | Breaker Block + FVG Zones + Mitigation Level FVG | 已有 BRK 变色；只需增强 mitigation 深度/close-through 语义，不再加同义标签 |
+| ICT Sessions + SMT Divergence | `rGyFTcVW-ICT-SMC-Sessions-SMT-Divergence` | RTH Gap + 25/50/75% quartile + 实时 SMT + DST 锚定 | 缺 RTH Gap（仅股票/RTH用户条件候选） |
+| Order Block Detector [SMC ChartSense] | `1ORCJ6hv-Order-Block-Detector-SMC-ChartSense` | structural-extreme OB、FVG gate、wick/close mitigation | 当前 OB 只取10根内第一根反向K；应升级锚点和缓解模式 |
+| Swing Reversal Auto Targets | `CKpLwLIZ-Swing-Reversal-Auto-Targets-JPT-Module-1` | 自适应 Swing HH/HL/LH/LL + 动态 S/R + 非重绘 pivot | Adaptive Pivot 有价值；独立 HH/HL 标签图面价值低 |
+
+**用法**：不得把社区功能名直接当源码缺口。先沿当前检测→状态→评分→面板/MCP消费链判定"真缺失/部分实现/重复/低价值"。本生产架构优先候选为 iFVG、EQH/EQL、HVN/LVN、前日VP、OB结构源锚定与缓解模式；MB重标签、额外总分、重复 first-touch 不进入最终候选。
+
+## 2026 社区 VP 增强对标（2026-08-08 联网扫描）
+
+| 增强 | 社区依据 | 价值 | 成本 |
+|------|---------|------|------|
+| HVN/LVN 节点 | Rogue VP Pro / Volume Profile XL / F3s SVP | 高量节点=磁吸位，低量节点=快速穿越区 | 主指标内加检测（局部最大/最小桶+阈值），~40 行 |
+| 前日 VP 投影 | Previous Day Volume Profile / Rogue VP Pro | 前日 POC/VAH/VAL 投影到当日，比前日高低点信息量大 | 复用现有 profileEngine，存前日 lastPoc/Vah/Val |
+| VA 偏差扩展（±0.25/±1/±2 VA） | Rogue VP Pro | 作目标/耗尽区，与 ADR 投影互补 | ~15 行 |
+| Volume Delta 分色直方图 | Volume Profile XL Split Up/Down | 与主、副指标现有估算 CVD 共源；普通 OHLC/LTF 方向法不是 aggressor tape | **不进入通用候选**；除非独立 Footprint Pro 且诚实标口径 |
+| POC 首次触碰事件 | Fib-Weighted VP / Liquidity Atlas 2026 | 当前 nPOC 已有 touch/gap/sweep，FVG/OB 已有 touchCount | **只扩展**到前日VP/HVN-LVN/EQH-EQL；不重复造 nPOC first-touch |
+
+**`request.footprint()` 免费档不可用**：只有 Premium/Ultimate 用户可以运行调用它的脚本；Basic 通用源码不能靠关闭分支或把结果当作"每 bar 返回 `na`"来兼容。`na`表示有调用资格时某根K无可用Footprint数据。升级后再评估独立 Footprint Pro 脚本。

@@ -25,6 +25,8 @@ description: "Audit/optimize Pine main/sub indicators: correctness, quotas, pane
 - request 语义与全量编译：`references/pine-20260814-request-semantics-and-audit.md`
 - 2026-09-01 双指标现场审计增量 → `references/dual-indicator-live-audit-findings-20260901.md`
 - **客户端 CE10117、源码读回哈希、Basic 双脚本身份与最终证据链** → `references/pine-client-compile-evidence-and-dual-deploy-20260901.md`
+- **对称修复核对、生态增量（`once`/Screener）、余量快照与验证命令** → `references/pine-dual-indicator-audit-20260916.md`
+- **CE10117 减重与大规模编辑陷阱**（此前因 SKILL.md 超限未能入索引，现已补入） → `references/pine-ce10117-reduction-and-edit-traps-20260911.md`
 
 - **单边位失效**：破位、swept、生命周期 → `references/pine-20260812-trending-market-key-level-audit.md`
 - **结构叙事须图上可核验**：HH/HL/LH/LL真定义、BOS/CHoCH活动标签、异步CE10117验收 → `references/pine-structure-visibility-and-semantic-contract.md`
@@ -133,15 +135,9 @@ When the user asks for a broad, multi-dimensional, web-researched audit with "10
 
 官方来源：https://www.tradingview.com/pine-script-docs/writing/limitations/
 
-## 账号档位约束：免费 Basic 是硬天花板（2026-08-02 官方定价页实测）
+## 账号档位约束：免费 Basic 是硬天花板
 
-**所有 request/plot/token 配额之上，账号档位先卡死一批能力。审计前先确认用户账号档位；免费档（Basic）尤其致命：**
-
-- **免费档技术告警 = 0** → `alertcondition()` 在免费账号既不能被运行告警使用、又各占 1 个 plot count，Basic 构建应物理删除。`alert()`虽不以相同方式占多个plot槽，但也**不能绕过Basic账号的零技术告警权限**；免费档实际通知交给外部 Python 扫描管线。若维护付费兼容版，再把多事件合并为一个事件化 `alert()`，不要把它写成免费绕过方案。
-- **历史K = 5,000 根**（5m≈17天/15m≈52天/1h≈208天/4h≈833天；D/W≈20年全量）→ 免费档主战 5m/15m/1h/4h，不追求超长历史。
-- **指标/图 = 2** → 主+副正好占满，不能加第三个；Footprint 升级只能做独立脚本在 Premium+ 评估。
-- **计算时限 = 20s**（付费 40s）→ 主指标 lower-TF 精度全量重算是最大超时风险。
-- **免费档性能第一杠杆：lower-TF 请求加 `calc_bars_count`**（不传则按图表全量K拉取 intrabars；5m挂1m=25,000根、4h挂60m=20,000根，爆 20s）。主指标两处 `security_lower_tf`（SVP 精度 + CVD）都要加。**⚠ 但绝不能硬编码 `calc_bars_count=1000`**——SVP 分布图 D 周期需 1440 根 1m intrabar，1000 会截断 30% 数据使 POC/VAH/VAL 算错。必须动态计算 `max(1000, 完整分布图周期所需)`（`profSec/precSec`），见 `references/multi-market-adaptation-crypto-metals-2026-08-02.md`。
+审计前先确认账号档位。五条硬约束：技术告警=0（`alertcondition` 物理删除，通知走外部 Python 管线）；历史K=5,000；指标/图=2（主+副正好占满，Footprint 只能做独立脚本在 Premium+ 评估）；计算时限=20s（lower-TF 全量重算是最大超时风险）；`security_lower_tf` 必须加**动态** `calc_bars_count=max(1000, profSec/precSec)`——**不得硬编码 1000**（D 分布图需 1440 根 1m intrabar，截断会算错 POC/VAH/VAL）。
 
 完整对照表、免费档优化序列与取证技术（curl --compressed 抓官方文档、browser_console 提取 JS 定价页）见 `references/tradingview-plan-tier-limits-free-account.md`。
 
@@ -265,6 +261,11 @@ grep -n "VARNAME" 指标文件.txt
 ```
 
 **⚠ 扫描器盲区：静态扫描"未定义变量 none + def-before-use none"不代表 TV 编译通过。** `pine_static_scan.py` 只检查 panelDirVal/panelConclusionVal/panelEntryVal 三变量的依赖，**不覆盖新增行动格行（共振度/就绪度/触发链）引用的共享色值**（如 `cGood/cWarn/cBad`）或辅助变量。2026-08-06 实案：副指标 `color resoColA = ... ? cGood : ...`（引用处）引用配色块 `cGood/cWarn/cBad`（定义在之后）→ 扫描全绿但 TV 编译 `Undeclared identifier`。**新增任何行动格行后，必须手工比对该行每个引用名的声明行号 vs 引用行号**（`grep -n "color cGood\|color cWarn\|color cBad"` 行号必须 < 引用行）。详见「决策就绪度仪表模式」节的前向引用盲区条目。
+
+### 0c. 对称逻辑两侧核对（成对量必查）
+
+**修复或审计「两侧对称」逻辑（sup*/res*、Long/Short、High/Low、Bull/Bear、Above/Below）时，必须把两侧代码块并排核对：一侧接线的条件与原因码，另一侧必须同样接线。判定法：对每个成对量统计全部出现位置并区分声明/写入与读取——「声明后零读取」的一方 = 漏接。修复交付前把两侧逐字并排 diff 一次，不要只验被改的一侧。**
+实案：稳定位 48h 年龄上限修复只接了支撑侧 `supStale`，阻力侧 `resStale` 声明后零读取 → 超龄阻力位永不退役（F13 半残留；修法与验证套件见 `references/pine-dual-indicator-audit-20260916.md`）。
 
 ### 1. 配额检查
 - `grep -c "request\\.security"` → 展开计数
@@ -1376,17 +1377,9 @@ TradingView Desktop 可能同时保留叠加层、分割视图和隐藏旧脚本
 
 **用户开放追问陷阱**：用户问"还有你看看有什么需要优化的吗"是开放追问，必须在末段主动给出"额外观察点"，不能仅复述已列条目。
 
-### 2026 社区 Top SMC 基准脚本（"我有什么 / 缺什么" 对比表）
+### 2026 社区 Top SMC 基准脚本
 
-| 脚本 | URL 关键词 | 差异化卖点 | 当前主指标缺口 |
-|---|---|---|---|
-| Quant SMC Pro [JOAT] | `ugOBLSa3-Quant-SMC-Pro-JOAT` | 自适应 ATR pivot + iFVG + Mitigation Rule/Tag + EQL + AVWAP PD + Confluence Score 0-100 | 真缺 iFVG / EQL / Adaptive Pivot；**MB标签不构成缺口**：当前 OB 本来只在 BOS/CHoCH break 后创建，重标 MB 几乎无区分度 |
-| Unicorn ICT Signals [TradingFinder] | `9uGRHvXH-Unicorn-ICT-Signals` | Breaker Block + FVG Zones + Mitigation Level FVG | 已有 BRK 变色；只需增强 mitigation 深度/close-through 语义，不再加同义标签 |
-| ICT Sessions + SMT Divergence | `rGyFTcVW-ICT-SMC-Sessions-SMT-Divergence` | RTH Gap + 25/50/75% quartile + 实时 SMT + DST 锚定 | 缺 RTH Gap（仅股票/RTH用户条件候选） |
-| Order Block Detector [SMC ChartSense] | `1ORCJ6hv-Order-Block-Detector-SMC-ChartSense` | structural-extreme OB、FVG gate、wick/close mitigation | 当前 OB 只取10根内第一根反向K；应升级锚点和缓解模式 |
-| Swing Reversal Auto Targets | `CKpLwLIZ-Swing-Reversal-Auto-Targets-JPT-Module-1` | 自适应 Swing HH/HL/LH/LL + 动态 S/R + 非重绘 pivot | Adaptive Pivot 有价值；独立 HH/HL 标签图面价值低 |
-
-**用法**：不得把社区功能名直接当源码缺口。先沿当前检测→状态→评分→面板/MCP消费链判定“真缺失/部分实现/重复/低价值”。本生产架构优先候选为 iFVG、EQH/EQL、HVN/LVN、前日VP、OB结构源锚定与缓解模式；MB重标签、额外总分、重复 first-touch 不进入最终候选。
+对照全表（"我有什么 / 缺什么"）与社区对标细节见 `references/dual-indicator-community-benchmark-2026-08-13.md`。判定纪律：不得把社区功能名直接当源码缺口，先沿「检测→状态→评分→面板/MCP消费链」判“真缺失/部分实现/重复/低价值”；本架构优先候选为 iFVG、EQH/EQL、HVN/LVN、前日VP、OB结构源锚定与缓解模式；MB重标签、额外总分、重复 first-touch 不进入候选。
 
 ### series-color plot 计数最坏式（免费档 plot 余量评估铁律）
 
@@ -1465,6 +1458,8 @@ def worst_plot_count(src):
 | Per-venue freshness 真实时间戳 | HyperData Terminal 2026-07 | 替换 `ta.barssince(not na(v))` 为值变化检测 | � 副指标必改 |
 | EQL / Equal High/Low 检测 | Quant SMC Pro 2026 | ATR tolerance + 扫描深度 | ⭐⭐⭐ 社区扫线 #1 增强 |
 | RTH Gap + 25/50/75% quartile | ICT Sessions Pro 2026-03 | 独立脚本 + DST 自动锚定 | ⭐⭐ 股票用户升级后做 |
+| `once` 条件结构 | Pine v6 2026-08 release notes | 块首次执行后不再触发（替代 `var done` 布尔守卫模式） | ⭐ 与双指标低相关 |
+| Pine Screener 指数源 + 完整指标对话框 | Pine v6 2026-08 release notes | 指数最多 4,000 符号；仅含 `plot*()`/`alertcondition()` 的脚本可被选用 | ⭐ 低相关 |
 
 **审计时**：每项列出现在"未做"列时按 ⭐⭐⭐ 优先级建议加；不要全做，按用户决策风格与预算挑选。
 
@@ -1503,47 +1498,10 @@ lines = src.split("\n")
 
 **每 K 全量重算 O(N²) 性能风险**：`processAndRender(currentProfileStart, bar_index, true, barstate.islast)` 每根 K 执行，函数内 `for i=0 to count-1` 遍历全部 hPrices（上限 95000）重算分布。5m 图挂 D 分布图+高精度是免费档 20s 超时最大风险。修法：历史 K 增量更新（新 bar 只累加进对应桶），`barstate.islast` 才全量重算+渲染；数值同构性不受影响。
 
-## 决策辅助审计模式（2026-08-08 新增，用户问"怎么优化辅助决策 / 还差什么功能"时用）
+## 决策辅助审计模式（用户问"怎么优化辅助决策 / 还差什么功能"时用）
 
-当用户从"代码审计"视角升级到"决策辅助"视角时，审计目标从"指标是否正确"变成"指标是否帮助用户更快更准做决策"。读取 `references/decision-support-gap-analysis-2026-08-08.md` 获取完整方法论。
+完整方法论见 `references/decision-support-gap-analysis-2026-08-08.md`（三原语、覆盖度图谱、零成本二阶导数表、10 项缺失功能优先级）。硬结论：最大缺口是已有一阶数据的二阶导数；"Taker Buy/Sell Ratio"已证伪（TV 无 `taker_buy_volume`），审计勿再列入。
 
-### 决策辅助三原语
+## 2026 社区 VP 增强对标
 
-用户反馈"信息都看懂了但还是下不了决策"时，根因不是缺信息，而是缺三个即时感知原语：
-
-| 原语 | 含义 | 审计检查 | 实现方式 |
-|------|------|----------|----------|
-| **多远** | 当前价距入场价多远 | 进场行是否有 "距X ATR" 后缀 | `math.abs(close - replayPlanPrice) / currATR` |
-| **多久了** | 信号存活多久 / KillZone剩多少分钟 | 就绪度是否有年龄后缀、KillZone是否有剩余时间 | `triggerAge` 已有变量追加 "·3K"；`math.round((sessEnd - time)/60000)` |
-| **该不该现在动** | 所有信息汇总后的一个动作词 | 方向行末尾是否有 →进/等/退/禁 | executablePlan/rdyPct/regime 组合 |
-
-### 功能缺口分析方法
-
-1. **覆盖度图谱**：用 execute_code 批量扫描两指标 30+ 功能关键词，输出已覆盖 vs 缺失
-2. **社区对标**：对比 2026 ICT/SMC + 订单流 + VP + 趋势 + 风控前沿
-3. **零成本增强识别**：最大缺口不是缺指标，而是已有数据没提取二阶导数
-
-**核心洞察**：已有一阶数据（oiAggA/currATR/basisEma/volume/cvdAgg）都有对应的零配额二阶导数（OI动量/ATR分位/费率极端/Taker Ratio/CVD加速度），全部 0 request 成本。
-
-### v2 指标基线（2026-08-08 上传版）
-
-主指标 SVP+ICT+VWAP+CVD v2：3,033 行 / 199KB / 9 request / 37 plot / 27 DW / 0 死函数 / 0 死变量
-副指标 AggVol v2：655 行 / 49KB / 7 request / 40 plot / 22 DW / 0 死函数 / 2 死变量（maxValidExchangeSeenA/maxOiVenueSeenA）
-
-### 10 项缺失功能优先级
-
-必加（零配额）：Taker Buy/Sell Ratio · OI动量变化率 · 波动率分位数 · 资金费率极端检测
-高（零或低成本）：HVN/LVN标记 · 锚定VWAP · 清算级位
-中（+1 request）：BTC大盘风向 · 会话VP · 复合VP共振区
-
-## 2026 社区 VP 增强对标（2026-08-08 联网扫描）
-
-| 增强 | 社区依据 | 价值 | 成本 |
-|------|---------|------|------|
-| HVN/LVN 节点 | Rogue VP Pro / Volume Profile XL / F3s SVP | 高量节点=磁吸位，低量节点=快速穿越区 | 主指标内加检测（局部最大/最小桶+阈值），~40 行 |
-| 前日 VP 投影 | Previous Day Volume Profile / Rogue VP Pro | 前日 POC/VAH/VAL 投影到当日，比前日高低点信息量大 | 复用现有 profileEngine，存前日 lastPoc/Vah/Val |
-| VA 偏差扩展（±0.25/±1/±2 VA） | Rogue VP Pro | 作目标/耗尽区，与 ADR 投影互补 | ~15 行 |
-| Volume Delta 分色直方图 | Volume Profile XL Split Up/Down | 与主、副指标现有估算 CVD 共源；普通 OHLC/LTF 方向法不是 aggressor tape | **不进入通用候选**；除非独立 Footprint Pro 且诚实标口径 |
-| POC 首次触碰事件 | Fib-Weighted VP / Liquidity Atlas 2026 | 当前 nPOC 已有 touch/gap/sweep，FVG/OB 已有 touchCount | **只扩展**到前日VP/HVN-LVN/EQH-EQL；不重复造 nPOC first-touch |
-
-**`request.footprint()` 免费档不可用**：只有 Premium/Ultimate 用户可以运行调用它的脚本；Basic 通用源码不能靠关闭分支或把结果当作“每 bar 返回 `na`”来兼容。`na`表示有调用资格时某根K无可用Footprint数据。升级后再评估独立 Footprint Pro 脚本。
+社区 VP 增强候选表（HVN/LVN、前日VP 投影、VA 偏差扩展、POC 首次触碰扩展）见 `references/dual-indicator-community-benchmark-2026-08-13.md`。两条纪律：Volume Delta 分色直方图不进通用候选（除非独立 Footprint Pro 且诚实标口径）；`request.footprint()` 免费档不可用（Premium/Ultimate 专属，关闭分支或当作 `na` 都不行）。

@@ -93,11 +93,10 @@ python -c "import json;d=json.load(open('data/data_freshness_watchdog_report.jso
 
 **已退役、禁止再当 P0 报的**（心跳文件已于 2026-09-15 归档到 `data/_archive/heartbeats_retired_20260915/`，含 README）：
 
-- **XAU 现场同步**（2026-09-15 用户决定「XAU 暂停，只要 BTC 的」）：cron `XAU TV现场同步`
-  (`113655ad34b5`) 已 pause；`source_snapshot_XAUUSD.json` / `xau_tv_state.json` /
-  `xau_tv_sync_status.json` 已从 WATCH_FILES 移入 `PAUSED_SOURCES`。
-  **停用期间这三份停更是预期，不得当故障报**；XAU 分析不受影响
-  （`auto_card.py` 在 XAU 缓存不新鲜时会**按需单跑** `xau_tv_sync.py`）。
+- **XAU 现场同步**（2026-09-16 已恢复）：cron `XAU TV现场同步` (`113655ad34b5`) 已 resume，
+  `source_snapshot_XAUUSD.json` / `xau_tv_state.json` / `xau_tv_sync_status.json`
+  已加回 `WATCH_FILES` —— 这三份停更**现在算故障**，不再豁免。
+  （2026-09-15 曾按用户「XAU 暂停，只要 BTC 的」暂停一天；同期 TV 口径切 `TVC:GOLD`。）
   恢复：`hermes cron resume 113655ad34b5` + 删掉 PAUSED_SOURCES 那行。
 - `monitor_heartbeat.json`（行情守望.py）—— 进程不存在、cron 无看门狗
 - `.btc_daemon_heartbeat.json`（btc_daemon.py）—— 同上

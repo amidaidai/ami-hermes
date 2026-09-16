@@ -71,5 +71,20 @@ search_files(pattern="test message", path="<repo>")
 search_files(pattern="def _send_one|def push|def drain_push_queue|_PUSH_QUEUE|send_telegram_direct")
 ```
 
+## 同族缺陷：测试写生产**文件**（非推送，2026-09-16 实锤）
+
+同一类事故还有一个不经过推送通道的变体：测试调用 ``main()`` 的**成功路径**，
+把结果写进真实 ``data/`` 状态/日志文件。症状是「状态说刚刚成功，产物却 N 小时没更新」——
+比推送漏发更隐蔽，因为它不惊动人，只把健康检查刷绿。
+
+快速判据与修法：
+1. 基准 mtime → 跑一次全量 pytest → 再比 mtime；变了就是测试写的（不要先怀疑 cron/外部进程）。
+2. 逐文件定位：对引用该模块的每个测试文件单独跑一次并比 mtime。
+3. 修两层：用例把漏掉的路径 monkeypatch 到 tmp（按**落盘目标**逐条数，不按文件数）；
+   再加类级守卫（``PYTEST_CURRENT_TEST`` + 目标在本仓库 data/ 下 → 拒绝写，tmp 与非测试环境放行）。
+
+完整方法、实锤案例与回归用例见 ``tangxi-runtime-audit-and-cleanup`` 的
+「通用审计项：测试写生产文件」。
+
 ## 任务报告排版（此用户偏好）
 报告以本轮用户要求为准：中文、结论前置、短句；验收可列必要字段与证据路径。行情卡遵循当前交易卡合同，手机优先、窄表不超过三列；不强制圈号或装饰分隔。

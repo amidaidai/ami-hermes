@@ -274,26 +274,28 @@ print(f'买卖比: {sum(bids)/sum(asks):.2f}')
 | 黄金缺金十/COT常态化 | ✅ 已闭合 | `scripts/jin10_gold_bridge.py` + `scripts/cot_bridge.py` → 金十日历/快讯 + COT持仓每周注入XAU分析卡 |
 | forex_rate步骤无实战代码 | ✅ 已闭合 | `scripts/forex_rate.py` → 24外汇品种利差+央行窗口+Carry Trade，auto_card自动调用 |
 | options_chain步骤无实战代码 | ✅ 已闭合 | `scripts/options_chain.py` → BTC/ETH走Deribit、美股走yfinance，auto_card自动调用 |
-| liquidation/qlib/stablecoin无落盘 | ⚠️ 持续缺口 | cron stdout→TG无本地JSON，cron_read读数受限 |
+| qlib/stablecoin 无落盘（liquidation 已闭合） | ⚠️ 剩两源缺口 | 2026-09-15 起清算三源均有本地 JSON（liquidation_flow/coinglass_liq/liquidation_ws）；qlib_factors、stablecoin_snapshot 仍是 cron stdout→TG 无本地落盘，cron_read 读数受限 |
 
 **核心铁律：router返回的步骤列表，缺一步不算完成分析。**
 
 ### Cron-Read 捷径（v9.5 · 避免重复采集）
 
-17个cron每30min自动采集：Deribit 期权OI、Dune 链上数据、X 情绪、QLib 因子、清算压力、稳定币供应、COT 持仓。**手动分析时无需重新运行这些脚本**——直接读取最新的 cron 输出文件：
+cron 自动采集但**只有真落盘的才算 cron_read 已消费**。活跃源 = X 情绪（`data/x_sentiment_context.json`）与清算双源（`data/liquidation_flow.json`，cron `清算双源刷新` */10）。**手动分析时无需重新运行这些脚本**——直接读取最新的 cron 输出文件：
 
 - 完整协议：`references/cron-read-protocol.md`
-- 双落盘模式：`references/dual-write-pattern.md`（x_sentiment已迁移，liquidation/qlib/stablecoin待迁移）
+- 双落盘模式：`references/dual-write-pattern.md`（x_sentiment、liquidation 已迁移；qlib/stablecoin 待迁移）
 
 | 脚本 | 最新输出文件 | 读取方式 |
 |------|-------------|---------|
-| deribit_options.py | `data/deribit_options.json` | `read_file` → 提取 C/P比/MaxPain/总OI |
-| dune_collector.py | `data/dune_cache.json` | `read_file` → 提取 BTC流/CEX净流 |
-| cot_collector.py | `data/cot_data.json` | `read_file` → 提取投机净多/空 |
-| qlib_factors.py | cron stdout (TG:846) | 读取上次推送或 `terminal('python scripts/qlib_factors.py --line')` |
-| liquidation_collector.py | cron stdout (TG:846) | 同上 |
-| stablecoin_collector.py | cron stdout (TG:846) | 同上 |
-| x_sentiment_collector.py | cron stdout (TG:846) | 同上；或直接调 `x_search` 获取实时 |
+| x_sentiment_refresh.py | `data/x_sentiment_context.json` | `read_file`；>6h 写「本轮不采用」 |
+| liquidation_refresh.py | `data/liquidation_flow.json`（+`coinglass_liq.json`） | `read_file`；卡面落点=③多源表「清算」行 |
+| ~~deribit_options.py~~ | `data/deribit_options.json`（已停用） | 停产，不再计入完成度 |
+| ~~dune_collector.py~~ | `data/dune_cache.json`（已停用） | 停产，不再计入完成度 |
+| ~~cot_collector.py~~ | `data/cot_data.json`（已停用） | 停产；CFTC 源走 `cot_bridge`（黄金） |
+| ~~liquidation_collector.py~~ | 无（旧 OI×价格挤压估算，2026-07-15 退役） | 不得恢复；真实强平走 `liquidation_flow` |
+| ~~qlib_factors.py~~ / ~~stablecoin_collector.py~~ | cron stdout (TG:846) | 已停用；读数前先查文件是否存在 |
+
+**cron_read 完成度语义（2026-09-16）**：权威清单 = `pipeline_router.CRON_SOURCES`（按资产类别）+ `CRON_SOURCES_BY_SYMBOL`（只覆盖部分币种的源按品种追加，如 `liquidation_flow` 仅 BTC/ETH——分析 SOL 时不得拿 BTC 缓存冒充已消费）。清单里只要有一个「设计性停用」源，`cron_read` 步骤就不计完成（`auto_card.py` 规则），这是有意为之：不把设计缺口记成完成度。停用/缺失/新鲜三态分别写进卡面脚注；清算另有「清算=卡面路径(③多源表清算行)」标注，避免被读成清算整体停采。新鲜度阈值必须与产出方一致（`CRON_SOURCE_MAX_AGE`；`liquidation_flow`=0.7h，对齐 `data_freshness_watchdog`）。
 
 **读取时效判断**：文件 mtime < 60min → 直接使用，标注「cron缓存·{时间}」。>60min → 重新运行脚本。
 
@@ -1130,7 +1132,7 @@ Telegram 普通 `sendMessage`/`parse_mode=MarkdownV2` 不支持管道表真渲�
 完整速查表见 `references/multi-market-timeframe-quick-ref.md`。`pipeline_router.timeframe_info(symbol)` 一键获取。
 
 ## cron_read 数据源现状
-详见 `references/cron-read-source-inventory.md`。x_sent 已双落盘(data/x_sentiment.json)·liquidation/qlib/stablecoin 仍仅cron stdout无本地落盘，读取前检查文件是否存在。
+详见 `references/cron-read-source-inventory.md`。已双落盘：x_sentiment（data/x_sentiment_context.json）、清算（data/liquidation_flow.json + coinglass_liq.json，cron `清算双源刷新` */10）；qlib_factors / stablecoin 仍仅 cron stdout 无本地落盘，读取前检查文件是否存在。权威清单以 `pipeline_router.CRON_SOURCES` + `CRON_SOURCES_BY_SYMBOL` 为准（2026-09-16 起清算源= liquidation_flow，旧 liquidation_pressure 已退役）。
 
 ## 智能路由
 
@@ -1141,4 +1143,4 @@ from pipeline_router import route_pipeline, pipeline_summary
 steps = route_pipeline("XAUUSD", mode="full")  # 返回8步（跳过加密专属）
 steps = route_pipeline("BTCUSDT", mode="quick") # 返回4步核心+卡
 ```
-加密专属（Binance/CG Pro/Dune/Deribit/FG/CVD/depth）自动跳过非加密资产。
+加密专属（Binance/CVD/depth；CG Pro 已退役 2026-09-14，Dune/Deribit/FG 采集已停用）自动跳过非加密资产。

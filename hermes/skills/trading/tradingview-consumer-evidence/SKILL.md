@@ -17,7 +17,7 @@ category: trading
 ## 核心原则
 
 1. **实际状态优先于请求参数**：`chart_set_symbol`、`chart_set_timeframe`返回成功不等于生效。操作后必须读回`chart_get_state`，同时核对symbol、resolution和studies。
-2. **报价身份必须验证**：TV CLI部分版本会忽略`quote --symbol`，返回当前图表报价。优先读取不带symbol的quote，并检查返回的symbol、exchange、type、description。BTC永续应匹配Binance、swap和Bitcoin描述；身份不符时整份报价丢弃。
+2. **报价身份必须验证**：`quote` 的 symbol 参数**会被忽略**（CLI 与 MCP 工具同样表现，不是某几个版本的问题），一律返回当前图表报价。不要试图「不切图取任意品种报价」——先切图，再检查返回的 symbol、exchange、type、description。BTC永续应匹配Binance、swap和Bitcoin描述；身份不符时整份报价丢弃。
 3. **保留同一次响应的价格栏**：缓存O/H/L/C/last；日高、日低必须来自独立的Binance 24h ticker，不能用当前15m K线高低冒充。
 4. **ICT对象不得凭价格猜类型**：box接口可能返回`boxes`或规范化的`zones`。兼容两种键；无label的区域只能叫通用zone，不能擅自标为FVG、OB、Breaker或流动性扫掠。
 5. **空读是争用/重算信号**：`study_count=0`或行动格暂空时，只在图表身份仍正确的前提下有界重试；身份变化立即停止并标记stale。不得用别的周期或旧缓存冒充当前周期。实测切周期后指标常需 **8–12s** 才重算完（只等 2–3s 必然读到空表）；`pine_tables` 与 `study_values` 会同时空，两者都要重试；**读完仍空才写「继承高周」，不得把第一次空读直接当继承**。
