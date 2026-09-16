@@ -163,6 +163,33 @@ def cron_runtime_issues(jobs: list[dict]) -> list[str]:
     return issues
 
 
+def xau_sync_status_line(sync_status: dict, *, stale_hours: float = 1.0) -> tuple[bool, str]:
+    """把 XAU 同步状态文件翻译成一行预检结论：``(ok_flag, line)``。
+
+    ``ok_flag=False`` 只代表「连续失败 ≥2 = 结构性降级」（与既有语义一致）。
+
+    2026-09-16 修正：旧实现在 ``status=ok`` 时**无条件**打印「XAU同步: OK checked=Nh前」。
+    于是当状态文件被测试污染（写进 ``status=ok`` / ``last_success_at=now``）时，
+    一个已经 19.6h 没更新的同步器照样显示 OK —— 这正是「假成功」能骗过预检的原因。
+    现在 ``ok`` 也要过 staleness 门（阈值与 ``data_freshness_watchdog`` 的 1h 口径一致）；
+    超窗只降措辞、不判 red —— XAU 同步 cron 可能被有意暂停，真断供由产物新鲜度那条判。
+    """
+    streak = int(sync_status.get("consecutive_failures") or 0)
+    st = str(sync_status.get("status") or "?")
+    age = age_hours(sync_status.get("checked_at"))
+    detail = (f"连续失败={streak} last_success={str(sync_status.get('last_success_at'))[:19]} "
+              f"kept={sync_status.get('kept') or '-'} err={str(sync_status.get('last_error'))[:60]}")
+    if st == "ok":
+        if age > stale_hours:
+            return True, (f"XAU同步: STALE(记录 {age:.1f}h 未更新·阈值 {stale_hours:g}h)"
+                          f" last_success={str(sync_status.get('last_success_at'))[:19]}"
+                          f" —— 常见原因：cron 已暂停；真断供由产物新鲜度那条判")
+        return True, f"XAU同步: OK checked={age:.1f}h前"
+    if streak >= 2:
+        return False, f"XAU同步: DEGRADED {detail}"
+    return True, f"XAU同步: WARN(单次失败) {detail}"
+
+
 def main() -> int:
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     print(f"棠溪分析系统预检 · {now}")
@@ -288,18 +315,9 @@ def main() -> int:
     elif not sync_status:
         print("XAU同步: 尚无状态记录（未观测，不影响判定）")
     if sync_status:
-        streak = int(sync_status.get("consecutive_failures") or 0)
-        st = str(sync_status.get("status") or "?")
-        age = age_hours(sync_status.get("checked_at"))
-        detail = (f"连续失败={streak} last_success={str(sync_status.get('last_success_at'))[:19]} "
-                  f"kept={sync_status.get('kept') or '-'} err={str(sync_status.get('last_error'))[:60]}")
-        if st == "ok":
-            print(f"XAU同步: OK checked={age:.1f}h前")
-        elif streak >= 2:
-            xau_sync_ok = False
-            print(f"XAU同步: DEGRADED {detail}")
-        else:
-            print(f"XAU同步: WARN(单次失败) {detail}")
+        sync_ok_flag, sync_line = xau_sync_status_line(sync_status)
+        xau_sync_ok = xau_sync_ok and sync_ok_flag
+        print(sync_line)
     # Dependency failures are a runtime blocker too: the preflight must not
     # report healthy market contracts while the collector interpreter cannot
     # import its required data stack.

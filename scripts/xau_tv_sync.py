@@ -388,6 +388,29 @@ def _refresh_source_snapshot_if_stale(max_age_seconds: int = 900) -> None:
         print(f"⚠ XAU多源快照刷新失败: {exc}", file=sys.stderr)
 
 
+def _blocked_live_write(path: Any) -> bool:
+    """测试环境禁止写生产 ``data/``（2026-09-16 实锤）。
+
+    缺陷现场：`tests/test_xau_tv_sync_degradation.py` 的成功路径用例把
+    ``asyncio.run``/``STAGED_OUT``/``OUT`` 都隔离到 tmp，却漏了 ``STATUS_OUT`` ——
+    于是 ``_write_sync_status(True)`` 把 ``status=ok`` · ``last_success_at=now``
+    写进**真实** ``data/xau_tv_sync_status.json``。后果不是「多一个测试产物」：
+    ``audit_preflight`` 与 ``data_freshness_watchdog`` 都按 ``last_success_at``
+    判同步器是否在跑，假成功会把「黄金现场结构连续几轮没更新」糊成绿色。
+
+    放行规则：非测试环境一律放行；测试环境只拦**目标落在本仓库 data/ 下**的写入，
+    tmp_path 等隔离路径照常可写（不干扰正常用例）。
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    try:
+        Path(path).resolve().relative_to((ROOT / "data").resolve())
+    except (ValueError, OSError):
+        return False
+    print(f"⛔ 测试环境拒绝写生产数据 {path}；请把该路径 monkeypatch 到 tmp_path")
+    return True
+
+
 def _write_sync_status(ok: bool, error: Any = None, kept: str = "") -> dict:
     """记录每轮同步结果，提供「连续失败」升级证据。
 
@@ -423,6 +446,8 @@ def _write_sync_status(ok: bool, error: Any = None, kept: str = "") -> dict:
             "last_success_at": prev.get("last_success_at"),
             "checked_at": now_iso,
         }
+    if _blocked_live_write(STATUS_OUT):
+        return payload
     try:
         from atomic_json import atomic_write_json
         atomic_write_json(STATUS_OUT, payload)

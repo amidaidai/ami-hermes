@@ -18,6 +18,9 @@ def _reset_guard(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "WATCHDOG_STATE_FILE", state)
     monkeypatch.setattr(wd, "SYSTEM_EVENT_FILE", tmp_path / "system_events.jsonl")
     monkeypatch.setattr(wd, "LOCK_FILE", tmp_path / "monitor.lock")
+    # 2026-09-16：LOG_FILE 之前漏了隔离 —— 每次跑测试都往真实 data/watchdog.log
+    # 追加「重启速率限制」行，事后取证会被当成真事故。
+    monkeypatch.setattr(wd, "LOG_FILE", tmp_path / "watchdog.log")
     monkeypatch.setenv("WATCHDOG_SKIP_PID_ALIVE_CHECK", "1")
     monkeypatch.setenv("WATCHDOG_START_GRACE_SECONDS", "0")
     # 拦截真正的 Popen，不真启动进程

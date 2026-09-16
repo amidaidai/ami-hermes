@@ -33,9 +33,28 @@ MAX_RESTARTS_EMERGENCY = 30
 TZ = timezone(timedelta(hours=8))
 
 
+def _blocked_live_log(path) -> bool:
+    """测试环境禁止往生产 ``data/watchdog.log`` 追加（2026-09-16 实锤）。
+
+    `tests/test_watchdog_ratelimit.py` / `tests/test_p0_p1_audit_regressions.py`
+    已把 guard/state/lock/events 隔离到 tmp，却漏了 ``LOG_FILE`` —— 每次跑测试都往
+    真实日志塞「重启速率限制[...]已达上限」这类**看起来像真事故**的行，
+    破坏事后取证（本轮排查 XAU 假成功时就被这些行误导过一轮）。
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    try:
+        Path(path).resolve().relative_to((ROOT / "data").resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
 def log(msg: str) -> None:
     line = f"[{datetime.now(TZ):%Y-%m-%d %H:%M:%S}] {msg}"
     print(line, flush=True)
+    if _blocked_live_log(LOG_FILE):
+        return
     try:
         LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with LOG_FILE.open("a", encoding="utf-8") as handle:

@@ -125,6 +125,8 @@ def test_watchdog_block_sends_external_alert(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "GUARD_FILE", guard)
     monkeypatch.setattr(wd, "WATCHDOG_STATE_FILE", state)
     monkeypatch.setattr(wd, "SYSTEM_EVENT_FILE", events)
+    # 2026-09-16：补上 LOG_FILE 隔离（见 test_watchdog_ratelimit 注释）。
+    monkeypatch.setattr(wd, "LOG_FILE", tmp_path / "watchdog.log")
     sent = []
     monkeypatch.setattr(wd, "send_watchdog_alert", lambda msg: sent.append(msg) or True)
 

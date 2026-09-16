@@ -23,9 +23,16 @@ def _no_active_analysis_lease(monkeypatch, tmp_path):
     2026-09-14：同时把轮次取证标记隔离到 tmp_path —— main() 会在真实
     data/xau_tv_sync_runs.jsonl 追加 enter/error/published，跑测试不能污染
     生产取证文件。
+
+    2026-09-16：再补 STATUS_OUT —— 成功路径用例（main() 返回 0）会走到
+    `_write_sync_status(True)`，之前漏了隔离，每次跑测试都把
+    `status=ok / last_success_at=now` 写进**真实** data/xau_tv_sync_status.json，
+    让 audit_preflight 与 freshness 看门狗看到「假成功」（XAU 实际已停更 19.6h）。
     """
     monkeypatch.setattr(xau_tv_sync, "analysis_lease_defer_exit", lambda: None)
     monkeypatch.setattr(xau_tv_sync, "AUDIT_MARKER_FILE", tmp_path / "xau_tv_sync_runs.jsonl")
+    monkeypatch.setattr(xau_tv_sync, "STATUS_OUT", tmp_path / "xau_tv_sync_status.json")
+    monkeypatch.setattr(xau_tv_sync, "LIVE_OUT", tmp_path / "tv_live_XAUUSD.json")
 
 
 def test_standing_gate_is_cadence_aware_and_card_gate_stays_five():
