@@ -63,6 +63,20 @@ hermes cron incidents --state detected   # 期望 “No cron failure incidents r
 - **留开**：仍在复发且未修的——留着就是活的工作项。
 - 关闭不等于删除：历史仍在表里，`hermes cron incidents --state closed` 可查。
 
+## 先把「未关闭」分成三类，再决定动不动手（2026-09-16）
+
+exit 1 不等于故障。实测 12 条未关闭里 **0 条是系统在坏**：
+| 类别 | 特征（stderr/stdout） | 处置 |
+|:--|:--|:--|
+| **业务检测命中** | 叙事断言闸门：`⚠️ …存在「外部数字缺出处」`（脚本按设计命中即 exit 1） | 不是故障；修文案/补出处，或看单条 alert 明细 |
+| **设计性让路** | `↷ …本轮让路：交互式分析进行中` / `共享图表锁被…占用` | 不是故障；修的是**判定口径**（让路不应计失败） |
+| **真失败** | 抛异常 / rc 非预期 / 超时 | 才是工作项 |
+
+自动闭环：`scripts/cron_incident_watchdog.auto_close_recovered` —— 作业失败后**连续 ≥2 轮
+completed** 才自动 `closed`（优先走 `cron.incidents.set_incident_state`，账本不一致时退回等价 SQL）。
+只成功一轮不关、失败后再挂过不关，所以「未关闭」的语义变成「**当前仍未恢复**」。
+关闭是终态：同一签名再出问题由 Hermes 铸成新 incident，不会因为关旧单而失明。
+
 ## 验证“已修复”的硬标准
 关单前必须有下一轮**实跑**证据，不能以“手动跑脚本成功”代替：
 ```bash

@@ -881,7 +881,7 @@
   "productivity/agentless-monitoring/references/btc-multi-level-watchdog.md": "d3a8c785d2e37d6b",
   "productivity/agentless-monitoring/references/btc-real-time-architecture.md": "2acefaf99ff809a8",
   "productivity/agentless-monitoring/references/cron-full-audit-workflow.md": "9192c5725ce4d8f2",
-  "productivity/agentless-monitoring/references/cron-incident-triage.md": "45076457181faa59",
+  "productivity/agentless-monitoring/references/cron-incident-triage.md": "96980136ecf36785",
   "productivity/agentless-monitoring/references/cron-noise-diagnosis-2026-06-23.md": "98689d3db1ed7934",
   "productivity/agentless-monitoring/references/cron-script-path-resolution.md": "e7d4e8e8a59c0a29",
   "productivity/agentless-monitoring/references/crossing-detection-vs-zone-trigger.md": "871de60d06cafda7",
@@ -1039,7 +1039,7 @@
   "research/DESCRIPTION.md": "a7bc842330a491de",
   "research/blogwatcher/SKILL.md": "b85be5a9b86b9028",
   "research/competitor-news-monitor/SKILL.md": "d8fd2a3a26ff4545",
-  "research/external-claim-verification/SKILL.md": "78ad1bd29c936818",
+  "research/external-claim-verification/SKILL.md": "f1213483d8248e29",
   "research/grounded-citations/SKILL.md": "85e6c36a73a4b25b",
   "research/grounded-citations/references/citation-formats.md": "a3ad5b348dbac415",
   "research/grounded-citations/references/grounding-rationale.md": "43b22746313ba048",
@@ -1627,7 +1627,7 @@
   "trading/trading-system-audit/references/multi-asset-symbol-api-audit-2026-06-20.md": "0e893ea9edbcc6a9",
   "trading/trading-system-audit/references/ntp-windows.md": "b4135f158d9b15fd",
   "trading/trading-system-audit/references/p1-tv-cache-and-push-protection.md": "9944b8e60b8d95a3",
-  "trading/trading-system-audit/references/pipeline-contract-drift-audit.md": "2b0026a28ea76f4b",
+  "trading/trading-system-audit/references/pipeline-contract-drift-audit.md": "f60678badcc9aedb",
   "trading/trading-system-audit/references/proven-fix-patterns.md": "6b099b5798b0366d",
   "trading/trading-system-audit/references/provider-proxy-and-process-hygiene.md": "26c21656d1f5d403",
   "trading/trading-system-audit/references/python-decision-chain-audit-pattern.md": "cdb38438154c4beb",
@@ -2010,8 +2010,8 @@
   "web/blocked-page-recovery/scripts/recover_page.py": "22b996996ae2bf25",
   "yuanbao/SKILL.md": "239e4875f511124f"
  },
- "generated_at": "2026-09-16T16:03:27+0800",
+ "generated_at": "2026-09-16T16:37:50+0800",
  "oversized": {},
  "source": "C:/Users/Administrator/AppData/Local/hermes/skills",
- "total_bytes": 16568046
+ "total_bytes": 16570957
 }
