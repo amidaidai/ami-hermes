@@ -108,7 +108,7 @@ def _display_symbol(symbol: str) -> str:
     if ac == "加密":
         return f"{su if su.endswith('.P') else su + '.P'} · BINANCE"
     if ac == "贵金属":
-        return f"{su} · OANDA"
+        return f"{su} · TVC"
     if ac == "外汇":
         return f"{su} · OANDA"
     if ac == "股票":

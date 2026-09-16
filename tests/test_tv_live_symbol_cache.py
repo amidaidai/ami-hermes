@@ -10,8 +10,9 @@ import auto_card
 
 def test_tv_live_dump_resolves_system_symbols_to_tradingview_tickers():
     assert tv_live_dump.resolve_tv_symbol("BTCUSDT") == "BINANCE:BTCUSDT.P"
-    assert tv_live_dump.resolve_tv_symbol("XAUUSD") == "OANDA:XAUUSD"
-    assert tv_live_dump.resolve_tv_symbol("OANDA:XAUUSD") == "OANDA:XAUUSD"
+    assert tv_live_dump.resolve_tv_symbol("XAUUSD") == "TVC:GOLD"
+    # 历史口径写法也归一到新口径（2026-09-16 由 OANDA:XAUUSD 切 TVC:GOLD）
+    assert tv_live_dump.resolve_tv_symbol("OANDA:XAUUSD") == "TVC:GOLD"
 
 
 def test_auto_card_prefers_matching_symbol_specific_cache():

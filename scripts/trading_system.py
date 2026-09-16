@@ -400,10 +400,13 @@ def jin10_quote(code: str) -> dict[str, Any]:
 
 
 def oanda_spot_price(symbol: str = "XAU_USD") -> float | None:
-    """Get OANDA spot gold/gold price via practice API.
+    """Get OANDA spot gold price via practice API（2026-09-16 起为退役备源）。
 
     优先从 hermes/secrets/oanda_token.txt 和 oanda_account_id.txt 读取凭据。
     无凭据则返回 None，由调用方降级。
+    实测两文件均未配置真 token（oanda=无）→ 本函数长期返回 None，
+    XAU 现货共识实际由 gold-api.com + 金十 兑现；TV 图表口径已切 TVC:GOLD
+    （见 scripts/tv_symbols.py），OANDA 不再具备「与图表同源」的优先理由。
     """
     # 2026-09-13 加固：改为走 credential_store 的统一守卫。
     # 此前裸读文件，占位符（oanda_token.txt 实为说明性 PLACEHOLDER 文件）会被

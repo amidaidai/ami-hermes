@@ -51,7 +51,14 @@ def _canonical_symbol(value: Any) -> str:
     if ":" in raw:
         raw = raw.rsplit(":", 1)[-1]
     raw = raw.replace(".P", "").replace("PERPETUAL", "").replace("PERP", "")
-    return re.sub(r"[^A-Z0-9]", "", raw)
+    key = re.sub(r"[^A-Z0-9]", "", raw)
+    # 黄金口径 2026-09-16 由 OANDA:XAUUSD 切到 TVC:GOLD（scripts/tv_symbols.py）。
+    # 新口径（GOLD）与历史口径（XAUUSD）必须视为同一身份，
+    # 否则换口径当刻新旧缓存互不承认，五周期契约会整片判失败。
+    # 注意：Binance 合约 XAUUSDT 是独立身份，不并入（合约 ≠ 现货）。
+    if key in {"GOLD", "XAUUSD"}:
+        return "XAUUSD"
+    return key
 
 
 def _symbol_matches(expected: Any, actual: Any) -> bool:

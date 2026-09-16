@@ -77,10 +77,27 @@ def test_fetch_daily_closes_empty_without_keys(monkeypatch):
     assert closes == [] and label == "none"
 
 
-def test_fetch_daily_closes_prefers_oanda(monkeypatch):
-    """有 OANDA 密钥时优先用它，且逐根取（不是 fetch_all 的单根）。"""
+def test_fetch_daily_closes_prefers_twelvedata_then_oanda(monkeypatch):
+    """口径 2026-09-16：TwelveData 现役优先；两者都在时不得回落到 OANDA。
+
+    且逐根取（不是 fetch_all 的单根）。
+    """
     import xau_ohlcv_source as xs
-    monkeypatch.setattr(xs, "_read_secret", lambda name: "TOKEN" if "oanda" in name else "")
+    monkeypatch.setattr(xs, "_read_secret", lambda name: "TOKEN")
+    monkeypatch.setattr(xs, "breaker_open", lambda src: False)
+    monkeypatch.setattr(xs, "_twelvedata_candles", lambda key, interval, count: [
+        {"close": 4000.0 + i, "complete": True} for i in range(count)])
+    monkeypatch.setattr(xs, "_oanda_candles", lambda tok, gran, count: [
+        {"close": 9000.0 + i, "complete": True} for i in range(count)])
+    closes, label = xs.fetch_daily_closes(30)
+    assert label == "twelvedata_spot" and len(closes) == 30 and closes[-1] == 4029.0
+
+
+def test_fetch_daily_closes_falls_back_to_oanda(monkeypatch):
+    """TwelveData 不可用时，OANDA 备源仍能兜底（退役 ≠ 删除）。"""
+    import xau_ohlcv_source as xs
+    monkeypatch.setattr(xs, "_read_secret",
+                        lambda name: "" if "twelvedata" in name else "TOKEN")
     monkeypatch.setattr(xs, "breaker_open", lambda src: False)
     monkeypatch.setattr(xs, "_oanda_candles", lambda tok, gran, count: [
         {"close": 4000.0 + i, "complete": True} for i in range(count)])

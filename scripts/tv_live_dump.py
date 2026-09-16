@@ -16,15 +16,23 @@ from tv_data_bridge import collect_and_cache  # noqa: E402
 from atomic_json import atomic_write_json  # noqa: E402
 
 
+from tv_symbols import BTC_TV_SYMBOL, GOLD_TV_SYMBOL
+
 TV_SYMBOL_ALIASES = {
-    "BTCUSDT": "BINANCE:BTCUSDT.P",
-    "XAUUSD": "OANDA:XAUUSD",
+    "BTCUSDT": BTC_TV_SYMBOL,
+    "XAUUSD": GOLD_TV_SYMBOL,
 }
 
 
 def resolve_tv_symbol(symbol: str) -> str:
-    raw = str(symbol or "").upper().strip()
-    return TV_SYMBOL_ALIASES.get(raw, raw)
+    """品种名 → TV 图表符号。
+
+    黄金任何写法（含历史 OANDA:XAUUSD / XAU_USD）都归一到 TVC:GOLD，
+    口径单点在 scripts/tv_symbols.py。
+    """
+    from tv_symbols import tv_symbol
+
+    return tv_symbol(symbol)
 
 
 def _symbol_key(symbol: str) -> str:

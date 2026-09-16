@@ -16,7 +16,7 @@ TZ = timezone(timedelta(hours=8))
 
 def _state(ts: str):
     return {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-1",
         "updated_at": ts,
         "timeframes": {
@@ -28,7 +28,7 @@ def _state(ts: str):
 
 def _live(ts: str):
     return {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-1",
         "timestamp": ts,
         "fresh": True,

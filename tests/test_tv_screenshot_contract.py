@@ -57,7 +57,7 @@ def test_xau_action_cache_waits_for_verified_5m_studies(monkeypatch):
     monkeypatch.setattr(sync, "_tv_command", lambda *args, timeout=30: calls.append(args) or ("", True))
     monkeypatch.setattr(sync.time, "sleep", lambda seconds: calls.append(("sleep", seconds)))
     monkeypatch.setattr(sync, "_chart_state", lambda: {
-        "symbol": "OANDA:XAUUSD", "resolution": "5",
+        "symbol": "TVC:GOLD", "resolution": "5",
         "studies": ["SVP+ICT+VWAP+CVD", "Volume Aggregated Spot & Futures"],
     })
 
@@ -82,7 +82,7 @@ def test_xau_prepare_recovers_when_chart_is_slow(monkeypatch):
         seen["n"] += 1
         if seen["n"] < 3:                       # 前两次还没切完
             return {"symbol": "BINANCE:BTCUSDT.P", "resolution": "15", "studies": ["SVP+ICT+VWAP+CVD"]}
-        return {"symbol": "OANDA:XAUUSD", "resolution": "5",
+        return {"symbol": "TVC:GOLD", "resolution": "5",
                 "studies": ["SVP+ICT+VWAP+CVD", "Volume Aggregated Spot & Futures"]}
 
     monkeypatch.setattr(sync, "_chart_state", flaky_state)
@@ -129,7 +129,7 @@ def test_restore_chart_fails_bounded_when_never_lands(monkeypatch):
     sync = load("xau_tv_sync.py")
     monkeypatch.setattr(sync, "_tv_command", lambda *args, timeout=30: ("", True))
     monkeypatch.setattr(sync.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(sync, "_chart_state", lambda: {"symbol": "OANDA:XAUUSD", "resolution": "5"})
+    monkeypatch.setattr(sync, "_chart_state", lambda: {"symbol": "TVC:GOLD", "resolution": "5"})
     assert sync._restore_chart({"symbol": "BINANCE:BTCUSDT.P", "resolution": "15"}) is False
     assert sync._RESTORE_ATTEMPTS * sync._RESTORE_WAIT <= 60
 

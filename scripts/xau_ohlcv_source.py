@@ -10,11 +10,13 @@ XAU 现场同步原来为取五周期 OHLCV 要切 5 次周期（加品种与归
 报告 `_build_xau_report` 也只用 OHLCV。
 → 这 5 次切换纯属浪费，OHLCV 可以走 API。
 
-## 取数优先级
-  1. **OANDA v20**（`XAU_USD`）—— 与用户图表 `OANDA:XAUUSD` **同源**，最准。
-     密钥文件 `hermes/secrets/oanda_token.txt` 当前是占位符，填进真 token 即自动启用。
-  2. **TwelveData**（`XAU/USD`）—— 现货，5min/15min/1h/4h/1day 全覆盖。
-     实测与 TV 的已闭合 K 线差约 0.1%，边界对齐。
+## 取数优先级（2026-09-16 起）
+  1. **TwelveData**（`XAU/USD`）—— 现货，5min/15min/1h/4h/1day 全覆盖。
+     实测与 TV 的已闭合 K 线差约 0.1%，边界对齐。**当前唯一现役源**。
+  2. **OANDA v20**（`XAU_USD`）—— 退役为备源。`hermes/secrets/oanda_token.txt`
+     从未配置（实测 oanda=无），该分支长期被跳过；填真 token 即自动启用。
+     TV 图表口径已于 2026-09-16 从 OANDA:XAUUSD 切到 TVC:GOLD（见 scripts/tv_symbols.py），
+     所以 OANDA 不再具备「与图表同源」的优先理由。
   3. 都失败 → 返回 None，由调用方回退到「逐周期切图」的老路径（fail-safe）。
 
 ## 口径
@@ -209,8 +211,9 @@ def fetch_all(count: int = 3) -> dict:
     oanda_token = _read_secret("oanda_token.txt")
     td_key = _read_secret("twelvedata_api_key.txt")
 
-    for source, fn, key in (("oanda", _oanda_candles, oanda_token),
-                            ("twelvedata", _twelvedata_candles, td_key)):
+    # 口径 2026-09-16：TwelveData 现役优先；OANDA 退役为备源（token 未配置时自动跳过）。
+    for source, fn, key in (("twelvedata", _twelvedata_candles, td_key),
+                            ("oanda", _oanda_candles, oanda_token)):
         if not key:
             continue
         if breaker_open(source):
@@ -234,13 +237,13 @@ def fetch_daily_closes(count: int = 30) -> tuple[list[float], str]:
 
     与 fetch_all() 的区别：fetch_all 只返回每个周期**最新一根**（供卡面读数），
     做 30 天相关性必须逐根取。返回 (closes, source)：
-      - 现货源（OANDA → TwelveData）逐根取成功 → (closes, "oanda_spot"/"twelvedata_spot")
+      - 现货源（TwelveData → OANDA 备源）逐根取成功 → (closes, "twelvedata_spot"/"oanda_spot")
       - 两个源都不可用（无 token / 熔断 / 取数失败）→ ([], "none")，调用方自己决定回退
-    口径优先 OANDA（与图表 OANDA:XAUUSD 同源），失败再退 TwelveData。
+    口径优先 TwelveData（唯一现役现货源）；OANDA 降为备源（token 未配置，长期跳过）。
     """
     attempts = (
-        ("oanda_spot", "oanda_token.txt", _oanda_candles, "D"),
         ("twelvedata_spot", "twelvedata_api_key.txt", _twelvedata_candles, "1day"),
+        ("oanda_spot", "oanda_token.txt", _oanda_candles, "D"),
     )
     for label, secret, fn, gran in attempts:
         key = _read_secret(secret)

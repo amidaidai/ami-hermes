@@ -262,7 +262,7 @@ def _generic_matrix(engine: dict[str, Any], steps: set[str], symbol: str = "") -
         rec = _as_dict(_as_dict(engine.get("_source_records")).get("cvd"))
         rows.append(_row(
             "gold_contract_cvd", "Binance黄金合约CVD", _status(rec) if rec else "live",
-            "observational", False, "辅助展示·不越权改FinalVerdict（非OANDA现货数据）",
+            "observational", False, "辅助展示·不越权改FinalVerdict（非现货数据）",
             evidence=f"{gold_cvd.get('direction', '?')}·{gold_cvd.get('quality', '?')}",
             requested="cvd" in steps,
             source_value=rec or gold_cvd,

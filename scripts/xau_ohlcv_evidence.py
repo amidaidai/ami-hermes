@@ -3,7 +3,11 @@ from datetime import datetime, timezone, timedelta
 import math
 
 SECONDS = {'1D': 86400, '4h': 14400, '1h': 3600, '15m': 900, '5m': 300}
-IDENTITIES = {'tradingview_mcp': 'OANDA:XAUUSD', 'oanda': 'XAU_USD', 'twelvedata': 'XAU/USD'}
+try:  # scripts/ 在 sys.path 时走单点口径；独立导入时兜底同一常量
+    from tv_symbols import GOLD_TV_SYMBOL as _GOLD_TV_SYMBOL
+except ImportError:  # pragma: no cover
+    _GOLD_TV_SYMBOL = 'TVC:GOLD'
+IDENTITIES = {'tradingview_mcp': _GOLD_TV_SYMBOL, 'oanda': 'XAU_USD', 'twelvedata': 'XAU/USD'}
 
 
 def timestamp(value):

@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import btc_ref_levels_sync as btc_sync
+import render_v96
 import tv_data_bridge as bridge
 from render_v96 import render_v96_card
 
@@ -316,7 +317,11 @@ def test_hard_stop_accepts_complete_go_a_only_as_live_boundary():
     assert "MCP" in result["error"]
 
 
-def test_no_go_card_does_not_render_backup_prices():
+def test_no_go_card_does_not_render_backup_prices(monkeypatch):
+    # 隔离外部缓存：清算行读的是 data/coinglass_liq.json / OKX 强平流等真实文件，
+    # 其价格文本会随机带上 "99/101/105" 之类子串（实测 2026-09-16 撞上 "下74,899"），
+    # 与本用例「备选价不得渲染」的断言无关 —— 不隔离就会变成随行情飘的红绿灯。
+    monkeypatch.setattr(render_v96, "_liquidation_line", lambda symbol: "")
     card = render_v96_card(
         symbol="BTCUSDT", status="X禁做", direction="short", price=100,
         high=105, low=95, chg=0, tf_lines="", cvd_dir="卖", cvd_quality="C",

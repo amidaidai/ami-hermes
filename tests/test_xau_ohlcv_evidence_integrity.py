@@ -19,10 +19,10 @@ def _tv_payload(tf='5m', step=300, offset=600):
 
 
 def test_strict_parser_preserves_closed_bar_time_and_source():
-    state = {'symbol': 'OANDA:XAUUSD', 'resolution': '5'}
+    state = {'symbol': 'TVC:GOLD', 'resolution': '5'}
     out = S._parse_ohlcv(json.dumps(_tv_payload()), json.dumps(state), expected_tf='5m', now=NOW)
     assert out['evidence']['source'] == 'tradingview_mcp'
-    assert out['evidence']['symbol'] == 'OANDA:XAUUSD'
+    assert out['evidence']['symbol'] == 'TVC:GOLD'
     assert out['evidence']['timeframe'] == '5m'
     assert out['evidence']['bar_open_time'] == '2026-09-11T11:50:00+00:00'
     assert out['evidence']['bar_close_time'] == '2026-09-11T11:55:00+00:00'
@@ -31,7 +31,7 @@ def test_strict_parser_preserves_closed_bar_time_and_source():
 
 
 def test_strict_parser_rejects_duplicate_or_wrong_coverage():
-    state = json.dumps({'symbol': 'OANDA:XAUUSD', 'resolution': '5'})
+    state = json.dumps({'symbol': 'TVC:GOLD', 'resolution': '5'})
     for step in (0, 60, -300):
         assert S._parse_ohlcv(json.dumps(_tv_payload(step=step)), state, expected_tf='5m', now=NOW) is None
     assert S._parse_ohlcv(json.dumps(_tv_payload(offset=-300)), state, expected_tf='5m', now=NOW) is None
@@ -41,8 +41,8 @@ def test_collector_rejects_chart_identity_changed_during_read(monkeypatch):
     monkeypatch.setattr(S, 'TIMEFRAMES', [('5m', '5')])
     async def no_wait(*args): pass
     monkeypatch.setattr(S.asyncio, 'sleep', no_wait)
-    states = iter([{'symbol':'OANDA:XAUUSD', 'resolution':'5'},
-                   {'symbol':'OANDA:XAUUSD', 'resolution':'15'}])
+    states = iter([{'symbol':'TVC:GOLD', 'resolution':'5'},
+                   {'symbol':'TVC:GOLD', 'resolution':'15'}])
     async def state(*args): return json.dumps(next(states))
     async def ohlcv(*args): return json.dumps(_tv_payload())
     result = {'timeframes': {}}
@@ -69,5 +69,5 @@ def test_chart_parser_rejects_wrong_actual_timeframe():
     payload = {'last_5_bars': [
         {'time': NOW.timestamp()-600, 'open':4300, 'high':4301, 'low':4299, 'close':4300},
         {'time': NOW.timestamp()-300, 'open':4300, 'high':4301, 'low':4299, 'close':4300}]}
-    state = {'symbol': 'OANDA:XAUUSD', 'resolution': '15'}
+    state = {'symbol': 'TVC:GOLD', 'resolution': '15'}
     assert S._parse_ohlcv(json.dumps(payload), json.dumps(state), expected_tf='5m', now=NOW) is None

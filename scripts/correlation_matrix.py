@@ -58,8 +58,8 @@ def load_price_series(symbol: str, lookback_days: int = 30) -> list[float]:
 
 
 # ---- 黄金腿的合规口径（2026-09-15 审计发现：原来直接拿 Binance XAUUSDT 当「XAU」）----
-# 用户铁律：禁拿加密合约冒充 OANDA 黄金。取数优先序：
-#   1) OANDA/TwelveData 现货日线（xau_ohlcv_source，与图表 OANDA:XAUUSD 同源）
+# 用户铁律：禁拿加密合约冒充现货黄金。取数优先序：
+#   1) TwelveData 现货日线（xau_ohlcv_source；TV 图表口径 TVC:GOLD 见 scripts/tv_symbols.py）
 #   2) Binance XAUUSDT —— 只作为**代理腿**，必须明标，并与现货基准比偏差；
 #      偏差超阈值就降级：不给仓位建议（可见降级，不硬拦截）
 GOLD_PROXY_SYMBOL = "XAUUSDT"
@@ -72,7 +72,7 @@ GOLD_SPOT_REF_MAX_AGE_MIN = 60.0
 
 
 def gold_spot_reference() -> float | None:
-    """OANDA:XAUUSD 现货基准价（TV 现场同步产物），用于校准代理腿。
+    """TVC:GOLD 现货基准价（TV 现场同步产物），用于校准代理腿。
 
     时效闸：文件超过 GOLD_SPOT_REF_MAX_AGE_MIN 视为不可用（XAU 同步已暂停时会命中）。
     """
@@ -190,8 +190,8 @@ def compute_correlation() -> dict:
     degraded = bool(proxy and gold_dev is not None and abs(gold_dev) > GOLD_PROXY_MAX_DEV_PCT)
     warn = None
     if proxy:
-        warn = (f"黄金腿=Binance {GOLD_PROXY_SYMBOL}（**代理**·非 OANDA 现货）"
-                + (f"，与 OANDA:XAUUSD 现货偏差 {gold_dev:+.2f}%" if gold_dev is not None
+        warn = (f"黄金腿=Binance {GOLD_PROXY_SYMBOL}（**代理**·非现货）"
+                + (f"，与 TVC:GOLD 现货偏差 {gold_dev:+.2f}%" if gold_dev is not None
                    else "，现货基准不可用（无法校准）"))
         if degraded:
             warn += f" → 偏差 >{GOLD_PROXY_MAX_DEV_PCT}%：相关性仅供参考，本轮不给仓位建议"
@@ -298,7 +298,7 @@ if __name__ == "__main__":
         state = compute_correlation()
         print(f"BTC vs XAU 相关性矩阵")
         print(f"  黄金腿来源: {state.get('gold_source')}"
-              + (f"（与 OANDA 现货偏差 {state['gold_deviation_pct']:+.2f}%）"
+              + (f"（与现货偏差 {state['gold_deviation_pct']:+.2f}%）"
                  if state.get("gold_deviation_pct") is not None else ""))
         print(f"  全量相关: {state['correlation_full']}")
         print(f"  短期相关: {state['correlation_short']}")

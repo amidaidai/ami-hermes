@@ -47,7 +47,7 @@ def test_generic_matrix_adds_gold_cvd_row_with_status():
     assert row["status"] == "live"
     assert row["role"] == "observational"
     assert row["entered_final_verdict"] is False
-    assert "非OANDA" in row["impact"]
+    assert "非现货" in row["impact"]
     assert "卖" in row["evidence"]
 
 

@@ -35,7 +35,10 @@ STATUS_OUT = ROOT / "data" / "xau_tv_sync_status.json"
 # 卡时看「要不要现在刷一次」。
 XAU_LIVE_MAX_AGE_CADENCE_MIN = 17.0
 NO_PUSH_FLAG = ROOT / "data" / "xau_tv_no_push.json"
-SYMBOL = "OANDA:XAUUSD"
+# 黄金口径单点在 scripts/tv_symbols.py（2026-09-16 切 TVC:GOLD）
+from tv_symbols import GOLD_TV_SYMBOL  # noqa: E402
+
+SYMBOL = GOLD_TV_SYMBOL
 # v9.7: 补 D 层日线，使"自上而下确认"有大背景（原只同步 5m/15m/1h/4h）
 TIMEFRAMES = [("1D", "D"), ("5m", "5"), ("15m", "15"), ("1h", "60"), ("4h", "240")]
 SOURCE_SNAPSHOT = ROOT / "data" / "source_snapshot_XAUUSD.json"

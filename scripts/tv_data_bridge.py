@@ -313,12 +313,16 @@ def chart_owner_mark_restored() -> None:
 
 
 def _norm_symbol_for_cache(symbol: str) -> str:
-    """归一化品种标识，供跨缓存品种门禁比对。"""
-    s = str(symbol or "").upper()
-    # 交易所前缀不属于品种身份；兼容NASDAQ/BATS/CME/NYMEX等所有市场。
-    s = s.split(":")[-1]
-    s = s.replace(".P", "")
-    return s
+    """归一化品种标识，供跨缓存品种门禁比对。
+
+    2026-09-16 黄金口径切 TVC:GOLD 后，黄金的多种写法
+    （TVC:GOLD / OANDA:XAUUSD / XAU_USD）必须归一成同一个身份 XAUUSD，
+    否则换口径当刻旧缓存会被判成「别的品种」而被门禁拦下。
+    非黄金品种规则不变：交易所前缀不属于品种身份（NASDAQ/BATS/CME/NYMEX 通用）。
+    """
+    from tv_symbols import norm_identity
+
+    return norm_identity(symbol)
 
 # ═══ 报警阈值 ═══
 ALERT_GRADES = {"A多", "A空", "X"}  # 只有这三个等级触发警报
@@ -828,14 +832,11 @@ def _symbol_cache_path(symbol) -> Path:
     """按品种归一化出专属缓存路径（与 auto_card._tv_symbol_cache_path 同规则）。
 
     BINANCE:BTCUSDT.P → data/tv_live_BTCUSDT.json
-    OANDA:XAUUSD      → data/tv_live_XAUUSD.json
+    TVC:GOLD          → data/tv_live_XAUUSD.json（口径单点在 tv_symbols.py）
     """
-    raw = str(symbol or "").upper().split(":")[-1]
-    if raw.endswith(".P"):
-        raw = raw[:-2]
-    key = "".join(ch for ch in raw if ch.isalnum())
-    if key.endswith("PERP"):
-        key = key[:-4]
+    from tv_symbols import cache_key_of
+
+    key = cache_key_of(symbol)
     return CACHE.with_name(f"tv_live_{key}.json") if key else CACHE
 
 

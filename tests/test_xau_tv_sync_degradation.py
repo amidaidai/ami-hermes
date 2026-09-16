@@ -54,7 +54,7 @@ def _pair(minutes_old: float):
     from datetime import timedelta
     stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes_old)).isoformat()
     state = {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-1",
         "updated_at": stamp,
         "timeframes": {
@@ -63,7 +63,7 @@ def _pair(minutes_old: float):
         },
     }
     live = {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-1",
         "timestamp": stamp,
         "fresh": True,
@@ -92,7 +92,7 @@ def test_main_degrades_nonzero_sync_result_to_stale_cache(monkeypatch, tmp_path)
 
     assert xau_tv_sync.main() == 1
     payload = json.loads(out.read_text(encoding="utf-8"))
-    assert payload["symbol"] == "OANDA:XAUUSD"
+    assert payload["symbol"] == "TVC:GOLD"
     assert payload["stale"] is True
     assert "同步返回非零状态" in payload["error"]
 
@@ -102,7 +102,7 @@ def test_main_preserves_recent_cache_on_exception(monkeypatch, tmp_path):
     live_path = tmp_path / "tv_live_XAUUSD.json"
     stamp = datetime.now(timezone.utc).isoformat()
     original = {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-1",
         "updated_at": stamp,
         "timeframes": {
@@ -111,7 +111,7 @@ def test_main_preserves_recent_cache_on_exception(monkeypatch, tmp_path):
         },
     }
     live = {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-1",
         "timestamp": stamp,
         "fresh": True,
@@ -137,7 +137,7 @@ def test_main_preserves_recent_cache_on_exception(monkeypatch, tmp_path):
 def test_main_preserves_structured_state_when_live_pair_is_unavailable(monkeypatch, tmp_path):
     out = tmp_path / "xau_tv_state.json"
     structured = {
-        "symbol": "OANDA:XAUUSD",
+        "symbol": "TVC:GOLD",
         "batch_id": "batch-old",
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "timeframes": {
@@ -163,7 +163,7 @@ def test_main_refreshes_xau_data_window_cache_after_success(monkeypatch, tmp_pat
 
     def refresh(batch_id=None):
         calls.append(batch_id)
-        staged.write_text(json.dumps({"symbol": "OANDA:XAUUSD", "timeframes": {"5m": {"close": 4300}}}), encoding="utf-8")
+        staged.write_text(json.dumps({"symbol": "TVC:GOLD", "timeframes": {"5m": {"close": 4300}}}), encoding="utf-8")
         return {}
 
     monkeypatch.setattr(xau_tv_sync, "_refresh_tv_live_cache", refresh)

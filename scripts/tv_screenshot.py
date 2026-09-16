@@ -9,7 +9,7 @@
 
 符号映射：
   BTCUSDT -> BINANCE:BTCUSDT.P   (主周期 15m)
-  XAUUSD  -> OANDA:XAUUSD        (主周期 5m)
+  XAUUSD  -> TVC:GOLD            (主周期 5m)
 周期代码走 TV MCP：chart_set_timeframe 接受 "5"/"15"/"D" 等。
 """
 from __future__ import annotations
@@ -32,9 +32,14 @@ HERMES_VENV = Path(os.path.expanduser("~/AppData/Local/hermes/hermes-agent/venv/
 SCREENSHOT_DIR = Path("D:/Hermes agent/tools/tradingview-mcp/screenshots")
 SERVER_SCRIPT = Path("D:/Hermes agent/tools/tradingview-mcp/src/server.js")
 
+try:  # scripts/ 在 sys.path 时走单点口径；独立运行时兜底同一常量
+    from tv_symbols import GOLD_TV_SYMBOL
+except ImportError:  # pragma: no cover
+    GOLD_TV_SYMBOL = "TVC:GOLD"
+
 SYMBOL_MAP = {
     "BTCUSDT": ("BINANCE:BTCUSDT.P", "15", "15m"),
-    "XAUUSD": ("OANDA:XAUUSD", "5", "5m"),
+    "XAUUSD": (GOLD_TV_SYMBOL, "5", "5m"),
     "AAPL": ("NASDAQ:AAPL", "60", "1h"),
     "TSLA": ("NASDAQ:TSLA", "60", "1h"),
     "NVDA": ("NASDAQ:NVDA", "60", "1h"),

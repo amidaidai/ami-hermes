@@ -504,13 +504,9 @@ def _tv_cache_decision_tables(cache: dict, grade: str = "C等待", treatment: st
 
 
 def _tv_symbol_cache_path(symbol: str) -> Path:
-    raw = str(symbol or "").upper().split(":")[-1]
-    if raw.endswith(".P"):
-        raw = raw[:-2]
-    key = "".join(ch for ch in raw if ch.isalnum())
-    if key.endswith("PERP"):
-        key = key[:-4]
-    return DATA / f"tv_live_{key}.json"
+    from tv_symbols import cache_key_of
+
+    return DATA / f"tv_live_{cache_key_of(symbol)}.json"
 
 
 def _tv_live_levels(cache: dict) -> tuple[float, float, float]:
@@ -2087,7 +2083,7 @@ def _display_symbol(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(su)
     if ac == "gold":
-        return f"{su} · OANDA"
+        return f"{su} · TVC"
     if ac == "crypto":
         display = su if su.endswith(".P") else f"{su}.P"
         return f"{display} · BINANCE"
@@ -2223,7 +2219,7 @@ def _leverage_text(symbol: str) -> str:
     su = symbol.upper()
     ac = _asset_class(symbol)
     if ac == "gold":
-        return "杠杆按账户风控·OANDA仅数据源"
+        return "杠杆按账户风控·TVC仅数据源"
     if ac == "crypto":
         if su in ("BTCUSDT", "ETHUSDT"):
             return "Binance 100x"
@@ -4588,7 +4584,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                     except Exception:
                         tv_xau = None
                 if tv_xau:
-                    xau_tv_note = "XAU TV MCP现场读取(OANDA:XAUUSD 5/15/1h/4h真实结构)"
+                    xau_tv_note = "XAU TV MCP现场读取(TVC:GOLD 5/15/1h/4h真实结构)"
                     engine_data["_xau_tv_limitation"] = xau_tv_note
                     # 用 TV 真实高低覆盖占位（v9.7: 加入1D日线背景，供"自上而下确认"；
                     # state用key"1D"，引擎层统一建为渲染器期望的"D"键）
@@ -4611,7 +4607,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                             }
                     print(f"  📊 XAU K线: TV MCP现场读取 {int(price)} · 五周期真实结构已覆盖引擎占位")
                 else:
-                    xau_tv_note = "⚠️XAU使用gold-api+金十占位推算(非TV现场)；OANDA:XAUUSD程序化读数需xau_tv_sync.py补真"
+                    xau_tv_note = "⚠️XAU使用gold-api+金十占位推算(非TV现场)；TVC:GOLD程序化读数需xau_tv_sync.py补真"
                     engine_data["_xau_tv_limitation"] = xau_tv_note
                     engine_data["_xau_placeholder"] = True  # 标记占位，供状态降级
                     # 从金十/Jin10取24h高低
