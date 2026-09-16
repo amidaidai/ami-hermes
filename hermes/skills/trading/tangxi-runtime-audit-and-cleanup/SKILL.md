@@ -472,8 +472,16 @@ grep -rn "structure_reviewed_at\|max_structure_age\|valid_until" --include=*.py 
 
 ```bash
 # 试跑每个看门狗，看它报多少条。报 10+ 条的看门狗 = 已被忽略的看门狗
-python scripts/data_freshness_watchdog.py
+python scripts/data_freshness_watchdog.py   # ⚠ 现役版本默认「静默落盘」：不打 stdout，跑完什么都没打印
+python -c "import json;d=json.load(open('data/data_freshness_watchdog_report.json',encoding='utf-8'));print(d['generated_at'],d['healthy'],d['issue_count']);[print(i['name'],i['status'],i.get('reason','')) for i in d['items'] if not i.get('fresh')]"
 ```
+
+**空输出 ≠ 健康。** 该看门狗（v1.2 起）的约定就是「默认/check/report 均静默落盘」——
+直接跑它拿到零输出，**不能**当成「0 过期」。权威判据是
+`data/data_freshness_watchdog_report.json` 的 `generated_at` / `healthy` / `issue_count`
+与逐项 `status`（`--output` 可换路径）。
+`quota_cooldown`（免费源当日额度打满，如 CoinLobster）属于**正常降级、不算故障**，
+不得因此阻塞分析出卡；报给用户时按「额度冷却」而非「源挂了」措辞。
 
 **实测案例**：`data_freshness_watchdog.py` 盯着 **10 个采集器已停用**的产出
 （x_sentiment / dune / qlib / stablecoin / oi_snapshot / deribit / orion /

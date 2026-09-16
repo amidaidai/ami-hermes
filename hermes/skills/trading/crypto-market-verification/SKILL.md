@@ -64,6 +64,14 @@ WAIT/NO-GO 执行字段仍清空、X 禁做不显示候选），**不要当成�
 - `WAIT`：有等待类拦因或 C 级 → 只有观察条件与结构位。
 - `NO-GO`：任一硬门 → 连候选价都不出，**也不出 PLAN-B**。
 
+**NO-GO/WAIT 下回答「具体怎么做」的边界**：不给打包三件套，也不要用「今天没优势」打发——用一张
+**「几何推演」小表**把门槛讲透：列 `推演（非执行单）｜入场／止损／目标｜R:R` 2-4 行，结论落在
+**「哪条路不干净、要什么条件才够」**，不是「做哪个」。硬约束：① 表名/首列明标「非执行单·仅为解释门槛」；
+② 不与主推并列、不用 ⭐、不写进 ④；③ 推演价只能由**本轮卡面已有的结构位**推出（收上 X 后入 X 上方、
+止损放失效位外），不得发明新位；数字用 `terminal` 算，不口算。
+实测价值：NO-GO 的主因常是「上方空间不够 2R」（近期目标都在 1.3R 以内）或「止损只能摆在阻力簇里＝
+把止损交给插针」——这两句话用户能懂、能自己复核；只写「R:R 不足」他不满意。
+
 诊断口径：`python scripts/a_grade_probe.py <SYM>` 逐项对照 A 级门槛，并区分「行情没机会」（Grade/Side/EntryValid 是 SVP 的判断）与「工程封死」（字段缺失 / HALDRO Valid Code=0 / Contract Pack 坏）。**别把行情判断报成接线故障。**
 
 R:R 分层是同一个事实、两处定性：`decision_loop` 记等待类 `rr_ratio`，`risk_constitution` 检查2 曾经记 violation → `allowed=False` → 硬门。已按合同改为：`<1.5` 硬否决、`1.5–1.99` 只给 `observe_only_rr` 人工观察候选、`≥2.0` 干净；`OBSERVE_RR_RATIO` 必须等于 `tv_indicator_contract.RR_BC_MIN`。**改 R:R / 风控阈值后必须验证：R:R<2 仍不可能拿到 GO-A。**
@@ -82,10 +90,25 @@ R:R 分层是同一个事实、两处定性：`decision_loop` 记等待类 `rr_r
 - 目标价位**装不下就少放一个**（面板式按视觉宽度累加，超 44 即停），禁按字符硬切：硬切会把 `78,032` 切成 `7`、把角色名切成 `近端转撑 15m V` 这种半截内容，比少写一个目标更糟。
 - 角色名压缩（面板版用；表格版直接保留原生角色串）：取首个 `·` 前的主体 ＋ **一个**结构标签（VAH/VAL/VWAP/POC）：`⚖现价所在带·D·VWAP–4h·VWAP` → `现价带 VWAP`；`失效/支撑带·D·VAH–5m·支` → `失效带 VAH`。
 - **聊天回复里不要贴那张 50 行的附录/闸门表**：markdown 客户端不渲染 `<details>` 折叠，贴全文＝用户最反感的「东西太多」。聊天版压到 ≤6 行关键表（多源质量 4 行足够）＋ 指向 `data/auto_card_<SYM>_full.md` 的链接，写明全文在此。
+- **「简洁一点」＝降到最小交付形态**（超长回复是最常见的返工原因）：首屏 4 行（含 v8 决策两行）＋ **一张**三态表 ＋ **一句话**（拦因＋等什么）＋ **一行**注脚（双源价＋档位/源状态）。此时删掉：③ 多源表、② 关键位表（价位并进三态触发）、几何推演表、格式说明/联网依据表、「具体怎么做」独立小节。**格式改造的落地过程（改了哪个文件、跑了哪些测试、依据来自哪篇）一律不进聊天回复** —— 那属于技能与 docs，用户要的是卡；被追问才展开。
+- **交付前自检一句**：这条回复里，除了卡、一句结论、一行注脚，还有多少是我自己的过程叙述？有就先删再发。
 - 阶梯与三态里的数字必须来自原生卡原文；卡面值与现场实测冲突时（恐贪这类）**卡后加一行注明，不动卡面**。
 - 用户明确说「换个版式/要表格」才改版式，改完先给他看再固化；不要自己起新版式。
 - **重排层缺陷已于 2026-09-16 修复**（历史清单留档，出卡前不必再逐条目视）：① 首行/区间边/远端位统一走 `price_format.fmt_price`，外汇 4 位小数不再被打成 `1`；② 远端位先剔周期标记再取数，不再 `n > 100` 过滤；③ 「主观察」不再打 ⭐（⭐ 只在 GO-A）；④ GO-A 卡的 ④ 执行三件套会原样搬进重排卡，总结不再说「当前不给入场价」；⑤ 「怎么做」的主周期取 ① 体温行的 ⭐（黄金 5m），非加密不再要求「主副指标重新共振」；⑥ 首屏理由只读 FinalVerdict 主拦因，「本模块不适用」只进来源说明；⑦ 三态无相邻位时用现价带上下沿，缺目标写「暂无具名结构位」（不再印 `上沿`/`区间外`）。回归：`tests/test_card_presentation_20260916.py`。逐条代码锚点见 `references/card-three-layer-reformat.md`。
-- 模板与字段映射：仓库 `docs/分析卡模板-v7.md`（可复制）＋本技能 `templates/card-skeleton.md` v7；实现细节与边界（含 `_plain()` 映射表、两模式差异）见 `references/card-three-layer-reformat.md`。
+- 模板与字段映射：仓库 `docs/分析卡模板-v7.md`（可复制）＋本技能 `templates/card-skeleton.md`（v8）；实现细节与边界（含 `_plain()` 映射表、两模式差异）见 `references/card-three-layer-reformat.md`。
+- **首屏 v8 ＝ 固定 4 行**（用户要求「优化格式」后落地）：品种行 ／ 唯一主推行 ／
+  `🟡 现在：不动作，等 <主周期> 收线`（GO-A 写 `🟢 现在：按 ④ 执行`，PLAN-B 写 `🟡 现在：先等 ④ 的升级前置解除`）／
+  `上 \`价\`（角色） ／ 下 \`价\`（角色）`。第 3-4 行回答「现在做什么」与「要观察哪一个位置」，
+  由 `render_tables` 自动生成，**不要手写**。依据（联网核实）：空仓也是决策必须写出来（abovethegreenline 交易提醒指南）·
+  仪表盘先定「读者最需要的那个数」且数字右对齐（bigexcelenergy 仪表盘设计原则）·
+  交易计划必须含触发／取消／失效与最小盈亏比（fxglory 中文外汇交易计划模板）。
+- **改版式的落地清单（缺一处就是没改完）**：① 改 `scripts/card_reformat.py` 的 `render_tables`——首屏要用三态位，
+  必须把 `band_zone/cand/below/above/up_trig/dn_trig` 与 `plan_rows/executable` 的取值**上移到首屏之前**，
+  否则 `out` 构造时这些变量还没定义；② 跑 `python -m pytest tests/test_card_presentation_20260916.py tests/test_card_v912_format.py tests/test_plan_b_card_render.py -q`
+  （首屏行序、`上沿 |`、空括号 `（）`、` 1 ` 精度等断言会拦人）；③ 同步 `docs/分析卡模板-v7.md` ＋ 本技能 `templates/card-skeleton.md`；
+  ④ **用真实卡实测一次**并肉眼核首屏 4 行都出得来（`_edge()` 返回不带反引号的裸价，反引号由重排层补）。改完先给用户看再固化。
+  找版式依据时用「领域＋最佳实践/模板」措辞（中文交易计划模板、仪表盘设计原则、交易提醒指南命中率高），
+  「交易信号卡格式」这类泛查询只回机器人教程。
 
 ## 发布前闸门（带外部归因的回复必跑）
 
@@ -100,6 +123,7 @@ python scripts/claim_lint.py --file outputs/draft_reply.md --asof <YYYY-MM-DD> \
 引宏观指数（VIX/美债/金/市占/SPX）的合规写法是「**据 <具名来源>（YYYY-MM-DD 现场实拉）**」：
 `据 macro_probe（2026-09-15 11:06 现场实拉，上游 Yahoo/FRED）：SPX 7,603（-1.28%）· VIX 17.10 · 美债 4.96%`。
 只写括号里的「（现场实拉）」**不算来源**（闸门认 URL 或 `据/来源/Reuters/金十/CoinGlass…` 具名源词）——实测同一段话：带「据+日期」过，只写「（现场实拉）」被拦。
+**表内数字也要就地给源**：闸门是**按句/按行**判的，③ 多源表的「宏观·事件」行（SPX/VIX/DXY/美债的涨跌幅）会被逐条判 `VIOLATION:no_source` —— 在文档后面另起一行补来源**救不了这一行**。来源必须写进**同一行内**：`… · DXY 99.69（+0.58%）· 美债 4.96% —— 据 macro_probe（YYYY-MM-DD 现场实拉，上游 Yahoo／FRED） | 事件驱动·不改结构 |`，改完重跑闸门到 exit 0 再发（在 terminal 里用 `echo EXIT=${PIPESTATUS[0]}` 拿真实退出码，别让管道把 exit code 吃掉）。
 **自 2026-09-15 起还有第二条**：归因句要求 **≥2 个独立来源**（同一个来源的多种写法只算 1 家），
 只写「据 macro_probe」会进 `weak_source` 弱提示——写上上游（·上游 Yahoo/FRED）即满足且更诚实；
 发关键结论前用 `python scripts/claim_lint.py --file <草稿> --strict` 跑一遍。
@@ -127,6 +151,15 @@ python scripts/claim_lint.py --file outputs/draft_reply.md --asof <YYYY-MM-DD> \
 - ↑ 收线站上主位：空头逻辑减弱或转入多头观察；
 - ↓ 反抽主位受阻并完成结构确认：进入空头人工观察；
 - ○ 在主位附近横盘或未收线：观望，不在中间位置追单。
+
+**单点追问也算一轮，且「主位」会因价格穿越而换角色**：用户只问一句「要观察哪一个位置」时照旧走一轮
+（`quote_get` ＋ 主副指标 `data_get_pine_tables` ＋ 新截图并 `cp` 到 web-ui 上传目录），
+**绝不复述上一张卡的主位与措辞**。判定规则是「现价锚」（同 ① 三态）：先看现价落在位的哪一侧，再定角色 ——
+上一轮在现价**上方**、写着「收上才看 XX」的位，一旦被价格站上去，本轮角色立刻变成**即时分水岭**：
+站住＝转多观察、失守＝假突破回落，↓ 触发改写为它的失守，而不是继续写「收上」。
+照抄旧卡会给出「收上 <现价下方的位>」这种荒谬触发（同一交易时段内实测过：卡面把 15m·VAL 写作上沿阻力，
+几分钟后现价站上该位，同一位置应改判为「守不守得住」的下方判定线）。主位的**权威口径取 SVP 行动格「现位」行**
+（`待·回踩摆动低 …·等MSS↑` 之类），它给出的才是失效线/回踩位；自选位只在「现位」行缺失时才用。
 
 当主/副指标出现 S3/S4 冲突、未收线、缩量、OI背离或OI缺失时，主推只能是等待/观望；不能生成正式 Entry、Stop、Target。人工候选必须标注“未授权”，且不得与主推并列成两个方案。用户要求「标注推荐哪一个方案」时：⭐标在主侧并出现在首屏；对侧不得写成带独立触发/目标的平行方案，只作主推失效路径出现。
 
@@ -156,7 +189,25 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 - `stale_cache`：仅有旧缓存，不能写成实时；
 - `quota_cooldown`：源级限流熔断中。
 
+**额度打满是状态、不是故障（写采集作业时的硬规则）**：服务端 `429` 且带当日额度字样
+（`code -32029` / `Daily limit reached` / `calls a day`）→ 状态写 `quota_cooldown`、保留上次工件、
+**`exit 0`**（不阻塞、不铸 incident），并落一个冷却文件到次日恢复时刻；
+短时 `429`（无限额字样）与鉴权/协议类错误仍要 `exit 1`——不用 cooldown 掩盖真问题。
+免费源的额度要预先入账：按「cron 频率 × 每轮调用数」估够不够日额度；剩余不足时按优先级保核心格，
+把跳过的工具**写进工件**（`skipped_tools`）——不静默削源，也不让每 30 分钟一轮都失败刷告警。
+
+**回写降级工件前先剥元数据键**：把上一份工件（带 `_source_contract` 等 `_` 前缀键）直接回灌
+`write_source_artifact` 会被内部拆包成**上一份 payload**，本轮写的注记/标记静默消失。
+先过滤掉 `_` 前缀键再合并；测试必须覆盖「已存在旧工件」这条路径（空工件走不到这个分支）。
+`cached` 只表示「旧数据被保留」，不要因为 payload 非空就置 True。
+
 任何失败必须在结果里可见。Binance价格失败时，继续采集仍可用的期货端点，并注明价格降级来源；不能因一个端点失败而假称整套 Binance 已验证。
+
+**直连超时 / `SSL: UNEXPECTED_EOF_WHILE_READING` 先换代理，再谈降级**：`fapi.binance.com` 直连失败时改用
+`http://127.0.0.1:7897` 重试（多端点取数一律写成 `outputs/*.py` 用 `urllib.request.build_opener(ProxyHandler({...}))` 跑，
+不要长内联 curl / 嵌套 `$()`）；取到即按 `live` 用，并在注脚注明「直连超时·经代理实拉 <价>（<BJT时间>）」。
+只有**代理也失败**才写 `unavailable`。—— 「每轮必须现场核验 Binance」是硬要求：直连报错≠该端点不可用，
+遇到报错就改口「本轮只看 TV 读数」等于漏了这条硬要求。
 
 ## 第三方平台/第三方源数据比对（引用非官方数字前必做）
 
@@ -184,6 +235,8 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 - **`python scripts/auto_card.py --help` 不打印帮助，它会直接跑一张 quick 卡**（实测：打印「一键分析卡 · BTCUSDT · quick / 3步路由」并真去刷 TV）。想看用法读源码或直接用下一条命令。
 - 完整（L3）调用：`HANGQING_NO_SEND=1 TANGXI_ENABLE_AUTOMATED_TG=0 python scripts/auto_card.py <SYM> --mode-auto --message "分析 <SYM>"`。回执看第 3 行的 `档位=full` 与 `管线路由：14步`（加密，2026-09 起 cg_pro 退役后由 15 步降为 14 步；步数按 `pipeline_router.route_pipeline(sym,'full')` 现算，别背旧数）。**full 档实测步数**：加密 14 · 贵金属 8 · 外汇 7 · 股票 8 · 期货/指数 6（期权=底层+`options_chain`）；`quick` 与 `standard` 目前同长（加密 3、其余 2）—— 别把 two 档差异说成步数差异。不带 `--mode-auto --message` 就是静默 quick。
 - 耗时 2-3 分钟，**后台跑 + wait**，不要前台阻塞；卡落在 `data/auto_card_<SYM>_full.md`，尾部自带管线完成度审计（直接用它写“完成 N/M”）。
+- **后台跑时把完整 stdout 落到文件（`> outputs/auto_card_<SYM>_<BJT时间>.log 2>&1`），不要 `| tail -60`**：卡面只写「主因 X · N 类 / M 条拦因（明细见证据层）」，那份拦因明细**只在 stdout**，`.md` 产物与审计表里都没有。tail 截掉后想答「拦下来的是哪一道门」就只能重建。
+- **「哪一道门」的可重建证据 = 原生卡正文里的三处**（不是审计表）：尾部 `GO/NO-GO 下单闸门` 表（每门 GREEN/YELLOW/RED + 原因 + `裁决` 行的硬闸门名）、`高级订单流确认` 段的执行门控行（`共振 N/6 < 4 · 否决 · 置信 x%`）、`评分引擎 x/14` 行。只靠这三处就能说清门名、属**行情判断**（共振不足/评分不合格）还是**系统状态**（数据/接线），以及要转绿等什么（如 15m 出 BOS 或 MSS 且量能放大）。
 - **轻量（L1）档的产物文件名不同：`data/auto_card_<SYM>.md`（没有 `_full` 后缀）**。命令 `python scripts/auto_card.py <SYM> --quick --message "现在呢"`（路由 `tv → binance → card`，约 70s）。踩过的坑：跑完 quick 后去看 `data/auto_card_<SYM>_full.md` 的 mtime，会把**上一轮完整卡**当成本轮产物（mtime 停在几小时前，且 "结构：" 行还是旧价）——先 `ls -t data/auto_card_<SYM>*.md` 看两个候选再读。
 - **轻量档的降级要写成「档位未刷新」而不是「源失败」**：轻量卡里 `宏观/事件 not_run · X情绪 not_run · 跨资产相关性 not_run` 属该档不跑那几步（不是采集失败），③ 覆盖 `3.0`、`主导 76% ⚠` 是只聚合 3 源所致，`TV五周期 live` 落在「仅展示/辅助」列也只是档位未入裁决；交付时说明「轻量档：宏观/X情绪/相关性 not_run，体温与高周期为继承」，不要把 not_run 报成 unavailable，也不要少报这一条。
 - 跑卡前声明分析租约，跑完释放：`python scripts/tv_analysis_lease.py start --minutes 12 --symbol BINANCE:BTCUSDT.P` / `... end`（`status` 可看 `remaining_seconds`；顶层 `active:false` 只表示持有进程已退出，不代表租约失效，判据是 `lease.remaining_seconds > 0`）。
@@ -245,6 +298,11 @@ TradingView用户输入的裸永续符号不等于Binance合约。先用`chart_s
 ## 工具纪律
 
 MCP 工具通过 `tool_search` 找到后，用 `tool_call` 调用；不要凭记忆写不存在的工具名。
+
+- **同一 MCP 工具可能先以直接工具出现、后续只走延迟目录**：直接调用报
+  `Tool 'mcp__<server>__<tool>' does not exist. Available tools: …` 时，**不要判定工具不可用、也不要改方案** ——
+  用 `tool_call(name="mcp__<server>__<tool>")` 调**同名**工具即可拿到结果（实测同一会话里 `quote_get` 先可直接调用，
+  之后同一名字必须经 `tool_call`）。取数阶段撞到这个报错先按此重试一次，再谈降级。
 
 - **一个 `tool_call` 只装一个 MCP 调用；但一轮里可以并列多个 `tool_call` 块**：被拒的形态只有「同一个 `tool_call` 的 `calls` 数组里塞两个 MCP 调用」（`Local tools require one entry per tool_call; mixed and multi-local batches are not supported.`）。把多个独立的 `tool_call` 块写在同一条回复里是可行且推荐的——运行时并发执行。实战一轮可同时取回 `chart_get_state` ＋ 主指标 `data_get_pine_tables` ＋ 副指标 `data_get_pine_tables` ＋ `quote_get` ＋ `capture_screenshot` ＋ `data_get_pine_lines/labels/boxes`，再配一条 `terminal`（如 `binance_deriv_bundle.py`）；把「取数」阶段压成 2-3 次往返，而不是一次调用一轮。
 - **并列的前提是互不依赖**：读表/读价/截图可以同轮；`chart_set_symbol` / `chart_set_timeframe` 以及任何「读之前必须先改图表状态」的动作必须串行，且改完要重读，否则拿到的是上一个品种/周期的结果。

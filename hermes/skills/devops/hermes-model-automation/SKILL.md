@@ -83,6 +83,10 @@ Web UI/Studio 的 provider 模型列表 = 实时发现列表 ∪ `customModels[p
 8. **比对多个候选后必须做同题横评**：同一个证据包（含裁决陷阱）跑遍候选、统一 `--ignore-rules` 上下文，才能区分「都可用」的模型；仅连通/工具探针无法排序。方法与夹具见 `model-routing-validation` 的「同题横评与真实夹具」章节。
 9. **YAML 默认 ≠ 本会话路由；目录有 ≠ 能打。** 推荐前读系统提示 `Model/Provider`，再分通道探：OpenRouter 把 `GET /api/v1/key` 的 spend limit 与 `credits` 分开；DeepSeek/b.ai 要看余额不是看 `/models`。余额 0 / 402 / spend limit 用尽时，旗舰从候选里拿掉。免费只钉具体 `:free` id（首选 Super 120B），不要钉 `openrouter/free`。`auxiliary` 为 `auto` 时不要把主模型切到免费池。现场配方：`model-routing-validation` 的 `references/live-channel-inventory-20260912.md`。
 
+10. **换主模型时同时扫四个非主槽位**：`image_gen`（指向 `openai-codex` 时，OAuth 凭证一旦 429/usage_limit_reached 图像生成会静默失败；先看 `cache/images/` 是否为空判断是否真在用）、`tts.openai` / `stt.openai`（`provider: auto` 时只是未启用的预设，属卫生问题不是死链）、`agent.codex_*`（行为开关，非路由）、auth.json 里的旧厂商凭证（删除前先确认无人引用）。只改 `model.default` 不覆盖这些；`moa.presets.*.reference_models` 里的旧厂商引用也要一起换，换完用 `hermes chat -q "..." --model <新> --provider <新>` 探针确认引用可用，不留未验证备用模型。
+
+> `prefill_messages_file` 指向的 JSON **每次 API 调用都会注入、不入历史**，所以改完文案立即可用、无需重启 gateway；验证方式是让模型复述该规则（`只按【模型路由·强制规则】回答：默认使用哪个模型？`），比 grep 配置文件更能证明真的生效。
+
 ## Auxiliary Compression 模型选择
 
 当用户问“哪个模型适合作 Hermes 压缩模型 / compression model”时，不要只看主模型，要同时检查：

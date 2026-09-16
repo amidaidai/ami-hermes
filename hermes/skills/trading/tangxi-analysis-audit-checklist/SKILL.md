@@ -100,7 +100,7 @@ curl -s "https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=B
 | CoinGecko | `api.coingecko.com/api/v3/` | 免费，无需Key |
 | 恐慌贪婪 | `api.alternative.me/fng/` | 免费无认证 |
 | 金十快讯 | `api.jin10.com/quote/XAUUSD` | 需凭据或MCP |
-| Yahoo Finance | `query1.finance.yahoo.com/v8/finance/chart/` | GC=F/MGC=F 黄金 |
+| Yahoo Finance | `query1.finance.yahoo.com/v8/finance/chart/` | GC=F/MGC=F 黄金；**日变动必须自算**——取 `indicators.quote[0].close` 最后两个非空值相除，**不要用 `meta.chartPreviousClose`**（盘中参考值，会算出 SPX −1.14% 同时 VIX −6.2% 这种自相矛盾；自算得 −0.45% / −2.67% 才自洽）。跨源数值打架先怀疑取数口径，别急着写成「宏观矛盾」 |
 
 ### 2.3 X 情绪获取
 
@@ -133,22 +133,37 @@ tasklist //FI "IMAGENAME eq TradingView.exe" 2>/dev/null | grep TradingView && e
 
 ## 第三维：记忆读取机制
 
-### 3.1 长期记忆（Memory）
+### 3.1 长期记忆（Memory）—— 三个存储，不是一个
 
-| 文件 | 用途 | 写入时机 |
-|------|------|---------|
-| `memory` 工具 | 持久跨会话偏好 | 用户明确偏好、格式铁律、稳定规则 |
-| `user profile` | 用户身份/偏好 | 会话开始时自动注入 |
-| `SOUL.md` | AI persona | 手动编辑 |
+| 存储 | 路径 | 进上下文？ | 判据 |
+|------|------|:---:|------|
+| 用户画像 | `memories/USER.md` | ✅ 每轮全文 | 文件存在即注入 |
+| 个人笔记 | `memories/MEMORY.md` | ✅ 每轮全文 | 同上 |
+| 历史事实库 | `memory_store.db`（SQLite） | ❌ 除非 `holographic` 插件启用 | `plugins.enabled` + `memory.provider` |
+| `SOUL.md` | hermes 根 | ✅ 每轮 | 是否定制 persona |
+
+> **旧版本节只列前两个 `.md`，这是漏读根因**：用户说「读取记忆」时只报两份 `.md` 会被当场要求重读。
 
 **检查命令**：
 ```bash
-# Memory 内容
-grep -c "." ~/AppData/Local/hermes/memories/*.md
+ls -la ~/AppData/Local/hermes/memories/          # 两个 .md + 两个 0 字节 .lock（0=未锁定）
+find ~/AppData/Local/hermes -maxdepth 3 -iname "*memor*"   # 命中 memory_store.db
+python <context-hygiene skill>/scripts/memory_inventory.py # 一次导出三存储全状态
+
+# 历史库到底进不进上下文（三个条件都要查）
+grep -rl memory_store ~/AppData/Local/hermes/hermes-agent --include=*.py
+grep -n -A 20 "^plugins:" ~/AppData/Local/hermes/config.yaml   # holographic 是否 enabled
+grep -n "provider" ~/AppData/Local/hermes/config.yaml          # 在 memory: 段下
 
 # SOUL.md 是否定制
 grep -c "安禾\|棠溪\|交易" ~/AppData/Local/hermes/SOUL.md
 ```
+
+**审计口径**：
+- `memory_store.db` 归 `holographic` 插件所有（`plugins/memory/holographic/store.py`）。插件未启用时它**一个字符都不进系统提示**，token 贡献是 0——**不要把它和两个 `.md` 并列成同等活跃的存储**，也不要把它的容量计入开销。
+- 库内条目是**历史层**：格式化条款、模型名、路由表、Cron 条数、积分制版本号这五类最容易翻页过期，逐条与现行 `.md` 和代码对账，分「仍有效 / 已过期 / 已冲突」三档。
+- 报告必须分开回答两个问题：「内容没丢」（完整性）与「上次读全了」（覆盖面）——只有全读才能回答后者。
+- 条目数用代码数（`len([e for e in txt.split("§") if e.strip()])`），字符预算按去掉 `§` 后的正文算；清理建议先导出归档，破坏性写入等用户确认。
 
 ### 3.2 短期状态（Data文件）
 
@@ -576,6 +591,10 @@ for j in jobs:
 
 **成对检查原则**：凡「生产者 + 消费者」型状态，必须成对看 mtime；单看一侧永远发现不了闭环断裂。
 
+**第三层：文件级新鲜 ≠ 字段级新鲜。** `data/x_sentiment_context.json` 实测 mtime 仅 12 分钟、`fear_greed`/`global_market`/`coingecko_trending` 都是 `live`，但同一文件里的 `market_snapshot` 报价停在 64,658（实时 76,015），`x_note` 带 `status: kept_previous` 与三天前的 `ts`——照 mtime 放行就会把数月前的价格写进卡面。
+- **审计检查**：读生产者自己的 `refresh_status`/`status` 映射，**逐字段**判 `live` 还是 `kept_previous`；再对价格类字段做量级核对（与 `fapi/v1/ticker/price` 或 TV `quote_get` 现价比对）。
+- **铁律**：任一字段未过上述两步，该维度按陈旧处理并在卡面注明「cron缓存陈旧·本轮不采用」，同时用 live 源补位；**禁止拿一个新鲜文件给陈旧字段背书**。
+
 ### 卡面「数据A」不是整体源健康度
 
 `data_grade` 取自 `source_snapshot_<SYM>.json` 的 `quality`，那是**价格共识等级**（多源报价一致度）。实测 4 个源 `not_run` + cron_read 全 stale 时卡尾仍印「数据A」。**源可用度只看来源矩阵，不能读「数据A」**；建议改卡为「价格A · 源 11/15」这类双指标写法。
@@ -821,6 +840,33 @@ X/xAI模型是证据源，不是执行器：只提供情绪、新闻催化剂、
 完整证据链与命令原始输出：`references/audit-caliber-single-point-and-silent-rounds-20260916.md`。
 7. **卡面「空信息行」的真凶常在契约层兜底 —— 改前先 trace 谁真正生成这一行** — 实测：XAU ① 体温条印「🔵TV现场·D」（信息量为零），第一反应改 `auto_card` 的 XAU klines 赋值**没生效**——真正渲染的是 `tv_five_tf_contract._normalise_record` 的 `or f"TV现场·{tf}"` 兜底。教训：改文案前先用「同字段的其它可能来源」反查（`grep -rn "<同文案片段>"`），并在修完后**跑一次真卡看那一行**；只看代码不跑卡 = 假修复。同时注意别因此新增第二份实现：位置标签收敛为 `tv_five_tf_contract.position_label` 单点，调用方只许 import。
 8. **「观测即判据」：把等样本的静默现象变成可判定事实** — 无法立刻定根因的静默轮次，不要只留“等下一例”的口头结论：给入口包装终态标记（`exit`/`exit:exception`）+ 写一个 `last_round_unterminated()`（最近一轮有 enter、无终态），再在预检里增一行。**只报不判 red**（观测本身不得把预检打成红，否则上线即永久 FAIL）。判据：`有 enter、无 exit` = 异常终止。
+
+## ⚠️ GO/NO-GO 闸门与本机引擎的调用契约（2026-09-16 实测新增一类反模式）
+
+**闸门按字段名取数，认不到的键当缺省 —— 传错是「假绿灯」，不是报错。**这类缺陷在真卡上看不出来：闸门会印出正当理由，而理由本身是错的。
+
+| 闸门 | 真正读取的键 | 传错的后果 |
+|:---|:---|:---|
+| `data_freshness` | `meta["data_grade"]` + `engine_data["_snapshot_age_h"]` | 不传 `data_grade` → 默认 `"C"` → 直接红灯 |
+| `tv_live` | `engine_data["_tv_pine"]` / `_tv_live_status`（含 `usable`）/ `_tv_direct_verified` | 自造 `meta["tv_live_fresh"]` 之类 → 加密/黄金判「缺少TV现场数据」红灯 |
+| `rr_ratio` | `_final_verdict["rr"]`，否则 `meta["rr_a"]`（无则 `rr1`） | 无主推时给红是**正确语义**（「禁止以反侧兜底」）；不得为了变绿编一个 R:R |
+| `event_window` | `engine_data["_banned_live"]` + `["_ban_reason"]` + `["_kill_zone"]` | **完全不读 `meta["events"]`** → 把事件写进 `meta` 会得到假绿灯「无事件禁做·非主窗口」，实测发生在 5★ FOMC + 4★ 零售销售窗口内 |
+| `protections` | `meta["protections_status"]` + `protections_snapshot_stale` | 陈旧快照不得显示「全部通过」 |
+
+**铁律：卡面写闸门结论前，用金十 `list_calendar` 独立核一遍当日 4★/5★ 事件。**与闸门输出对不上时以日历为准，并把「闸门事件窗字段未接」写进完整性备注——绿灯不能覆盖日历上的硬事件。
+
+**冻结最终态要显式传 `engine_data["_final_verdict"]`**；缺失时 `final_state` 落到 `NO-GO · FinalVerdict缺失·拒绝执行`。**卡面渲染器是两参数**：`go_nogo_gate.gate_report_card(result, symbol)`——只传 `result` 抛 `TypeError`。
+
+**本机引擎同样是「必填参数型」，传错静默降级而非报错：**
+
+| 引擎 | 签名要点 | 静默失效形态 |
+|:---|:---|:---|
+| `vwap_ema_cvd_engine.vwap_ema_cvd_summary(symbol, klines)` | `klines` 必传 | 不传只回 `{"available": false, "reason": "无K线数据"}`，不报错 |
+| `decision_regime.classify_decision_regime(*, adx, atr_ratio, ema_spread_atr, vwap_crosses_20, va_stay_ratio_20, displacement_atr, rvol, adr_remaining_ratio=None, vwap_distance_atr=None)` | 纯关键字、纯派生特征，**自己不取数** | 误传 `symbol=` 等 → `TypeError: unexpected keyword argument`，说明在硬塞采集字段名；应按签名重算特征，**不得绕过 regime 直接给方向** |
+| `risk_constitution_v2.evaluate_risk(inputs)` | 先读 `_config()` 拿阈值 | 快照陈旧 → `risk_state_status.status="stale"` + `risk_tier="blocked"`，属**可见降级不硬拦截**：照出卡，备注写清快照日期 |
+| `scoring_engine.score_setup(...)` | 全关键字；`tf_consensus`/`tf_total` 分母要与实际层数一致 | 分母传 4 而实读 5 层 → 多周期分被系统性压低 |
+
+**⚠ 一次 `tool_call` 只能装一个本机工具。**多工具塞进同一 `calls` 数组会被拒：`Local tools require one entry per tool_call; mixed and multi-local batches are not supported.` 想并行读多份 TV 数据（主指标行动格 + 副指标行动格 + study_values + OHLCV）→ **同一轮发多个 `tool_call` 块，每块一个 `{name, arguments}`**，运行时并发执行。有先后依赖的（切周期后再读）不能靠并行凑，必须「`chart_set_timeframe` → 落一轮 sleep → 再读」。
 
 ## 参考文件
 

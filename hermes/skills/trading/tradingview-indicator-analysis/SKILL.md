@@ -7,6 +7,7 @@ description: 棠溪专属多品种多周期分析 v8.0 叙事驱动·TV集成。
 > · **本技能 `tradingview-indicator-analysis`** = 入口 · 分析卡主流程（多品种多周期、叙事驱动、5 段模板）
 > · 同族其余：`tradingview-execution-card`（低周期执行卡（加密 15m / 黄金 5m，高周期限时继承））、`xau-analysis-format`（卡片格式细则（裁决措辞/周期标签/移动端布局））、`trading-card-generation`（卡片生成脚本（compact + full 双输出））
 > · 组内改动请同步其余成员的触发词，避免同名族抢触发。
+> · 完整档（用户说「分析/深度/完整卡」）一次跑通整条管线的执行序列、`auto_card` 默认只跑轻量 3 步的档位陷阱、数据面保真陷阱（cron 文件新而内层数值旧、引擎自带陈旧情绪）、窗口内高星事件的硬闸门 → `references/manual-full-pipeline-run.md`。
 
 
 # TradingView 多品种分析 (v5.1 核心 + 扩展层)
