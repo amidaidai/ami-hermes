@@ -15,12 +15,14 @@ def test_crypto_cron_sources_match_real_cache_filenames():
     liquidation_flow 只覆盖 BTC/ETH，所以走 ``CRON_SOURCES_BY_SYMBOL`` 按品种追加，
     不写进 crypto 通用清单 —— 否则分析 SOL 时会拿 BTC 的清算缓存冒充已消费。
     """
+    # coinlobster（2026-09-16 外部验证层）同样是 BTC 口径，走 BY_SYMBOL 追加。
     assert cron_sources("BTCUSDT") == [
         "dune_cache",
         "deribit_options",
         "x_sentiment",
         "qlib_factors",
         "liquidation_flow",
+        "coinlobster",
     ]
     assert "liquidation_pressure" not in cron_sources("BTCUSDT")
     assert cron_sources("SOLUSDT") == [
@@ -29,6 +31,8 @@ def test_crypto_cron_sources_match_real_cache_filenames():
         "x_sentiment",
         "qlib_factors",
     ]
+    assert "coinlobster" not in cron_sources("SOLUSDT")
+    assert "coinlobster" not in cron_sources("XAUUSD")
     # 摘要展示必须走 cron_source_file 映射：源名 ≠ 文件名，
     # 曾把 x_sentiment 显示成不存在的 data/x_sentiment.json。
     summary = pipeline_summary("BTCUSDT", "full")

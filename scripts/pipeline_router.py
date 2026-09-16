@@ -175,7 +175,7 @@ STEPS = {
     "jin10":    {"label": "金十日历",     "desc": "经济数据/利率决议/快讯 [已并入macro]", "assets": set()},  # merged into macro
     "poly":     {"label": "Polymarket",  "desc": "Fed/衰退/加密事件概率 [已并入macro]",  "assets": set()},  # merged into macro
     "fg":       {"label": "恐惧贪婪",     "desc": "加密恐惧贪婪指数 [已并入macro]",      "assets": set()},  # merged into macro
-    "cron_read":{"label": "读Cron输出",   "desc": "读取最近cron输出(不重跑):dune+deribit+x+qlib+liq+stablecoin+COT",
+    "cron_read":{"label": "读Cron输出",   "desc": "读取最近cron输出(不重跑):dune+deribit+x+qlib+liq+coinlobster(外部验证层)",
                                               "assets": {"crypto", "gold", "forex", "stock", "futures", "index", "other"}},
     "etf_flow": {"label": "ETF Flow",    "desc": "BTC ETF 日净流入/流出 [SoSoValue被封·Dune替代]", "assets": set()},  # dead
     "dune":     {"label": "Dune链上",    "desc": "BTC流/CEX净流/稳定币 [已并入cron_read]", "assets": set()},  # merged into cron_read
@@ -220,6 +220,9 @@ CRON_SOURCES = {
 # cron_read 步骤的完成度审计能看见它在跑，替掉已退役的 liquidation_pressure。
 CRON_SOURCES_BY_SYMBOL = {
     "liquidation_flow": frozenset({"BTC", "ETH"}),
+    # 外部验证层（合同 §二.六）的采集器即 BTC 口径：只给 BTC，
+    # 别的币不能拿 BTC 的清算级联/费率冒充已消费。
+    "coinlobster": frozenset({"BTC"}),
 }
 
 # 有意停用的采集源（2026-08-29 binance-only 迁移产物）。
@@ -244,6 +247,8 @@ def cron_source_paused(name: str) -> bool:
 # x_sentiment 的真实产物是 x_sentiment_context.json。
 CRON_SOURCE_FILES = {
     "x_sentiment": "x_sentiment_context.json",
+    # 外部验证层（合同 §二.六）：cron 产物名 ≠ 源名，按源名拼路径会永久误判「文件不存在」
+    "coinlobster": "coinlobster_snapshot.json",
 }
 
 
@@ -259,6 +264,7 @@ CRON_SOURCE_MAX_AGE = {
     "cot_data": 24.0 * 7,             # CFTC 周报
     "x_sentiment": 6.0,               # 卡面「超过 6 小时不采用」的同一口径
     "liquidation_flow": 0.7,          # 对齐 data_freshness_watchdog 的 0.7h(42 分)
+    "coinlobster": 0.45,              # 解码 cron 9,29,49（20 分钟/轮）+ 余量；卡面读侧另有 25 分钟线
 }
 
 
@@ -304,7 +310,7 @@ ASSET_STEP_DESCRIPTIONS = {
 
 # Multi-asset collection and cross-validation contract. X is evidence only.
 ASSET_PROFILES = {
-    "crypto": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "AggVol", "Binance Futures", "macro", "Deribit"]},
+    "crypto": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "AggVol", "Binance Futures", "macro", "Deribit", "CoinLobster(BTC清算级联/逐所费率)"]},
     "gold": {"primary_timeframe": "5m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "Jin10", "DXY", "US10Y", "GLD/GDX/TIP", "COT"]},
     "forex": {"primary_timeframe": "15m", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "Jin10", "DXY", "central-bank/rates", "correlated pairs"]},
     "stock": {"primary_timeframe": "1h", "timeframes": ["D", "4h", "1h", "15m", "5m"], "cross_validation_sources": ["TradingView SVP", "FinanceKit", "SEC/earnings", "sector rotation", "options chain"]},
@@ -575,7 +581,7 @@ def route_pipeline(symbol: str, mode: str = "full") -> list[str]:
         "binance",     # ② Binance 衍生品（仅加密）
         "macro",       # ③ 宏观背景（含金十+Poly+FG）
         "x_sent",      # ⑤ X情绪（实时x_search·所有市场）
-        "cron_read",   # ⑥ 读Cron输出（dune/deribit/cot/qlib/liq/stablecoin）
+        "cron_read",   # ⑥ 读Cron输出（dune/deribit/x/qlib/liq/coinlobster；stablecoin/COT 已退役）
         "cvd",         # ⑦ CVD订单流（加密/黄金）
         "depth",       # ⑧ 深度数据（仅加密）
         "corr",        # ⑨ 跨资产相关性

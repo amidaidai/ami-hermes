@@ -549,6 +549,26 @@ def _liquidation_line(symbol: str) -> str:
     return " · ".join(parts)
 
 
+def _external_evidence_line(symbol: str) -> str:
+    """③ 多源表里的「外部验证」行：CoinLobster 全市场清算级联 + 逐所资金费率。
+
+    读侧三态由采集器判定：新鲜（≤25 分钟）给数；陈旧照样给数但**必须带读数年龄**；
+    不可用返回空串 —— 不占位、不编造。只服务 BTC（采集器即 BTC 口径），
+    其它品种不拿 BTC 的数据冒充。
+    定位：背景/反证，不参与执行授权、不做硬阻断（合同 §二.六）。
+    """
+    try:
+        _here2 = str(Path(__file__).resolve().parent)
+        if _here2 not in sys.path:
+            sys.path.insert(0, _here2)
+        import coinlobster_collector
+
+        text, _state = coinlobster_collector.read_evidence(symbol)
+        return text or ""
+    except Exception:
+        return ""
+
+
 def _soft_cut(text: str, limit: int) -> str:
     """按分隔符就近截断，宁短勿切半截数字（2026-09-14 实测「POC 77,」）。"""
     text = str(text or "").strip()
@@ -1020,6 +1040,9 @@ def render_v96_card(
     _liq_line = _liquidation_line(symbol)
     if _liq_line:
         lines.append(f"| 清算 | {_cell(_liq_line)} | 磁吸/挤仓参考·非执行授权 |")
+    _ext_line = _external_evidence_line(symbol)
+    if _ext_line:
+        lines.append(f"| 外部验证 | {_cell(_ext_line)} | 背景/反证·非执行授权 |")
     if isinstance(dual_indicator, dict) and dual_indicator.get("haldro_quality"):
         lines.append(f"| 质量 | {_cell(dual_indicator.get('haldro_quality'))[:56]} | 覆盖不足不追 |")
     _src_footer = _source_footer(source_matrix)
