@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -116,6 +119,63 @@ def test_gated_symbol_error_surfaces_server_code():
         assert "40000" in str(exc)
     else:
         raise AssertionError("门控响应必须抛错")
+
+
+# ── 响应头 v 分支的 key1 派生（2026-09-16 换代）─────────────────────────────
+# 旧实现只覆盖 v=1（路径分支），而实测 20 次请求 v 全落在 55/66/77 上
+# → 恒报「响应不是 gzip 密文：协议可能已变更」。这里把四条分支全部离线锁死。
+
+
+def test_response_key1_covers_every_known_v_branch():
+    from coinglass_web import FIXED_KEY_MATERIAL, HEATMAP_PATH, param_key_for_path, response_key1
+
+    assert response_key1({"v": "1"}, HEATMAP_PATH, "1789000000000") == param_key_for_path(HEATMAP_PATH)
+    assert response_key1({"v": "1"}, HEATMAP_PATH, "") == "L2FwaS9pbmRleC92"   # 旧口径不变
+    for v in ("0", "2"):
+        assert response_key1({"v": v}, HEATMAP_PATH, "1789000000000") == "MTc4OTAwMDAwMDAw"[:16]
+    for v, material in FIXED_KEY_MATERIAL.items():
+        assert len(material) == 16
+        key1 = response_key1({"v": v}, HEATMAP_PATH, "")
+        assert key1 == base64.b64encode(material.encode()).decode()[:16]
+        assert len(key1) == 16
+    # 三个固定支必须互不相同，否则说明还原时抄重了
+    assert len({response_key1({"v": v}, HEATMAP_PATH, "") for v in FIXED_KEY_MATERIAL}) == 3
+    # 未知 v：显式失败，不许静默降级成某个分支
+    try:
+        response_key1({"v": "99"}, HEATMAP_PATH, "")
+    except ValueError as exc:
+        assert "99" in str(exc)
+    else:
+        raise AssertionError("未知 v 必须抛错")
+
+
+@pytest.mark.parametrize("v", ["1", "0", "2", "55", "66", "77"])
+def test_full_two_layer_response_roundtrip_for_every_v_branch(v):
+    """离线往返：key1(按 v)解 user 头 → key2 → 解 body.data → JSON。
+
+    这是换代回归的主闸门：任一支的 key 派生写错，该参数化用例就会红。
+    """
+    import gzip
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from coinglass_web import HEATMAP_PATH, _unwrap, response_key1
+
+    def encrypt(key16: str, plain: bytes) -> str:
+        """按生产同口径加密：AES-ECB(key=16 字符串的 UTF-8 字节) + PKCS7 + gzip。"""
+        body = gzip.compress(plain)
+        pad = 16 - len(body) % 16
+        body += bytes([pad]) * pad
+        enc = Cipher(algorithms.AES(key16.encode()), modes.ECB()).encryptor()
+        return base64.b64encode(enc.update(body) + enc.finalize()).decode()
+
+    key2 = "0123456789abcdef"
+    payload = {"liq": [[1, 2, 3]], "instrument": "BTCUSDT"}
+    cache_ts = "1789000000000"
+    key1 = response_key1({"v": v}, HEATMAP_PATH, cache_ts)
+    user_header = encrypt(key1, key2.encode())
+    data_field = encrypt(key2, json.dumps(payload).encode())
+    out = _unwrap(HEATMAP_PATH, {"code": "0", "data": data_field},
+                  {"v": v, "user": user_header}, cache_ts)
+    assert out == payload
 
 
 # ── 缓存层（卡面渲染路径）2026-09-15 ─────────────────────────────────────────

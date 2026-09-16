@@ -9,13 +9,30 @@ CoinGlass 官方 API 需要付费档：本仓库 `hermes/secrets/coinglass_api_k
 前端握手 + 双层 AES/gzip 包装。本模块复刻该流程，用于读取清算热力图这类
 衍生品聚合数据，作为分析的**交叉验证源**。
 
-协议（全部由前端打包产物实测反推，2026-09-15）
+协议（全部由前端打包产物实测反推）
 --------------------------------------------
 1. 请求参数 `data` = AES-ECB(base64, key=ASCII "1f68efd73f8d4921acc0dead41dd39bc",
    明文 "<unix秒>,<TOTP>")，TOTP = base32("I65VU7K5ZQL7WB4E") / step 30 / 6 位 / SHA1。
-2. 响应头 `user` = 第二层密钥的密文；用 key1 = base64(接口路径前 12 字符)
-   （例 `/api/index/v5/liqHeatMap` → `L2FwaS9pbmRleC92`）ECB 解密 + gunzip → 16 字符 key2。
-3. 响应体 `data` 字段用 key2 再 ECB 解密 + gunzip → 真正的 JSON。
+2. 响应头 `user` = 第二层密钥的密文；body.data = 真 JSON 的密文，都是
+   AES-ECB(key) → gzip 包装后的 base64。
+3. **key1 按响应头 `v` 分支派生**（2026-09-16 换代；旧实现的 key1 恒为
+   base64(路径前 12 字符)，只对应下面的 v=1 支）：
+     v="1"      → base64(路径前 12 字符)
+     v="0"/"2"  → base64(我方请求头 cache-ts-v2 的值)[:16]
+     v="55"/"66"/"77" → 三个**固定常量**各自 base64 后取前 16 字符
+   key1 统一截断到 16 字符（前端响应管线第一步 `substring(0,16)`）；
+   用 key1 解 `user` 头 → gzip → 得到 key2（16 字符 hex 串）→ 用 key2 解 body.data。
+4. 服务器在这几个分支间**随机**分发（实测 20 次：55×8 / 77×7 / 66×5），
+   只覆盖其中一支必然时好时坏 —— 因此本模块覆盖全部已知分支，未知 v 显式报错。
+
+还原方法（可复现，2026-09-16）
+--------------------------------------------
+`https://s3.coinglass.com/v1/cg/_next/static/chunks/pages/_app-*.js` 是混淆产物：
+字符串表 `function In(){var t=[...]}` / `function mn(){...}` 会在模块加载时被
+自带校验式 `n.push(n.shift())` **轮转**，所以直接照抄数组逐个取值会全部解错 ——
+必须把「数组 + 解码器(Mn/gn) + 两段轮转 IIFE」整段原样执行，才能得到正确的
+token（步骤序、固定常量、方法名）。步骤序实测：
+响应管线 `2|5|1|4|3|0|6`（wn 取路径 → vn 派生 key1 → 截断 16 → 解 user →解 body）。
 
 数据口径
 --------
@@ -86,8 +103,39 @@ def totp(t: int, step: int = 30, digits: int = 6) -> str:
 
 
 def param_key_for_path(path: str) -> str:
-    """key1 = base64(接口路径前 12 个字符)，即响应头 `user` 的解密密钥。"""
+    """v=1 分支的 key1 = base64(接口路径前 12 字符)，即响应头 `user` 的解密密钥。"""
     return base64.b64encode(path[0:12].encode()).decode()
+
+
+# v=55/66/77 三个分支的 key1 原料（远端前端固定常量，2026-09-16 从混淆字符串表还原）。
+# 服务器在这三个分支间随机分发，所以只覆盖其中一个必然时好时坏 —— 三个都要有。
+FIXED_KEY_MATERIAL = {
+    "55": "170b070da9654622",
+    "66": "d6537d845a964081",
+    "77": "863f08689c97435b",
+}
+
+
+def response_key1(headers: dict[str, str], path: str, cache_ts: str) -> str:
+    """按响应头 ``v`` 分支派生 key1（长度截断到 16 字符）。
+
+    远端 2026-09-16 起在响应头里带 ``v``（实测取值 55/66/77，随机），
+    key1 原料随之改写（自前端 bundle 还原，步骤序 ``4|2|0|5|3|1|7|6``）：
+      v="1" → 请求路径；v="0"/"2" → 请求头 cache-ts-v2；v∈{55,66,77} → 固定常量。
+    随后响应管线第一步 ``substring(0,16)`` 把 key1 截断（v=1 时等价于旧的
+    base64(path[:12])，所以旧实现在 v=1 上依旧成立）。
+    """
+    v = str(headers.get("v") or "")
+    if v in FIXED_KEY_MATERIAL:
+        material = FIXED_KEY_MATERIAL[v]
+    elif v == "1":
+        return param_key_for_path(path)          # 旧口径，16 字符，无需截断
+    elif v in ("0", "2"):
+        material = cache_ts
+    else:
+        raise ValueError(f"未覆盖的响应头 v={v!r}：CoinGlass 又改了 key 派生（需重新还原前端）")
+    return base64.b64encode(material.encode()).decode()[:16]
+
 
 
 def make_param_token(now: int | None = None) -> str:
@@ -110,7 +158,7 @@ def aes_gzip_decrypt(b64_text: str, key: str | bytes) -> bytes:
     return zlib.decompressobj(31).decompress(out)
 
 
-def _unwrap(path: str, body: dict[str, Any], headers: dict[str, str]) -> Any:
+def _unwrap(path: str, body: dict[str, Any], headers: dict[str, str], cache_ts: str = "") -> Any:
     if str(body.get("code")) != "0":
         raise ValueError(f"接口返回异常：code={body.get('code')} msg={body.get('msg')}")
     payload = body.get("data")
@@ -120,7 +168,8 @@ def _unwrap(path: str, body: dict[str, Any], headers: dict[str, str]) -> Any:
     header_key = headers.get("user") or headers.get("User")
     if not header_key:
         raise ValueError("缺少 `user` 响应头（握手失败）")
-    key2 = aes_gzip_decrypt(header_key, param_key_for_path(path)).decode()
+    key1 = response_key1(headers, path, cache_ts)
+    key2 = aes_gzip_decrypt(header_key, key1).decode("utf-8", "replace")[:16]
     plain = aes_gzip_decrypt(payload, key2)
     try:
         return json.loads(plain.decode())
@@ -132,12 +181,13 @@ def fetch_json(path: str, params: dict[str, Any] | None = None, timeout: int = 3
     """按 CoinGlass 网页端协议取一个接口的明文 JSON。"""
     query = dict(params or {})
     query["data"] = make_param_token()
+    cache_ts = str(int(time.time() * 1000))
     url = BASE + path + "?" + urllib.parse.urlencode(query)
     req = urllib.request.Request(url, headers={
         "accept": "application/json",
         "language": "zh",
         "encryption": "true",
-        "cache-ts-v2": str(int(time.time() * 1000)),
+        "cache-ts-v2": cache_ts,
         "origin": "https://www.coinglass.com",
         "referer": _REFERER,
         "User-Agent": _UA,
@@ -145,7 +195,8 @@ def fetch_json(path: str, params: dict[str, Any] | None = None, timeout: int = 3
     with _opener().open(req, timeout=timeout) as resp:
         headers = dict(resp.headers)
         body = json.loads(resp.read().decode("utf-8", "replace"))
-    return _unwrap(path, body, headers)
+    # cache_ts 必须传进去：v∈{0,2} 分支的 key1 原料就是它（我方生成，已知）
+    return _unwrap(path, body, headers, cache_ts)
 
 
 def fetch_heatmap(symbol: str = "Binance_BTCUSDT", interval: int = 5, limit: int = 288,
