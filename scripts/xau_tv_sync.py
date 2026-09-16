@@ -333,6 +333,37 @@ def _audit_marker(reason: str, **extra) -> None:
         pass
 
 
+_TERMINAL_MARKERS = frozenset({
+    "published", "exit", "exit:exception", "error",
+    "cdp_closed", "cdp_probe_error",
+})
+
+
+def last_round_unterminated(max_lines: int = 400) -> dict | None:
+    """最近一轮同步是否「有 enter、无终态」。
+
+    2026-09-16 实测一例（13:15:50 轮）：只有 `enter`，既无 `published`/`defer:*`/
+    `error` 也无终态输出，cron 却记 exit 0、产物未更新 —— 静默轮次。
+    返回那一行（含 ts/pid），正常时返回 None。
+    """
+    try:
+        raw_lines = AUDIT_MARKER_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    pending: dict | None = None
+    for raw in raw_lines[-max_lines:]:
+        try:
+            rec = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        reason = str(rec.get("reason") or "")
+        if reason == "enter":
+            pending = rec
+        elif reason in _TERMINAL_MARKERS or reason.startswith(("defer:", "exit")):
+            pending = None
+    return pending
+
+
 def published_xau_cache_usable() -> dict[str, Any]:
     """Read the last published pair without touching the shared chart."""
     try:

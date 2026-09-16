@@ -41,9 +41,12 @@ def test_liquidation_flow_marks_stalled_feed(monkeypatch):
     stale_events = [[int((now - 3 * 3600) * 1000), "long", 75000, 100]]
     monkeypatch.setattr(liquidation_flow, "load_cache", lambda *a, **k: _okx_cache(stale_events, now))
     monkeypatch.setattr(liquidation_flow, "load_ws_usd_events",
-                        lambda *a, **k: {"status": "live", "events": [], "age_s": 1.0, "error": None})
+                        lambda *a, **k: {"status": "live", "events": [[int((now - 300) * 1000), "long", 75000, 3]],
+                                         "age_s": 1.0, "error": None})
     text = liquidation_flow.multi_source_text("BTC", now=now)
     assert "疑似停更" in text, text
+    # 停更期间币安快照只是「存在性」证据，不能被读成规模（首两列才是规模口径）
+    assert "仅存在性" in text, text
 
 
 def test_liquidation_flow_keeps_quiet_market_clean(monkeypatch):
@@ -109,3 +112,83 @@ def test_sync_entrypoint_marks_unexpected_termination(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         xau_tv_sync.main()
     assert marks[-1][0] == "exit:exception"
+
+
+# ── 6. 静默轮次可被判据化识别 ────────────────────────────────────────────────
+def _write_marks(tmp_path, records):
+    import json
+
+    path = tmp_path / "xau_tv_sync_runs.jsonl"
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
+                    encoding="utf-8")
+    return path
+
+
+def test_unterminated_round_is_detected(monkeypatch, tmp_path):
+    """有 enter、无终态 = 异常终止（实测 13:15:50 轮即此形态）。"""
+    import xau_tv_sync
+
+    monkeypatch.setattr(xau_tv_sync, "AUDIT_MARKER_FILE",
+                        _write_marks(tmp_path, [
+                            {"ts": "t1", "pid": 1, "reason": "enter"},
+                            {"ts": "t2", "pid": 1, "reason": "published"},
+                            {"ts": "t3", "pid": 21864, "reason": "enter"},
+                        ]))
+    orphan = xau_tv_sync.last_round_unterminated()
+    assert orphan and orphan["pid"] == 21864
+
+
+def test_terminated_rounds_are_clean(monkeypatch, tmp_path):
+    import xau_tv_sync
+
+    for terminal in ({"reason": "exit", "rc": 0}, {"reason": "defer:cache_usable"},
+                     {"reason": "error"}, {"reason": "published"}):
+        marks = [{"ts": "t1", "pid": 1, "reason": "enter"}, dict({"ts": "t2", "pid": 1}, **terminal)]
+        monkeypatch.setattr(xau_tv_sync, "AUDIT_MARKER_FILE", _write_marks(tmp_path, marks))
+        assert xau_tv_sync.last_round_unterminated() is None, terminal
+
+
+def test_analysis_owner_proceed_is_not_a_terminal_marker(monkeypatch, tmp_path):
+    """`proceed:analysis_owner` 只是「放行」不是终态 —— 该轮仍需 exit 才算终结。"""
+    import xau_tv_sync
+
+    monkeypatch.setattr(xau_tv_sync, "AUDIT_MARKER_FILE",
+                        _write_marks(tmp_path, [
+                            {"ts": "t1", "pid": 7, "reason": "enter"},
+                            {"ts": "t2", "pid": 7, "reason": "proceed:analysis_owner"},
+                        ]))
+    assert xau_tv_sync.last_round_unterminated() is not None
+
+
+# ── 7. XAU ① 体温条不再印前缀样板字 ──────────────────────────────────────────
+def test_position_label_is_objective():
+    from tv_five_tf_contract import position_label
+
+    assert position_label(100, 0, 95, -0.10) == "高位95%·跌0.10%"
+    assert position_label(100, 0, 5, 0.5) == "低位5%·涨0.50%"
+    assert position_label(100, 0, 50, 0) == "中位50%·平0.00%"
+    assert position_label(100, 0, 50) == "中位50%"          # 无涨跌幅时只给位置
+    # 坏数据不编数字 → 空串（调用方各自兜底）
+    assert position_label(None, 0, 50) == ""
+    assert position_label(0, 0, 0) == ""
+
+
+def test_gold_five_tf_view_uses_position_label_not_boilerplate():
+    """无 SVP 逐层结构的品种：五周期视图必须给位置+涨跌，不许只印「TV现场·D」。"""
+    import tv_five_tf_contract as c
+
+    view = c._normalise_record("5m", {"high": 4330.0, "low": 4320.0, "close": 4321.0,
+                                      "change_pct": -0.10}, "api:twelvedata", None)
+    assert view["description"] == "低位10%·跌0.10%", view["description"]
+    # 有结构读数的品种照旧用结构文案（不得被位置标签顶掉）
+    view2 = c._normalise_record("15m", {"high": 4330.0, "low": 4320.0, "close": 4325.0,
+                                        "grid": {"结构": "多趋势·BOS↑"}}, "tv", None)
+    assert view2["description"] == "多趋势·BOS↑", view2["description"]
+
+
+def test_auto_card_delegates_position_label_to_contract():
+    src = (ROOT / "scripts" / "auto_card.py").read_text(encoding="utf-8")
+    assert "from tv_five_tf_contract import position_label" in src
+    assert "def _gold_tf_position_label" not in src
+    # 旧样板文案（① 印出「🔵TV现场·D」的元凶）不得复活
+    assert 'f"TV现场·XAU {tf} {_dir}·{_cp:+.1f}%"' not in src

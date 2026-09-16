@@ -4616,6 +4616,12 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                             _cp = tvd.get("change_pct", 0)
                             _dir = "偏多" if _cp > 0.3 else "偏空" if _cp < -0.3 else "震荡"
                             _k = "D" if tf == "1D" else tf
+                            # ① 体温条要「一眼能读」：位置 + 涨跌。XAU 没有 SVP 逐层结构，
+                            # 不许编 BOS/趋势结论 —— 只用区间位置与涨跌幅这两个客观量。
+                            # 归一实现是 tv_five_tf_contract.position_label（别再写副本）。
+                            from tv_five_tf_contract import position_label
+                            _pos_txt = position_label(
+                                tvd.get("high"), tvd.get("low"), tvd.get("close"), _cp) or "位置—"
                             klines_dict[_k] = {
                                 "close": tvd.get("close", price),
                                 "high": tvd["high"], "low": tvd["low"],
@@ -4625,7 +4631,7 @@ def auto_card(symbol: str, push: bool = False, mode: str = "full") -> str:
                                 "vah": tvd.get("vah", price), "val": tvd.get("val", price),
                                 # v9.7: XAU TV现场真实方向（用 change_pct 合成，语义与BTC _kl_desc一致）
                                 "direction": _dir,
-                                "description": f"TV现场·XAU {tf} {_dir}·{_cp:+.1f}%",
+                                "description": _pos_txt,
                             }
                     print(f"  📊 XAU K线: TV MCP现场读取 {int(price)} · 五周期真实结构已覆盖引擎占位")
                 else:

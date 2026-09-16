@@ -318,6 +318,20 @@ def main() -> int:
         sync_ok_flag, sync_line = xau_sync_status_line(sync_status)
         xau_sync_ok = xau_sync_ok and sync_ok_flag
         print(sync_line)
+    # 同步轮次终态（2026-09-16 新增观测）：有 enter、无 exit/defer/error = 异常终止。
+    # 只报不判 red —— 观测本身不许把预检打成红（否则第一次上线就永久 FAIL）。
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import xau_tv_sync as _xau_sync
+
+        orphan = _xau_sync.last_round_unterminated()
+        if orphan:
+            print(f"XAU同步终态: ⚠ 最近一轮未终结（enter {str(orphan.get('ts'))[:19]} "
+                  f"pid={orphan.get('pid')}）—— 有 enter 无 exit = 异常终止，产物可能未更新")
+        else:
+            print("XAU同步终态: OK（最近一轮已终结）")
+    except Exception as exc:  # noqa: BLE001 — 观测不可用不得影响判定
+        print(f"XAU同步终态: 未观测（{type(exc).__name__}: {str(exc)[:60]}）")
     # Dependency failures are a runtime blocker too: the preflight must not
     # report healthy market contracts while the collector interpreter cannot
     # import its required data stack.

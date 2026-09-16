@@ -486,9 +486,11 @@ def multi_source_text(coin: str = "BTC", okx_cache_path: str | None = None,
     # 近 1h 为 0 且最新事件已超 1 小时：这是「上游停更/接口冻结」而非「市场无强平」。
     # 只印 $0/$0 会被读成后者（实测 2026-09-16 OKX BTC 腿停更 162 分，卡面照印 0）。
     # 数据本身照旧展示，只在读数后面追加事件年龄 —— 降级必须可见，不许静默零值。
+    _okx_stalled = False
     if w1["count"] == 0 and st.get("last"):
         _last_age_min = (now_s * 1000 - float(st["last"]["ts"])) / 60000.0
         if _last_age_min >= 60:
+            _okx_stalled = True
             bits.append(f"⚠最新事件{_last_age_min:.0f}分前(疑似停更)")
     last = st["last"]
     if last:
@@ -497,6 +499,10 @@ def multi_source_text(coin: str = "BTC", okx_cache_path: str | None = None,
     if okx_stale:
         bits.append("OKX沿用上轮")
     if ws_note:
+        # 规模口径唯一是 OKX 逐笔；币安 forceOrder 自 2021 起只推「最多 1 条/秒的快照」，
+        # 相加会系统性低估 → 停更期间必须点明「仅存在性」，别让读者拿笔数当规模。
+        if _okx_stalled:
+            ws_note += "(仅存在性·不计入规模)"
         bits.append(ws_note)
     return " · ".join(bits) + "（估算）"
 

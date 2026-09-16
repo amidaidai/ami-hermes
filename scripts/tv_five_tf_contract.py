@@ -248,6 +248,37 @@ def _pick(mapping: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
+def position_label(high: Any, low: Any, close: Any, change_pct: Any = None) -> str:
+    """客观「区间位置」短标签：``低位5%·跌0.10%``；OHLC 不可用时返回空串。
+
+    ⚠ 只服务**没有 SVP 逐层结构**的品种（黄金口径 TVC:GOLD 无成交量、无行动格）：
+    区间位置与涨跌幅是仅有的两个客观量，**不许**用它冒充趋势或 BOS 结论。
+    旧兜底 ``f"TV现场·{tf}"`` 只说明来源、信息量为零（实测 ① 体温条印出
+    「🔵TV现场·D」），故降级为「连 OHLC 都没有」时的最后兜底。
+    """
+    try:
+        hi, lo, cl = float(high), float(low), float(close)
+    except (TypeError, ValueError):
+        return ""
+    if not hi > lo:
+        return ""
+    pos = (cl - lo) / (hi - lo) * 100
+    if pos >= 70:
+        label = f"高位{pos:.0f}%"
+    elif pos <= 30:
+        label = f"低位{pos:.0f}%"
+    else:
+        label = f"中位{pos:.0f}%"
+    try:
+        cp = float(change_pct) if change_pct is not None else None
+    except (TypeError, ValueError):
+        cp = None
+    if cp is None:
+        return label
+    move = "涨" if cp > 0 else "跌" if cp < 0 else "平"
+    return f"{label}·{move}{abs(cp):.2f}%"
+
+
 def _normalise_record(tf: str, record: dict[str, Any], source: str, timestamp: str | None) -> dict[str, Any]:
     sv = _as_mapping(record.get("sv"))
     grid = _as_mapping(record.get("grid"))
@@ -276,6 +307,8 @@ def _normalise_record(tf: str, record: dict[str, Any], source: str, timestamp: s
         or grid.get("结构")
         or grid.get("方向")
         or grid.get("位置")
+        # 无 SVP 逐层结构（黄金 TVC:GOLD）时给客观的位置+涨跌，别印「TV现场·D」空信息行
+        or position_label(high, low, close, record.get("change_pct"))
         or f"TV现场·{tf}"
     )
     return {
