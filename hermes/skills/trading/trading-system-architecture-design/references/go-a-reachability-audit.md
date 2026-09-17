@@ -18,7 +18,8 @@
 | `data/shadow/decision_signals.jsonl` | 每条候选：`signal_id/symbol/timeframe/side/entry/stop/target/model_id/regime/grade/final_state/blockers[]` |
 | `data/shadow/decision_outcomes.jsonl` | 已标注结果：`outcome.{h4,h8,h16}.{mfe_r,mae_r,first_hit}` |
 
-探针：`python scripts/gate_starvation_audit.py`（本技能自带，只读，一次拿到下面全部六节）。
+探针（本技能自带，只读，一次拿到下面全部六节）——从仓库根目录跑：
+`python 'hermes/skills/trading/trading-system-architecture-design/scripts/gate_starvation_audit.py' .`（末参 = 仓库根）。
 
 ## 步骤
 
@@ -27,8 +28,10 @@
    `side=neutral` 常占七成。直接报「85% NO-GO」会把「本来就没方向」算成「被否决」。
    正确口径：先数有方向候选（`side in (long,short)`），再**只对这个子集**报裁决分布与拦因。
 3. **有方向信号的拦因频次** ＋ **「只差一个条件」子集**（`len(blockers)==1`）——后者离放行最近，修复杠杆最大。
+   - **先剔幽灵再统计**：冻结快照重放会批量伪造候选样本——识别四件套：① 几何长期固定且与现价差一个量级；② 拦因签名逐条固定重复（同一组 5–8 条）；③ 关键数值全盘扫描只命中账本自身（任何缓存/快照/配置里都不存在）；④ **把数值 grep 到 `tests/`（含 git 历史）：命中测试夹具常量 ⇒ 夹具污染**——修法=影子写入口加 `PYTEST_CURRENT_TEST` 隔离守卫 + 清污，与生产数据线无关（2026-09-17 实案：63884/64000 两夹具 223 条）。命中即从可达性统计中剔除、单独列账。
 4. **顺着拦因回源码，把每道门定性为「行情判断」还是「工程状态」**：
    - 第二层 = `scripts/decision_loop.py`：`hard` 列表 → 硬阻断；`wait` 列表 → 停留观察。
+   - **硬门/等待拆分口径（防误计）**：账本 `blockers` 是 hard＋wait 合并元组，按名字集合硬分类会把 `svp_authorization` 这类双语义码（hard=禁做·不出价／wait=未授权）误计；唯一可靠口径 = 解析 `final_verdict.reason` 的前缀「硬闸门：a/b/c」，无此前缀即等待。
    - 第一层 = Pine 的 `setupLongA/setupShortA` 的 AND 链 ＋ `setupGradeStable` 稳定器。
 5. **数 AND 链长度**。两层各 10+ 个条件串联且彼此不独立时，通过率是**乘积**不是最小值；
    链越长，「全绿」越接近不可达。
@@ -174,3 +177,24 @@ TVC.DW_ALIASES_SUB['haldro_valid_code']   # 契约里注册的 Data Window title
   重复问一个已裁决的问题，比不问更伤信任。
 - 审计脚本写成 `outputs/*.py` 再跑，不要长内联 python（易被 hardline block）。
 - 影子日志可能只覆盖最近数周，报窗口时如实写起止日期，不要夸大成「长期」。
+- **复核外部结论（含其它模型产出的审计稿）**：每条主张对源码行逐一核验，输出用「采纳／修正／必补」三分类；必查是否还有未闭环的人工动作（如编辑器点「保存」），不要停在「可直接上线」。
+
+## 2026-09-17 复核快照（已闭环 · 修正版）
+
+**重大更正：所谓「幽灵记录生产线」= 测试夹具污染生产账本，不是生产数据线。**
+夹具源：`tests/test_card_render_locked.py` `prices.primary=63884`（2026-06-19 起）、
+`tests/test_p0_p1_audit_regressions.py` `price=64000.0`（2026-06-21 起），随每次 pytest 经影子写入口入账 223 条。
+修复前现场复现（pytest 运行中账本新增同几何记录）⇒ 加 `PYTEST_CURRENT_TEST` 隔离守卫 + 清污隔离（509→286 / 238→18）。
+**教训：账本异常几何先对照测试夹具常量与 pytest 运行时间分布，再怀疑生产数据线；「数值只存在于账本」不是生产 bug 的充分证据。**
+
+**已落地修复：**
+
+- 陈旧几何守卫 `geometry_guard`（偏离 >10% → `stale_geometry` 硬门 + 转隔离）；夹具价=现价时偏差 0 抓不到，夹具防御靠 pytest 隔离守卫。
+- P0-b：无真实计划时合成 ATR 参考几何不做计划级硬否决（改可见等待 `risk_reference_geometry`，永不授权）；真计划 RR<1.5 硬否决保留。来源标记在 `setdefault` 兜底之前采样；路由计划须自带三件套（`geometry_from_result`）才算真实几何（实跑暴露兜底回填恒真后修正）。
+- **P0-c（cross_source 未运行→降级）撤回**：依据数据为夹具污染；无主源运行应 fail-closed。
+- S3 拆位（2026-09-18 用户拍板）：S3 的 OI 部分（bit128，旧口径「非全体一致」）从硬拦降为可见等待 `haldro_state_consensus`；CVD 背离（bit16）保留硬拦。Pine 侧 oiDivergeA 对齐合格线（一致率<75% 或离散度>2.5）+ 单所方向死区（fixed15，待编译）。实盘 S3 38/38 全由「非全体一致」误触发、CVD 背离 0 次。
+- 生产验证：09-17 23:51 / 09-18 00:29 调度记录硬门仅剩 `haldro_state_conflict`，`risk_constitution` 假否决消失。
+
+**修正后真实后段样本（09-15 后）= 18 条全 NO-GO**：risk_constitution 15（P0-b 后消除）· advanced_confluence 11 · haldro_state_conflict 7 · x/svp/trigger 各 2 · 其余 1。
+仍拦方案的真实状态门：SVP A 级授权（副确认 S1/S2）/ 副指标未确认（降权等待）/ 共振 ≥4 / 触发·位置·收线。
+明细：`docs/maintenance/2026-09-17-goa-starvation-recheck.md`。

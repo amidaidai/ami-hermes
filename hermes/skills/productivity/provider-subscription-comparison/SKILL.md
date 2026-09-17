@@ -26,11 +26,38 @@ The user is very sensitive to table legibility on Telegram. Do **not** rely on l
 
 对「客户端 / 工作台 / App」类付费产品（例如 Ekko Studio 这类 Hermes 前端、桌面客户端订阅），**在给购买建议之前**先查它的源码与许可：
 
-1. 搜 GitHub 仓库（定价页通常不主动挂出来），取 `LICENSE` 读 `Additional Use Grant` 段落，确认个人使用是否免费。
-2. 源码开放且个人使用免费 → **先给「自托管 + 免费组网」的 0 元路径**，再谈要不要为官方托管 / 官方 App 付费。用户对订阅制敏感，0 元路径往往才是首选答案。
-3. 定价页按**功能边界**拆：买断档与订阅档各含什么、各**不**含什么，尤其是「订阅期内附带的软件权限在到期后是否一起消失」。
-4. 报价标明「一次性 / 每期」，并给回本点（一次买断 X 元 vs Y 元/月 → 几个月回本）。
-5. 自托管 / 手机访问的具体路径见 `hermes-remote-access` 技能。
+0. **先读本机，再读网页。** 用户问「哪个前端 / 哪个客户端 / 哪个工作台最好」时，第一步不是搜网页，是确认**他现在跑在哪个前端上、本机还装了什么**。跳过这步就会把一个用户已经在用的产品当成待评估候选推荐回去。
+   ```bash
+   powershell -NoProfile -Command "Get-Process | Where-Object {$_.ProcessName -match 'Hermes|Ekko|Aion|electron'} | Select Id,ProcessName,Path | Format-Table -AutoSize | Out-String -Width 200"
+   powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object {$_.CommandLine -match '<产品名>'} | Select ProcessId,Name,CommandLine"
+   ```
+   进程路径直接给出「是哪一家的哪个前端」，命令行能看出谁在挂 MCP 子进程。再补三样：`grep -n -A3 "<名字>" ~/AppData/Local/hermes/config.yaml`（它注册了什么进 Hermes）、`hermes --version`（内核版本）、前端自带 runtime 的版本目录。
+1. **先分清同名产品，「Hermes」在本机至少是三个东西**：
+
+   | 名字 | 是什么 | 认它看什么 |
+   |---|---|---|
+   | `NousResearch/hermes-agent` | agent 内核本体（MIT） | `~/.hermes/`、CLI `hermes`、桌面 `~/.hermes/hermes-agent/apps/desktop/` |
+   | **Ekko Studio**（仓库仍叫 `EKKOLearnAI/hermes-studio`） | 第三方多 agent 工作台，曾用名 Hermes Studio / Hermes Web UI | npm/CLI 仍是 `hermes-web-ui`、MCP 工具是 `ekko_studio_*`、装目录 `Programs\Hermes Studio\Ekko Studio`、**自己的状态库 `~/.hermes-web-ui`（不是 Nous 的）** |
+   | 其它 GitHub 同类 | AionUi / OpenWork / Eigent 等独立多 CLI 工作台 | 各自仓库，与 Hermes 内核无状态共享 |
+
+   **搜「Hermes Studio」「hermes-web-ui」命中的是第三方前端，不是内核** —— 这个歧义会直接决定结论写对写错。`~/.hermes-web-ui` 里的东西一律不算内核状态。
+2. 搜 GitHub 仓库（定价页通常不主动挂出来），取 `LICENSE` 读 `Additional Use Grant` 段落，确认个人使用是否免费。
+3. 源码开放且个人使用免费 → **先给「自托管 + 免费组网」的 0 元路径**，再谈要不要为官方托管 / 官方 App 付费。用户对订阅制敏感，0 元路径往往才是首选答案。
+4. 定价页按**功能边界**拆：买断档与订阅档各含什么、各**不**含什么，尤其是「订阅期内附带的软件权限在到期后是否一起消失」。
+5. 报价标明「一次性 / 每期」，并给回本点（一次买断 X 元 vs Y 元/月 → 几个月回本）。
+6. 自托管 / 手机访问的具体路径见 `hermes-remote-access` 技能。
+
+### 判定轴固定：前端只能当窗口，不能接管 runtime
+
+对**本用户**，前端选型的裁决轴不是「功能多不多、界面好不好看」，而是**谁能让 runtime 级能力不掉、不分裂、不额外掏钱** —— skills、memory、sessions、cron、gateway、MCP、工作区里的自研脚本。据此的固定结论形态：
+
+- **内核一方桌面 = 主驾驶舱**（同一份 config/.env/skills/memory/sessions，不另起状态库，免费）。功能多寡不改变这条。
+- **第三方前端 = 副屏**，按它能补的空白留（多运行时同窗、群聊协作、可视化工作流、手机/跨网设备、Agent Manager）。
+- **一条硬规则写进结论**：cron / gateway / skills / memory 只让内核写，前端侧不另起一套。前端经 HTTP 桥到内核的，明确写出「多一跳 + 版本可能错位」。
+- **版本错位要当场测**：比对内核版本与前端自带 runtime 目录版本，差值写进风险段（前端桥通常自带一份 runtime，落后于内核时功能会短暂错位）。
+- 横评表列固定为 `产品 | 仓库 | 许可 | 是否驱动内核 | 状态是否共享 | 定位 | 代价`，比堆功能清单有用得多。
+
+本机已确立的前端格局、各产品实测档案与复核命令见 `references/hermes-frontend-landscape.md`。
 
 ## Research workflow
 
@@ -75,6 +102,7 @@ When the user says they plan to use **GLM-5.2**, re-rank around GLM rather than 
 See `references/glm-5-2-subscription-notes.md` for the condensed research notes from the 2026年7月7日 comparison.
 See `references/codex-relay-station-notes.md` for Codex 中转站（兔小店 vs aijws）倍率兑换公式、套餐表和按量vs包月决策树（2026年7月15日）.
 See `references/2026-09-us-plan-landscape.md` for the 2026年9月13日 snapshot of the 「~$20 档」五个候选（Command Code / OpenCode Go / Ollama Cloud / b.ai / DeepSeek 官方）：档位表、额度倍数换算、DeepSeek 峰谷价，以及其中三个方案在该价位根本不存在的核实结论。
+See `references/hermes-frontend-landscape.md` for the Hermes 前端/工作台格局（同名三家的区分、横评表、本机复核命令、版本错位与双状态库风险）—— 评估任何「Hermes 前端 / 客户端 / 工作台」先读它。
 See `scripts/render_table_card.py` for the reusable 竖版对比表卡片 renderer used by this skill.
 
 ## 先验证前提，再排序（2026年9月教训）
@@ -111,3 +139,13 @@ grep -rn "x-opencode-session" --include=*.py .   # 无输出 = 该修复不在�
 - **动态渲染电商页**（如 tu-zi.com/store）web_extract 只能拿到静态公告，套餐列表需 browser_vision 截图；**Cloudflare 防护站**（如 aijws.com）browser 被拦时，从第三方探测站（hvoy.ai）和社区帖（linux.do）交叉获取定价。
 - **别把「$1 拉新档」当可用档位**：Command Code 的 Go $1/月**不含 API 权限**，要接 Hermes 必须 Pro 起或走 Provider 按量档。看到超低价档先查它有没有 API/端点。
 - **卡片渲染后必须抽查**：PIL 手搓表格时列宽总和必须等于 `表宽 = 1080 - 2×44`；不相等时最后一列会静默溢出圆角边框（肉眼看还像是对的）。用 `scripts/render_table_card.py` 并至少对一张卡跑 vision_analyze 确认无溢出/重叠/截断。
+- **收紧/放开的两档不要混算**：客户端类产品的「免费」有三种——真免费（MIT/Apache 全功能）、源码可见但商用受限（BSL / 带 EE 目录的 MIT+EE 混合）、以及「文档免费但功能被授权/订阅锁住」。三档对用户是三个不同结论，必须分别写。
+- **GitHub 取数是 `gh api` 优先，不要用匿名 curl**：`curl https://api.github.com/...` 在共享出口 IP 上会直接吃 `API rate limit exceeded`，让一次干净的查证变成假失败。改用已登录的 gh：
+  ```bash
+  gh api repos/<owner>/<repo> --jq '{n:.full_name,s:.stargazers_count,l:.license.spdx_id,p:.pushed_at,a:.archived}'
+  gh api repos/<owner>/<repo>/readme --jq .content | base64 -d | grep -i "<关键词>"   # 在 README 里找它到底支持谁
+  gh api repos/<owner>/<repo>/releases --jq '.[0:3][] | .tag_name'
+  gh api repos/<owner>/<repo>/contents --jq '.[] | .name'                             # 找 README 真实文件名
+  ```
+- **`license.spdx_id == NOASSERTION` 不等于没有许可**：BSL 与「MIT 核心 + `ee/` 目录另授权」的混合许可都会回 NOASSERTION。必须点开 `LICENSE` 原文读段落，别把「API 查不到」写成「无许可」或「开源」。
+- **一句话结论里带产品名时把「是哪个」写全**：同名三家的场景下，「Hermes Studio 已装」这种句子对用户是无效信息，写成「Ekko Studio（前 Hermes Studio）vX，其 MCP 已挂在 Hermes 内核上」。

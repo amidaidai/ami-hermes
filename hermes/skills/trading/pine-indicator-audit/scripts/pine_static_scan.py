@@ -14,7 +14,7 @@ DEFPAT = re.compile(
 
 # Known declaration dependencies that Pine must satisfy (dependency before consumer).
 ORDER_DEPS = {
-    'panelDirVal': ['pdShort', 'kzShort', 'sweepCntText', 'dmiCompact', 'actionBiasWord'],
+    'panelDirVal': ['actionBiasWord', 'dmiCompact', 'regimeShort', 'dirTypeWord'],
     'panelConclusionVal': ['actionStateText', 'panelRiskOne'],
     'panelEntryVal': ['rrHardBlock'],
 }
