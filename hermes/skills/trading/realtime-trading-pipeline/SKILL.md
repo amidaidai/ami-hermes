@@ -46,7 +46,7 @@ When the user says "实时" or "太慢了", the answer is ALWAYS a background da
 - `inherit`：现在呢/继续/接着上面/更新。有有效上下文时继承 D/4h/1h，只刷新执行与触发周期和实时衍生品；突破继承关键位、低周期与高周期冲突、上下文过期或用户明确要求全面时升级 full。
 - `full`：全面分析/全周期/深度/完整卡/重新从高周期看。刷新 D/4h/1h/15m/5m 和完整多源管线。
 
-不要因为单独出现“分析”就机械启动完整管线；按用户是否表达“全面”判断。触发事件应带 `event_type=keylevel_cross`、`analysis_required=true`、`analysis_status=pending`、`analysis_mode=quick`，供安禾重新核验。当前实现：`keylevel_read_trigger.py` 读取后默认调用 `keylevel_analysis_dispatcher.py --push`，由 dispatcher 运行 `auto_card.py --quick`，成功/失败/重试状态写回 trigger；cron 必须保持 `Deliver=local`，避免重复或 MarkdownV2 退化。
+不要因为单独出现“分析”就机械启动完整管线；按用户是否表达“全面”判断。触发事件应带 `event_type=keylevel_cross`、`analysis_required=true`、`analysis_status=pending`、`analysis_mode=quick`，供安禾重新核验。当前实现：`keylevel_read_trigger.py` 读取后默认调用 `keylevel_analysis_dispatcher.py --push`，由 dispatcher 运行 `auto_card.py --quick`，成功/失败/重试状态写回 trigger；cron 必须保持 `Deliver=local`，避免重复或 MarkdownV2 退化。**推送状态三分类**：`sent` ／ `not_requested` ／ `failed_or_missing`（真投递失败）／ **`skipped_not_goa`**（设计跳过）—— auto_card 对非 GO-A 打印「⏸ 未推送：FinalVerdict不是完整GO-A可执行裁决」，dispatcher 必须记 `skipped_not_goa` 且不设重试；误记成投递失败会让补投递计数无限空转。
 
 ## Architecture (v9.1 · 4-component · daemon-based)
 
@@ -325,7 +325,7 @@ Disable/pause any overlapping minute sentinel after direct daemon delivery is en
 
 **Implementation pitfall:** Do not use `now >= cool_until or info.get("dir") != crossed` as the gate; the second clause defeats spam suppression when price oscillates around a level. Use `if now >= cool_until:` while retaining the latest crossing direction only as metadata.
 
-The approved-level monitor remains separate from dynamic analysis: automatic renewal may extend validity of existing approved levels, but must not promote candidates or replace levels from a one-off analysis. See `references/keylevel-monitor-contract-202608.md` for the event contract.
+The approved-level monitor remains separate from dynamic analysis: automatic renewal may extend validity of existing approved levels, but must not promote candidates or replace levels from a one-off analysis. **用户要求「实时盯位/不用一句句问」时的加位操作**：编辑 `data/keylevels_config.json`（先备份；保留既有条目；每位的字段 `name/price/enabled/source/valid_until/tf/layer/push_tier`，结构位用 `push_tier:"critical"`；用户会话请求新增的位取 `source: user_session_<date>`、`valid_until` = 请求时点 +24h、`note: 随分析更新`；原子写回并刷新 `updated_at`）→ **加位前先确认守护活着**（`data/.keylevel_guard_heartbeat.json` 的 `status:running` ＋ 心跳 ts 新鲜；守护不在跑，加位只是写了个没人读的文件）→ 守护每轮热读该文件，**加位无需重启** → ≤2 分钟内核 `data/.keylevel_guard_health.json` 的 `active_approved_levels`／`push_enabled_levels` 出现增量，**心跳＋计数两件证据齐了才可回报「已生效」**。回报时照三段说清：已工作的机制（亚秒级轮询→TG）／触发规则（到价才推＋冷却与限流数值，管理预期）／边界（到价提醒≠分析；自动分析卡只在 GO-A 推）。**排「到价了却没收到分析」**：读 trigger JSON 的 `analysis_log` 字段指向的 `data/analysis_dispatch_<event_id>.log`（含 auto_card stdout 与「⏸ 未推送」标记）＋ trigger 的 `push_status`／`push_last_error`——cron 的「Last run: ok」只证明读取器跑过，不证明投递。**改过推送状态机后**，把受影响的 `trigger_*.json` 的 `push_status`／`push_retry_required`／`push_retry_count` 复位再复跑读取器（旧计数会让读取器持续跳过、并把历史失败永久留在字段里）。**「提醒到底发出去了没有」以守护日志为准**：`grep -E "TRIGGER|ALERT" data/keylevel_guard.log | tail -5` —— 到价轮会打印 `TRIGGER <sym> xN price=… critical:<位名>` 与 `ALERT OK <sym> rich_sent`；有这一行才敢对用户说「已经推你了」，trigger JSON 只记事件与状态、不证明通知到达。**两类失败必须分开读，否则会去修没坏的那一环**：`analysis_error`（子进程超时/异常）与 `push_status`／`push_last_error`（投递）是两个独立字段，同一事件可能同时非空 —— 先看 `analysis_log` 指向的那份 stdout 判分析有没有真产出，实测存在 `timed out after 180 seconds` 与「3/3 步完成」并存的情形（dispatcher 的 180s 子进程上限对 `auto_card --quick` 偏紧，重试轮次可能已经完成过），再判投递。分级、限流与推送状态契约见 `references/keylevel-monitor-contract-202608.md`。
 
 ## Review update: direct real-time arrival alerts (2026-09-05)
 
@@ -569,7 +569,7 @@ if far_down and taker < 0.4:
 ```
 ## User noise policy: value-area levels are opt-out by default
 
-When the user says that alerts like `价值区·VAL` are unwanted, interpret this as a request to silence the entire value-area layer, not only the named level. Set `enabled: false` for all configured `layer: "价值区"` entries (VAH, VAL, POC, nPOC, DO, M-VWAP and equivalents), preserve the entries for auditability, and leave structural/HTF levels unchanged unless the user explicitly names them too. The daemon hot-reads `data/keylevels_config.json`, so verify the active count after editing; do not send a confirmation alert for a now-disabled value-area level. This is separate from the per-level cooldown rule: cooldown deduplicates enabled structures, while the value-area policy suppresses the category entirely.
+When the user says that alerts like `价值区·VAL` are unwanted, interpret this as a request to silence the entire value-area layer, not only the named level. 现行约定：给每个 `layer: "价值区"` 条目（VAH, VAL, POC, nPOC, DO, M-VWAP 等同层位）设 `push_tier: "silent"`，保留 `enabled: true` 与条目本身 —— silent 位仍进卡面/digest，只是不推送、不触发分析；不要删条目，也不要改成 `enabled: false`（会从现役清单里消失）。Leave structural/HTF levels unchanged unless the user explicitly names them too. The daemon hot-reads `data/keylevels_config.json`, so after editing verify in `data/.keylevel_guard_health.json` that `push_enabled_levels` dropped while `active_approved_levels` stayed the same; do not send a confirmation alert for a now-silent value-area level. This is separate from the per-level cooldown rule: cooldown deduplicates enabled structures, while the value-area policy suppresses push for the category.
 
 ## References
 

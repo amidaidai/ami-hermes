@@ -45,6 +45,77 @@
 | 等级来源 | `auto_card.py::_grade_from_mcp_values` | `MCP Grade Code`：3=A／2=B／1=C反／-1=X／0=C等待 |
 | 副指标依赖 | Pine `aggAllowLongA/aggAllowShortA` ＋ `decision_loop` 的 `haldro_invalid` | 两条路径依赖**同一条副指标 Bus**：`valid_code<=0` 时第一层封 A、第二层记 wait，双重卡死 |
 
+## 第一层沉默时的逐位解码（卡面只写「C等待」时必须做）
+
+卡面只会写「副S3冲突·不执行」「C等待」——真正的封锁原因在 TV Data Window 的打包码里。
+先把现场值读出来，再逐位拆解，才能定性「行情判断」还是「工程缺陷」。
+
+读现场（TV MCP，只读）：`data_get_study_values()` — 一次拿到全部可见 study 的 Data Window 值。
+
+拆包（解码器全在 `scripts/tv_indicator_contract.py`，**不要手算位**）：
+
+| 现场字段 | 解码函数 | 关键位 |
+|:--|:--|:--|
+| `MCP NoTrade Reason Code` | `decode_no_trade` | 位表 `NO_TRADE_BITS`：1 HTF冲突X／2 过热追高／4 低流动性／8 几何不成立／16 R:R不足／32 CVD质量不达标／64 ADR禁追／128 溢折价／256 本根未收线／512 触发不新鲜／1024 副指标冲突降权 |
+| `MCP Quality Code` | `decode_quality_code` | 1 HTF冲突／2 CVD质量／4 低流动／8 ADR／16 HTF-FVG／32 MSS／64 EMA顺序 |
+| `MCP Evidence Pack` | `decode_evidence_pack` | 方向位 ＋ `locationValid`／`triggerConfirmed`／`barClosed` |
+| `MCP Trigger Pack` | `decode_trigger_pack` | `triggerCode`／`age`／`fresh`／`signalState`；`age=999` 是无触发哨兵 |
+| `MCP StructPack` | `decode_struct_pack` | FVG/OB/BOS/流动性；全 0 = 附近无有效结构 |
+| `MCP Entry Valid Code` | `decode_entry_valid` | `0=无方向` ← 账本记 `neutral` 的直接来源 |
+| `HALDRO State` / `Risk Code` | `decode_haldro_state` / `decode_quality_code` | Risk 位 4=上级冲突、64=LSR拥挤 |
+
+**判据**：`Entry Valid=0` ⇒ 第一层根本没给方向，账本只能记 `neutral`，这跟「被闸门拦住」是两回事。
+把 `NoTrade` 的置位逐个定性：属行情特征（上级冲突／拥挤／位置无效／无结构）的照实报；
+属工程状态的（样本未成熟、字段恒空、快照陈旧）才是可修项。
+
+## 时机直方图：抓「数据未成熟被当成质量不合格」的假阴性
+
+同一根父周期 K 线内，低周期样本是**逐分钟长出来**的：门槛要求 `N` 个低周期样本时，
+父 K 线前 `N-1` 分钟内的读数**必然**判不合格，与行情好坏无关。
+若扫描／落账时机没有避开这段成长期，就会批量生产假阴性。
+
+探针（账本 `ts` 对父周期取模，数分钟位置）：
+
+```python
+d = datetime.fromtimestamp(r['ts']/1000, timezone(timedelta(hours=8)))
+pos[d.minute % 15] += 1        # 15m 父周期
+```
+
+判据：若前 `N-1` 分钟占比显著即可定性（实测约 44% 落在 +0..+4），
+说明大量信号是在「数据还没长好」时被记录的，账本里的 NO-GO 有相当比例是**假的**。
+
+## 根因类别：上游把「待定」并进「不合格」（语义合并）
+
+比字段缺失更隐蔽的一类缺陷：上游**内部已经区分**两种状态，**上报时却合成同一个码**。
+
+实案：Pine 里 `cvdLowSample`（低周期样本未攒够＝**待重试**）与 `not cvdQualityOk`
+（样本够了但质量差＝**真不行**）被写进同一位：
+
+```pine
+int mcpQualityCode = ... + ((not cvdQualityOk or cvdLowSample) ? 2 : 0) + ...
+```
+
+而同一文件早就定义过 `cvdLowSample`、还把它标成「·存疑」显示在图上——**内部有、上报丢**。
+后果：下游无法把「等一会再判」与「就是不行」分开，只能一律判负 → 长期封锁。
+
+**检查动作**：在上游源码里搜「内部变量 → 上报码」的组装行（通常是一个大表达式），
+看有没有 `or` / `+` 把「未成熟」「数据缺失」「待重试」类布尔与「真不合格」类布尔合并。
+**修法**：给「未成熟／待定」单独的位，下游对这位只标记重试、不判负；
+或让扫描侧加成熟度门槛（父周期内 `minute >= N` 才落候选），先低成本止血。
+
+## 先核对契约 title 再宣布「字段名不匹配」
+
+怀疑上游字段读不到时，**不要直接断定是命名 bug**。逐键比对：
+
+```python
+import tv_indicator_contract as TVC
+TVC.DW_ALIASES_SUB['haldro_valid_code']   # 契约里注册的 Data Window title
+```
+
+把它与 `data_get_study_values()` **现场返回的 title 字符串**（含括号与中文后缀，逐字符）对齐。
+两者一致 ⇒ 读取链是通的，问题在别处（判定门槛／时机／上游合并上报）。
+曾据此否掉一个「字段名不匹配」的误判——当 bug 修会白改一遍。
+
 ## 结果数据不能为闸门背书
 
 影子账本里的价位多半**不具可执行性**——大量样本在某 horizon 内既未触及目标也未触及止损。
@@ -58,6 +129,30 @@
 注意 `no_direction` 与 `b_wait` **基本互斥**（分别对应 C等待 与 B 级），**不是**重复项——
 真正的冗余是「等待家族」在单条信号里叠 5-7 个。汇报时折成「1 条主因 ＋ 明细」，
 否则卡面的 NO-GO 看起来像几十个闸门同时红了。
+
+## 已落地的修复：CVD 样本未成熟拆位（2026-09-17 实案闭环）
+
+上面「语义合并」那一节的处置已完整落地。位定义必须与代码一致，**改动时同步六处，漏一处即静默不一致**：
+
+| 层 | 文件 | 改动 |
+|:--|:--|:--|
+| 协议 | `tv_indicator_contract.py` | `NO_TRADE_BITS` 新增 `2048: "CVD样本未成熟·待定"`；`decode_quality_code` 新增 `cvdSampleImmature = bool(n & 128)` |
+| Pine 质量码 | SVP `mcpQualityCode` 组装行 | `((not cvdQualityOk or cvdLowSample) ? 2 : 0)` → `((not cvdQualityOk and not cvdLowSample) ? 2 : 0) + (cvdLowSample ? 128 : 0)` |
+| Pine 禁做码 | SVP `noTradeReasonCode` 组装行 | `not cvdQualityOk` → `not cvdQualityOk and not cvdLowSample`，并加 `+ (cvdLowSample ? 2048 : 0)` |
+| 决策层 | `decision_loop.py` | quality：`quality["raw"] & ~128` 非零才落 wait，否则只记 `svp_quality_pending`；no_trade：`int(code) & ~2048` 非零才落 wait |
+| 解除条件 | `decision_matrix.py` | `RELEASE_ACTIONS[2048]` ＋ 纳入 `TRANSIENT_BITS`；缺了会被 `test_every_release_action_is_verifiable_not_platitude` 直接拦下 |
+| 账本 | `auto_card.py` | 影子记录新增 `bar_pos_ms` / `cvd_sample_mature`：**只打标不丢弃**，过滤权交给校准/WFO 消费方 |
+
+测试 `tests/test_cvd_sample_immature_20260917.py`：14 条，成对覆盖「仅样本位不 wait」与「带动其它位仍 wait」。
+
+**上线顺序不能反（渐进兼容）**：旧 Pine 仍把未成熟并进 bit2，新决策层算 `2 & ~128 = 2` 仍 wait，行为不变；
+只有 Pine 开始上报 128/2048 才生效。**先改下游、再编译上游**；反过来会有一段失去拦截。
+
+**位分配的坑**：`NO_TRADE_BITS` 已用到 1024（新位必须 2048 起），Quality 码已用到 64（新位 128）。
+测试里硬编码的全位掩码（`2047`）加位即失效，一律改 `sum(NO_TRADE_BITS)`。
+
+**主指标由用户手动编译**（用户明确定的边界：「指标编译我来做，你修改好就行」）：
+改完源码后把**文件路径 ＋ 改了哪两行**交给用户即可，不要自行走云编译或改图上的脚本。
 
 ## 修复方向（按性价比）
 
