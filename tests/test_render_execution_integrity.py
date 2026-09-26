@@ -91,3 +91,22 @@ def test_missing_canonical_rr_does_not_borrow_legacy():
     card = render({"state": "WAIT", "executable": False, "rr": None}, rr_a=0.5)
     verdict = next(line for line in card.splitlines() if line.startswith("【裁决】"))
     assert "R:R不足" not in verdict
+
+
+# ── 2026-09-18（用户批准）：WAIT 与「禁做」文案分离 ──────────────────────────
+
+def test_wait_rr_below_two_renders_waiting_not_forbidden():
+    """rr<2 的等待帧不再被折成「禁做」——「禁做」只留给 NO-GO / X。"""
+    card = render({"state": "WAIT", "executable": False, "rr": 0.8})
+    assert "⏳主推 等待" in card
+    assert "主线R:R不足" in card
+    assert "禁做" not in card
+
+
+def test_no_go_rr_below_two_still_renders_forbidden():
+    card = render({"state": "NO-GO", "executable": False, "rr": 0.8,
+                   "reason": "硬闸门：risk_constitution",
+                   "blockers": ("risk_constitution",),
+                   "primary_blocker": "risk_constitution"})
+    assert "⚠️主推 禁做" in card
+    assert "禁做" in card

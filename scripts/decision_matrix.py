@@ -54,10 +54,13 @@ RELEASE_ACTIONS: dict[int, str] = {
     256: "等本根收线（K 未收盘不算）",
     512: "等新触发出现（旧触发已过期，别追）",
     1024: "先修副指标总线（主指标「免费版唯一总线」指向 Basic Packed Bus）",
+    # 20260917：CVD 低周期样本未成熟（每根K线前段必然）。15m图+1m低周期、
+    # CVD_MIN_SAMPLES=5 时，本根走满 5 分钟即自动解除——不需要等行情，只需等时间。
+    2048: "等本根 K 线走满 5 分钟（1m 样本 ≥ 5，数据长好即自动解除）",
 }
 
 # 这些位属于「本根就能好」的临时项，与「要等行情」的结构项分开列
-TRANSIENT_BITS = {256, 512, 1024}
+TRANSIENT_BITS = {256, 512, 1024, 2048}
 
 
 def release_plan(code) -> list[dict[str, Any]]:
@@ -145,6 +148,7 @@ def synthesis_verdict(
     main_grade: str,
     haldro_state=None,
     haldro_valid=None,
+    haldro_risk=None,
     rr=None,
     is_crypto: bool = True,
 ) -> dict[str, Any]:
@@ -186,11 +190,22 @@ def synthesis_verdict(
     aligned = (side == 1 and state == 1) or (side == -1 and state == 2) or side == 0
 
     # 副指标否决：只对「方向明确的主 A」构成硬阻断
+    # 2026-09-18 S3 拆位（用户拍板）：真矛盾（CVD 背离 bit16）才否决；
+    # 跨所 OI 数据分歧（bit128）是数据一致性状态 → 降权不硬阻断；
+    # 风险码缺失/无法归因 → 保守维持否决。
     if state == 3:
+        _risk = _as_int(haldro_risk)
+        _s3_hard = _risk is None or bool(_risk & 16) or not bool(_risk & 128)
         base = _base_verdict(grade)
         if base == "A执行":
-            return _pack("不执行·副冲突", "副指标否决", "veto", rr_info, hard_block=True,
-                         reason=f"主{grade} vs 副S3冲突 → 硬阻断（副指标只可否决，不可升级）")
+            if _s3_hard:
+                return _pack("不执行·副冲突", "副指标否决", "veto", rr_info, hard_block=True,
+                             reason=f"主{grade} vs 副S3冲突（CVD背离）→ 硬阻断（副指标只可否决，不可升级）")
+            return _pack("A降级候选", "副指标数据分歧", "degrade", rr_info, hard_block=False,
+                         reason=f"主{grade} vs 副S3数据分歧（跨所OI）→ 降权为人工候选，不硬阻断")
+        if not _s3_hard:
+            return _pack(base, "主指标（副S3数据分歧·降级提示）", "degrade", rr_info, hard_block=False,
+                         reason=f"副S3数据分歧（跨所OI），主{grade} 本就非 A，维持原级但标注降权")
         return _pack(base, "主指标（副S3冲突·降级提示）", "degrade", rr_info, hard_block=False,
                      reason=f"副S3冲突，主{grade} 本就非 A，维持原级但标注冲突")
 

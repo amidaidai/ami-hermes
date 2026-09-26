@@ -918,7 +918,13 @@ def render_v96_card(
     # 2026-09-13：等待条件具名化 —— 引用最近上下结构位（只给名不给价）
     _up_name, _down_name = _nearest_trigger_names(levels_prepared, price)
     _wait_ref = " / ".join([n for n in (_up_name, _down_name) if n]) or "结构位"
-    if final_state == "NO-GO" or str(status).startswith("X") or (_rr_num is not None and _rr_num < 2):
+    # 2026-09-18（用户批准）：WAIT 与 禁做 文案分离——「禁做」只留给 NO-GO / X；
+    # WAIT（含旧实现里 rr<2 被误折成禁做的等待帧）一律「等待」；PLAN-B 指向人工方案区。
+    _fv_state = str((final_verdict or {}).get("state") or "").upper()
+    _plan_fv = (final_verdict or {}).get("plan") if isinstance(final_verdict, dict) else None
+    _is_plan_b = (_fv_state == "PLAN-B" and isinstance(_plan_fv, dict)
+                  and bool(_plan_fv.get("entry_zone")))
+    if final_state == "NO-GO" or str(status).startswith("X"):
         # 2026-09-12：结论文案必须与真实约束一致。旧实现无论 NO-GO 的真实原因
         # 是副指标冲突还是高级门控否决，一律写「R:R不足」，与 R:R 闸门自身
         # 的输出自相矛盾（实测同卡出现「🟢主线R:R 1:3.3」+「R:R不足」）。
@@ -957,7 +963,8 @@ def render_v96_card(
         backup_exec = f"{dir_b}失效路径；不与主推平权"
         backup_rr = f"1:{_rr_b_num:.1f}" if _rr_b_num is not None and _rr_b_num >= 2 else "观察"
     else:
-        # WAIT：B/C 观察候选只从 FinalVerdict 的 watch 元组来（与推送卡同一实现），
+        # WAIT / PLAN-B（PLAN-B 折算成等待态进入本分支；方案区在其后独立渲染）
+        # B/C 观察候选只从 FinalVerdict 的 watch 元组来（与推送卡同一实现），
         # 未授权就必须写明「未授权」，且绝不回落到原始 entry/stop/target。
         _local = (final_verdict or {}).get("state") or ""
         _lgrade = str((final_verdict or {}).get("grade") or "")
@@ -968,21 +975,33 @@ def render_v96_card(
                 cand = _candidate_view(final_verdict or {})
             except Exception:  # pragma: no cover - 独立调用时退回「无候选」
                 cand = {}
-        _wait_ref2 = _up_name if dir_a == "多" else _down_name
-        action_summary = (f"🔵 {bias}等确认 — 先等 {_wait_ref2} 触发" if _wait_ref2
-                          else f"🔵 {bias}等确认 — 先等结构位触发")
-        recommend_name = "🔵主推 等确认"
-        recommend_trigger = f"待 {_wait_ref2} 确认" if _wait_ref2 else "未到最优触发"
-        if cand.get("entry"):
-            recommend_exec = (f"人工候选（未授权）入{_price(cand['entry'])} "
-                              f"止{_price(cand['stop'])} 标{_price(cand['target'])}")
-            recommend_rr = f"1:{cand['rr']:.2f}"
-        elif cand.get("incomplete"):
-            recommend_exec = "候选数据不完整；等重新计算"
-            recommend_rr = "待确认"
+        if _is_plan_b:
+            # 人工方案（非授权）：主推指向方案区，不与「等待」混同。
+            action_summary = "🧭人工方案（非授权） — 结构成立+方向明确·缺辅证确认"
+            recommend_name = "🧭主推 人工方案"
+            recommend_trigger = "见下方「人工方案」表（进场区/失效位/目标区）"
+            recommend_exec = "人工判断；系统不授权执行"
+            _plan_rr = _plan_fv.get("rr") if isinstance(_plan_fv, dict) else None
+            recommend_rr = f"1:{float(_plan_rr):.2f}" if isinstance(_plan_rr, (int, float)) else "见方案表"
         else:
-            recommend_exec = f"等待{dir_a}触发；不追现价；损/标触发后计算"
-            recommend_rr = "待确认"
+            _wait_ref2 = _up_name if dir_a == "多" else _down_name
+            if _rr_num is not None and _rr_num < 2:
+                action_summary = "🔵等待 — 主线R:R不足(<1:2)·等条件齐备后重算"
+            else:
+                action_summary = (f"🔵 {bias}等确认 — 先等 {_wait_ref2} 触发" if _wait_ref2
+                                  else f"🔵 {bias}等确认 — 先等结构位触发")
+            recommend_name = "⏳主推 等待"
+            recommend_trigger = f"待 {_wait_ref2} 确认" if _wait_ref2 else "未到最优触发"
+            if cand.get("entry"):
+                recommend_exec = (f"人工候选（未授权）入{_price(cand['entry'])} "
+                                  f"止{_price(cand['stop'])} 标{_price(cand['target'])}")
+                recommend_rr = f"1:{cand['rr']:.2f}"
+            elif cand.get("incomplete"):
+                recommend_exec = "候选数据不完整；等重新计算"
+                recommend_rr = "待确认"
+            else:
+                recommend_exec = f"等待{dir_a}触发；不追现价；损/标触发后计算"
+                recommend_rr = "待确认"
         backup_name = f"🔁备选 {dir_b}"
         backup_trigger = "反向破位后"
         backup_exec = "仅观察条件；确认后重新计算，不显示候选价"
@@ -1023,6 +1042,8 @@ def render_v96_card(
     _reason = _pb_txt or ("" if _dual_na else _dual_txt)
     if final_state == "GO-A" and final_executable:
         lines.append(f"⭐主推 {dir_a} — {_dual_txt or '主副同向'}·可执行")
+    elif _is_plan_b:
+        lines.append("🧭主推 人工方案（非授权） — 结构成立+方向明确，缺辅证确认")
     elif _reason:
         lines.append(f"{recommend_name} — {_reason}")
     else:

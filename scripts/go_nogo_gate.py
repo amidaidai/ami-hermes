@@ -298,7 +298,7 @@ def check_gate(symbol: str, engine_data: dict, meta: dict) -> dict:
         # 2026-09-13 审计修复：副指标有数据但未共振（不足/拥挤降级）时
         # 不得显示「共振 GREEN」——降为可见黄灯，不阻断执行授权链。
         _weak = str(reason)
-        if _weak.startswith("副指标不足") or _weak.startswith("同向但拥挤"):
+        if _weak.startswith(("副指标不足", "同向但拥挤", "副数据分歧")):
             gates["dual_indicator"] = {"status": "yellow", "reason": f"{reason}·未共振"}
             yellow_gates.append("dual_indicator")
         else:

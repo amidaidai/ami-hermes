@@ -194,6 +194,26 @@ def test_svp_haldro_state_pack_conflict_is_hard_block():
     assert "haldro_state_conflict" in out.blockers
 
 
+def test_svp_haldro_state_pack_oi_split_is_wait_not_hard():
+    """2026-09-18 S3 拆位：跨所 OI 数据分歧（bit128）降为可见等待，不硬禁。"""
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(sub_haldro_state_pack=3, sub_haldro_risk_code=128), _dual(valid_code=2),
+        regime=_trend(),
+    )
+    assert "haldro_state_consensus" in out.blockers
+    assert "haldro_state_conflict" not in out.blockers
+
+
+def test_svp_haldro_state_pack_cvd_divergence_stays_hard():
+    """2026-09-18 S3 拆位：真矛盾（CVD 背离 bit16）保留硬拦。"""
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(sub_haldro_state_pack=3, sub_haldro_risk_code=16), _dual(valid_code=2),
+        regime=_trend(),
+    )
+    assert out.state == "NO-GO"
+    assert "haldro_state_conflict" in out.blockers
+
+
 def test_short_execution_uses_short_geometry_and_geometric_rr():
     out = resolve_final_verdict(
         "BTCUSDT",

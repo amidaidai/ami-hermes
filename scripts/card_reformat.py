@@ -86,7 +86,7 @@ def parse(card_path: Path) -> dict:
     d: dict = {"raw_lines": lines}
     d["header"] = lines[0].replace("📊", "").strip() if lines else ""
     for l in lines[:6]:
-        if l.startswith("⚠️") or l.startswith("🔵") or l.startswith("⭐"):
+        if l.startswith(("⚠️", "🔵", "⭐", "⏳", "🧭")):
             d["main_push"] = l.strip()
         if l.startswith("结构："):
             d["structure"] = l.replace("结构：", "").strip()
@@ -275,9 +275,11 @@ def render(card_path: Path) -> str:
 
 
 _PLAIN_MAP = [
-    ("⚠️主推 禁做", "等待，不做单"),
-    ("⚠主推 禁做", "等待，不做单"),
-    ("主推 禁做", "等待，不做单"),
+    ("⏳主推 等待", "等待，不做单"),
+    ("🧭主推 人工方案", "人工方案（未授权·需人工确认）"),
+    ("⚠️主推 禁做", "禁做，不做单"),
+    ("⚠主推 禁做", "禁做，不做单"),
+    ("主推 禁做", "禁做，不做单"),
     ("🔵主推 等确认", "等待确认后再动"),
     ("主推 等确认", "等待确认后再动"),
     ("⭐主推", "主推"),
@@ -373,15 +375,37 @@ def render_tables(card_path: Path) -> str:
     reason = push.split("—", 1)[1].strip() if "—" in push else ""
     reason = _reason_text(d, reason)
     _push_line = f"{act} — {reason}" if reason else act
-    out = [f"**{sym} {fmt_price(price)} · {clock} · {sess_word} · {badge}**", _push_line, ""]
-
-    # ① 盯什么（以现价为锚；现价所在的带当「区间边界」，不当触发也不当目标）
+    # ① 盯什么的前置计算（2026-09-16 v8：首屏也要用这两个位，故上移到首屏之前）：
+    # 三态锚点＝现价；现价所在的带当「区间边界」，不当触发也不当目标。
     band_zone = next((r for r in levels if r["lo"] <= price <= r["hi"]), None)
     cand = [r for r in levels if r is not band_zone]
     below = sorted([r for r in cand if r["mid"] < price], key=lambda r: -r["mid"])
     above = sorted([r for r in cand if r["mid"] > price], key=lambda r: r["mid"])
     up_trig = above[0] if above else None
     dn_trig = below[0] if below else None
+    plan_rows = d.get("manual_plan") or []
+    executable = ("GO-A" in head) and ("可执行" in push) and not plan_rows
+
+    # 首屏第 3-4 行（v8 · 用户要求「优化格式 + 具体怎么做」）：
+    # ① 祈使句回答「现在做什么」；② 明写上下两个数回答「要观察哪一个位置」。
+    # v7 把这两个答案埋在 ① 表与总结里，用户每轮都得再问一次。
+    tf_main = _card_main_tf(sym, d.get("temp", ""))
+    if executable:
+        now_line = "🟢 现在：按 ④ 执行（原生值，不追现价）"
+    elif plan_rows:
+        now_line = "🟡 现在：先等 ④ 的升级前置解除"
+    else:
+        now_line = f"🟡 现在：不动作，等 {tf_main} 收线" if tf_main else "🟡 现在：不动作，等收线"
+    up_first = f"`{_edge(up_trig, 'hi')}`" if up_trig else (
+        f"`{fmt_price(band_zone['hi'])}`" if band_zone else "")
+    dn_first = f"`{_edge(dn_trig, 'lo')}`" if dn_trig else (
+        f"`{fmt_price(band_zone['lo'])}`" if band_zone else "")
+    out = [f"**{sym} {fmt_price(price)} · {clock} · {sess_word} · {badge}**", _push_line, now_line]
+    if up_first or dn_first:
+        out.append(f"上 {up_first or '—'} · 下 {dn_first or '—'}")
+    out.append("")
+
+    # ① 盯什么
     dn_next = [r["price"] for r in below[1:]][:2]
     if not dn_next:
         dn_next = [_tag(r) for r in sorted(remote, key=lambda r: -r["mid"]) if r["mid"] < price][:2]
@@ -441,7 +465,7 @@ def render_tables(card_path: Path) -> str:
 
     # ④ 人工方案（PLAN-B）：结构成立+方向明确但缺辅证确认 —— 给方案，不给授权。
     # 没有 PLAN-B 时这一段整块不出现，v7 版式与旧卡完全一致。
-    plan_rows = d.get("manual_plan") or []
+    # （plan_rows 已随首屏前置计算取值，见上方 v8 说明。）
     if plan_rows:
         out += ["**④ 人工方案（非授权·需人工确认）**", "",
                 "| 方向 | 参考进场区 | 失效位 | 参考目标区 | R:R |",
@@ -457,7 +481,7 @@ def render_tables(card_path: Path) -> str:
     # 2026-09-16：GO-A 卡的首屏已写「可执行」，④ 的执行三件套必须一并搬到重排卡上。
     # 此前 tables 模式整块丢掉 ④ 执行价（`d["plan"]` 解析后从不消费），总结却仍写
     # 「当前不给入场价、只作人工观察」—— 同一张卡自相矛盾。
-    executable = ("GO-A" in head) and ("可执行" in push) and not plan_rows
+    # （executable 已随首屏前置计算取值，见上方 v8 说明。）
     exec_rows = d.get("plan") or []
     if executable and exec_rows:
         out += ["**④ 执行方案（GO-A·原生卡原值）**", "",

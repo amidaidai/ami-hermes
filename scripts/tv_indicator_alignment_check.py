@@ -38,7 +38,7 @@ import tv_indicator_contract as C  # noqa: E402
 
 # 定版指标源（与契约 docstring 里的 sha 一一对应）
 PINE_DIR = REPO / "outputs" / "pine_20260905"
-MAIN_PINE = PINE_DIR / "SVP_audit_fixed17_20260910.pine"      # = SVP_主指标_空格修正_20260911.pine
+MAIN_PINE = PINE_DIR / "SVP_audit_fixed18_20260916.pine"      # = SVP_主指标_CVD样本拆位_20260917.pine（云端 2026-09-17 保存）
 SUB_PINE = PINE_DIR / "AggVol_audit_fixed14_20260910.pine"    # = AggVol_副指标_最终版_20260911.pine
 
 _PLOT_CALL = re.compile(r"\bplot(?:shape|char|candle|arrow)?\s*\(")

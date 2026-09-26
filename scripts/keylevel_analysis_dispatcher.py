@@ -74,15 +74,26 @@ def main() -> int:
     text_push_ok = "Telegram文字卡已推送" in out
     photo_push_ok = "Telegram主周期截图" in out
     if push_requested:
-        trigger["text_push_status"] = "sent" if text_push_ok else "failed_or_missing"
-        trigger["photo_push_status"] = "sent" if photo_push_ok else "failed_or_missing"
-        trigger["push_status"] = "sent" if text_push_ok and photo_push_ok else "partial" if text_push_ok or photo_push_ok else "failed_or_missing"
-        if trigger["push_status"] != "sent":
-            trigger["push_retry_required"] = True
-            trigger["push_retry_count"] = int(trigger.get("push_retry_count", 0) or 0) + 1
-            trigger["push_last_error"] = "文字卡或主周期截图投递未获得成功回执"
-        else:
+        # 2026-09-17：auto_card 对非 GO-A（等待/禁做）会显式打印「未推送：FinalVerdict…」——
+        # 那是设计行为，不是投递失败。此前把它当 failed_or_missing，补投递重试无限累积
+        # （实测 push_retry_count 到过 104 次）。这里识别该明确跳过并落 skipped 状态。
+        skipped_not_goa = "未推送：FinalVerdict不是完整GO-A可执行裁决" in out
+        if skipped_not_goa:
+            trigger["text_push_status"] = "skipped_not_goa"
+            trigger["photo_push_status"] = "skipped_not_goa"
+            trigger["push_status"] = "skipped_not_goa"
             trigger["push_retry_required"] = False
+            trigger.pop("push_last_error", None)
+        else:
+            trigger["text_push_status"] = "sent" if text_push_ok else "failed_or_missing"
+            trigger["photo_push_status"] = "sent" if photo_push_ok else "failed_or_missing"
+            trigger["push_status"] = "sent" if text_push_ok and photo_push_ok else "partial" if text_push_ok or photo_push_ok else "failed_or_missing"
+            if trigger["push_status"] != "sent":
+                trigger["push_retry_required"] = True
+                trigger["push_retry_count"] = int(trigger.get("push_retry_count", 0) or 0) + 1
+                trigger["push_last_error"] = "文字卡或主周期截图投递未获得成功回执"
+            else:
+                trigger["push_retry_required"] = False
     else:
         trigger["text_push_status"] = "not_requested"
         trigger["photo_push_status"] = "not_requested"

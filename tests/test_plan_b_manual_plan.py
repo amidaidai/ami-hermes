@@ -4,10 +4,12 @@
 B 级（占 58%）被 P0-1 一律折成 WAIT/禁做，用户只看到「永远不给出方案」。这个
 用例把「不能自动执行」与「不能给方案」的边界钉死：
 
-1. B 级结构成立 + 三件套几何有效 + R:R≥1.5 + 无硬门 → PLAN-B，必须给出方案；
+1. B 级结构成立 + 三件套几何有效 + R:R≥1.5 + 无（豁免表之外的）硬门 → PLAN-B，必须给出方案；
 2. 方案只存在于 plan 字段，entry/stop/target 必须保持 None（物理上不可能被当
    成授权订单）；
-3. 任何硬门 → 仍 NO-GO，连方案都不出；
+3. 非豁免硬门 → 仍 NO-GO，连方案都不出；
+   2026-09-18（用户批准）：执行级门 advanced_confluence（共振<4/6）对 PLAN-B 豁免——
+   GO-A 不变（仍硬拦），豁免事实在 reason / warnings / 升级前置里可见标注；
 4. R:R < 1.5 → 不进 PLAN-B；
 5. GO-A 语义完全不变；C反 比 B 更弱，不进 PLAN-B。
 """
@@ -154,3 +156,47 @@ def test_blocker_grouping_dedupes_and_keeps_evidence():
     assert len(flat) == len(set(flat)), flat
     # 证据层一条都不能丢
     assert set(flat) == {"exhaustion_chase", "b_wait", "haldro_invalid", "location"}
+
+
+# ── 2026-09-18（用户批准）：执行级硬门（advanced_confluence）对 PLAN-B 的豁免 ──
+
+def test_plan_b_exempts_only_advanced_confluence():
+    """共振<4/6 不连坐人工方案；豁免事实必须在证据层 / 升级前置里可见。"""
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(), _dual(), regime=_trend(),
+        advanced={"gate": {"execute": False, "reason": "共振2/6<4·否决"}},
+    )
+    assert out.state == "PLAN-B"
+    assert out.plan is not None
+    assert out.plan["authorized"] is False
+    # 证据层一个字不减：豁免门仍在 blockers / warnings / 升级前置里
+    assert "advanced_confluence" in out.blockers
+    assert any(str(w).startswith("advanced_confluence") for w in out.warnings)
+    assert "advanced_confluence" in out.plan["upgrade_prereqs"]
+    # 豁免门不得冒充「硬闸门」前缀（审计口径按此前缀数硬门）
+    assert out.reason.startswith("人工方案")
+    assert "硬闸门" not in out.reason
+
+
+def test_plan_b_still_blocked_by_other_hard_gates():
+    """豁免表之外仍有硬门（如主副强冲突）时，PLAN-B 照旧 NO-GO、连价都不出。"""
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(), _dual(2, True), regime=_trend(),
+        advanced={"gate": {"execute": False, "reason": "共振2/6<4·否决"}},
+    )
+    assert out.state == "NO-GO"
+    assert out.plan is None
+    assert out.entry is None
+
+
+def test_plan_b_exemption_never_reaches_go_a():
+    """豁免只作用于 PLAN-B 档：A 级遇执行级硬门仍被硬拦，授权语义不变。"""
+    out = resolve_final_verdict(
+        "BTCUSDT", _main(grade="A多"), _dual(), regime=_trend(),
+        risk={"allowed": True, "violations": [], "risk_usd": 1.0},
+        advanced={"gate": {"execute": False, "reason": "共振3/6<4·否决"}},
+    )
+    assert out.state != "GO-A"
+    assert out.executable is False
+    assert "advanced_confluence" in out.blockers
+    assert out.plan is None

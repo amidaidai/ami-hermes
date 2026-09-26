@@ -270,6 +270,9 @@ def _dual_verdict_for_final(main: dict, dual: dict) -> str:
         return _dv if _dv.startswith("副S3") else "主副强冲突"
     if bool(dual.get("conflict")):
         return "主副冲突·等待"
+    # 2026-09-18 S3 拆位：跨所数据分歧（非硬冲突）显示降权文案，不显示成硬冲突。
+    if bool(dual.get("s3_conflict")) and not bool(dual.get("hard_conflict")):
+        return str(dual.get("direction_verdict") or "副数据分歧·降权观察")
     if state in {"WAIT", "NO-GO"} and not bool(final.get("executable")):
         return "主指标等待/禁做"
     return str(dual.get("direction_verdict") or dual.get("flow_verdict") or "主副待读")

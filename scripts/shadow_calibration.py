@@ -53,6 +53,25 @@ def append_shadow_signal(path: str | Path, signal: dict[str, Any]) -> bool:
     return True
 
 
+# ── 2026-09-17 P0-a：陈旧几何守卫 ─────────────────────────────────────────
+# 信号时刻的三件套必须与现价同尺度。偏离超过该比例 = 陈旧/污染输入（幽灵几何
+# 实测偏离 16%+）：裁决层显式硬拦（stale_geometry），影子写入转隔离文件。
+STALE_GEOMETRY_MAX_DEVIATION = 0.10
+
+
+def geometry_guard(entry: float, price: float) -> tuple[float | None, bool]:
+    """返回 (deviation, stale)。entry/price 无效时 deviation=None（不判陈旧）。"""
+    try:
+        entry_f = float(entry)
+        price_f = float(price)
+    except (TypeError, ValueError):
+        return None, False
+    if entry_f <= 0 or price_f <= 0:
+        return None, False
+    deviation = abs(entry_f - price_f) / price_f
+    return deviation, deviation > STALE_GEOMETRY_MAX_DEVIATION
+
+
 def label_outcome(
     signal: dict[str, Any],
     future_bars: Iterable[dict[str, Any]],

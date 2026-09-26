@@ -174,6 +174,7 @@ BLOCKER_FAMILIES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
      ("risk_constitution", "regime_blocked", "regime_model", "regime_missing",
       "exhaustion_chase", "advanced_confluence", "data",
       "decision_evidence", "execution_contract")),
+    ("data_integrity", "数据/几何完整性", "hard", ("stale_geometry",)),
     ("conflict", "主副冲突", "hard",
      ("dual_indicator", "svp_authorization", "x_forbidden", "chart_identity",
       "tv_five_tf", "background")),
@@ -181,11 +182,13 @@ BLOCKER_FAMILIES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
      ("cross_source", "tv_live", "dual_alignment")),
     ("sub_invalid", "副指标未确认", "soft",
      ("haldro_invalid", "haldro_degraded", "haldro_state_invalid",
-      "haldro_state_degraded", "haldro_state_unknown", "haldro_fallback",
+      "haldro_state_degraded", "haldro_state_unknown", "haldro_state_consensus",
+      "haldro_fallback",
       "haldro_fallback_conflict", "oi_agreement_low", "oi_dispersion_high",
       "cvd_quality_unavailable")),
     ("authority", "未获执行授权", "soft",
-     ("b_wait", "svp_entry_invalid", "svp_entry_forbidden", "advanced_pending")),
+     ("b_wait", "svp_entry_invalid", "svp_entry_forbidden", "advanced_pending",
+      "risk_reference_geometry")),
     ("no_structure", "结构/位置未成立", "soft",
      ("no_direction", "svp_wait_language", "svp_no_trade_reason", "location",
       "zone_quality", "svp_quality_code")),
@@ -194,12 +197,17 @@ BLOCKER_FAMILIES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
       "trigger_pack_no_signal", "trigger_pack_forbidden")),
     ("geometry", "盈亏比不足", "soft", ("rr_ratio",)),
 )
-_FAMILY_ORDER = ("risk", "conflict", "cross_source", "sub_invalid", "authority",
-                 "no_structure", "no_trigger", "geometry")
+_FAMILY_ORDER = ("risk", "data_integrity", "conflict", "cross_source", "sub_invalid",
+                 "authority", "no_structure", "no_trigger", "geometry")
 # PLAN-B（人工方案）的最低盈亏比：低于 GO-A 的 1:2 授权线，但仍然必须有几何
 # 优势，否则「方案」只是把不交易的价位包装出来。1.5 与合同 `MCP RR Ratio`
 # 的「1.5-1.99 = B/C人工观察候选·不授权」一致。
 PLAN_B_MIN_RR = 1.5
+# 2026-09-18（用户批准）：执行级硬门的 PLAN-B 豁免表。
+# advanced_confluence（共振<4/6）是「入场质量」门：对 GO-A 保持硬拦，但不连坐
+# 「非授权人工方案」——人工方案由人把关，未达执行级的事实会在 warnings / reason /
+# 升级前置里可见标注。其余硬门（风控/数据/X/主副冲突）不豁免，PLAN-B 照旧 NO-GO。
+PLAN_B_EXEMPT_HARD = frozenset({"advanced_confluence"})
 
 
 def _blocker_groups(hard: list[str], wait: list[str]):
@@ -311,6 +319,15 @@ def resolve_final_verdict(
     cross_source_warnings = main.get("cross_source_warnings")
     if isinstance(cross_source_warnings, (list, tuple)):
         warnings.extend(f"cross_source:{item}" for item in cross_source_warnings if item)
+    # 2026-09-17 P0-a：陈旧几何硬门。三件套与现价同尺度校验由 auto_card 计算；
+    # 偏离超阈值（>10%）说明几何是陈旧/污染输入（幽灵几何实测 16%+），不得作为
+    # 候选价或人工方案流出——显式硬门、留痕，不再冒充跨源冲突。
+    if main.get("stale_geometry") is True:
+        hard.append("stale_geometry")
+        deviation_text = main.get("geometry_deviation_pct")
+        warnings.append(
+            "stale_geometry:" + (f"{deviation_text}%" if deviation_text is not None else "?")
+        )
     if main.get("location_valid") is not True:
         wait.append("location")
     if main.get("trigger_confirmed") is not True:
@@ -339,7 +356,13 @@ def resolve_final_verdict(
     no_trade_reasons = decode_no_trade(no_trade_raw)
     if no_trade_reasons:
         warnings.extend(f"svp_no_trade:{reason}" for reason in no_trade_reasons)
-        wait.append("svp_no_trade_reason")
+        # 20260917：只带 bit2048（CVD样本未成熟·待定）时不落 wait —— 数据没长好不是禁做理由。
+        # 其余任何原因（行情/风控/结构/位置）照旧等待，拦截强度不变。
+        _nt_decisive = int(_number(no_trade_raw, 0.0)) & ~2048
+        if _nt_decisive:
+            wait.append("svp_no_trade_reason")
+        else:
+            warnings.append("svp_no_trade_pending:样本未成熟")
 
     # Consume the remaining SVP evidence buses whenever they are present.  A
     # legacy payload may omit them, but a supplied malformed/stale bus fails
@@ -390,7 +413,13 @@ def resolve_final_verdict(
     quality = decode_quality_code(main.get("mcp_quality_code")) if main.get("mcp_quality_code") not in (None, "") else None
     if quality is not None and quality["raw"]:
         warnings.append(f"svp_quality_code:{quality['raw']}")
-        wait.append("svp_quality_code")
+        # 20260917：bit128（CVD样本未成熟）是「数据没长好」，不是「行情质量差」。
+        # 每根 15m K 线前 5 分钟（1m 样本 < CVD_MIN_SAMPLES=5）必然置位；旧式与 bit2 合并且
+        # 一律落 wait，使 43.9% 的样本在数据成长期被误判为质量否决。仅样本位时不落 wait。
+        if quality["raw"] & ~128:
+            wait.append("svp_quality_code")
+        else:
+            warnings.append("svp_quality_pending:样本未成熟")
 
     cvd_method = _number(main.get("mcp_cvd_method_code"), -1.0)
     if cvd_method == 0:
@@ -434,7 +463,15 @@ def resolve_final_verdict(
     if is_crypto and haldro_state_raw not in (None, ""):
         haldro_state = int(_number(haldro_state_raw, 0.0))
         if haldro_state == 3:
-            hard.append("haldro_state_conflict")
+            # 2026-09-18 S3 拆位（用户拍板）：真矛盾（CVD 背离 bit16）保留硬拦；
+            # 跨所 OI 数据分歧（bit128）是数据一致性状态、不是行情否决 →
+            # 降为可见等待/降权（永不授权）。风险码缺失/无法归因时保守维持硬拦。
+            haldro_risk = int(_number(main.get("sub_haldro_risk_code"), 0.0))
+            if (haldro_risk & 16) or not (haldro_risk & 128):
+                hard.append("haldro_state_conflict")
+            else:
+                wait.append("haldro_state_consensus")
+                warnings.append("haldro_state_consensus:副指标跨所数据分歧·降权不硬禁")
         elif haldro_state in (0, 4):
             wait.append("haldro_state_" + ("invalid" if haldro_state == 0 else "degraded"))
         if haldro_state not in (0, 1, 2, 3, 4):
@@ -524,10 +561,19 @@ def resolve_final_verdict(
                 wait.append("svp_authorization")
 
     risk_usd = _number(risk.get("risk_usd"), 0.0)
+    # 2026-09-17 P0-b：无真实计划（参考几何）不构成风控硬否决。evaluate_risk 对
+    # plan_geometry=False 的记录不产出计划级违规；授权本就不可达（无计划可授权），
+    # 但不再把运行误标成「风控拦截」。非几何类违规仍在 warnings 里逐条可见。
+    risk_reference_geometry = bool(risk) and risk.get("plan_geometry") is False
     if risk and not bool(risk.get("allowed", False)):
-        hard.append("risk_constitution")
-        warnings.extend(str(v) for v in risk.get("violations", []) if v)
-    if risk and risk_usd <= 0:
+        if risk_reference_geometry:
+            wait.append("risk_reference_geometry")
+            warnings.append("risk_reference_geometry:无真实计划·参考几何不作数")
+            warnings.extend(str(v) for v in risk.get("violations", []) if v)
+        else:
+            hard.append("risk_constitution")
+            warnings.extend(str(v) for v in risk.get("violations", []) if v)
+    if risk and risk_usd <= 0 and not risk_reference_geometry:
         hard.append("risk_constitution")
         warnings.append("risk_usd_invalid")
 
@@ -568,25 +614,28 @@ def resolve_final_verdict(
     warnings = list(dict.fromkeys(warnings))
     all_blockers = tuple(hard + wait)
 
-    # ── PLAN-B 资格（2026-09-15）────────────────────────────────────────────
+    # ── PLAN-B 资格（2026-09-15；2026-09-18 起豁免执行级硬门）────────────────
     # 「不能自动执行」≠「不能给方案」。B 级 = 结构成立 + 方向明确 + 三件套几何
     # 有效，只缺副指标同向/触发确认，所以不产生任何自动执行权（executable 恒
-    # False）。硬门一律不许进 PLAN-B——只要有硬门，仍然只出 NO-GO、连价都不出。
-    # 只认 B，不认 C反（反转型更弱）；只认 A 的分支完全不受影响。
+    # False）。除 PLAN_B_EXEMPT_HARD 里的执行级门（共振<4/6 等，方案上可见标注
+    # 「未达执行级」）外，其余硬门一律不进 PLAN-B——仍只出 NO-GO、连价都不出。
+    # 只认 B，不认 C反（反转型更弱）；只认 A 的分支完全不受影响（GO-A 仍需无硬门）。
+    plan_b_hard = [item for item in hard if item not in PLAN_B_EXEMPT_HARD]
     plan_b_eligible = (
         grade.startswith("B")
         and side in ("long", "short")
         and execution_complete
         and execution_geometry_valid
-        and not hard
+        and not plan_b_hard
         and rr >= PLAN_B_MIN_RR
     )
 
-    if hard:
-        state = "NO-GO"
-        executable = False
-    elif plan_b_eligible:
+    if plan_b_eligible:
+        # 在 hard 之前判定：豁免门不阻止人工方案，但完整保留在 blockers/warnings 证据层。
         state = "PLAN-B"
+        executable = False
+    elif hard:
+        state = "NO-GO"
         executable = False
     elif wait or is_bc:
         # P0-1 (2026-08-31): B/C反 一律 WAIT 不执行——等触发/确认，无自动授权；
@@ -634,18 +683,24 @@ def resolve_final_verdict(
             "invalidation": round(stop, 1),
             "target_zone": [round(target - band, 1), round(target + band, 1)],
             "rr": round(rr, 2),
-            "upgrade_prereqs": tuple(wait),
+            # 豁免门（如 advanced_confluence）必须在升级前置里可见——解除后重算才可能升执行级。
+            "upgrade_prereqs": tuple([*wait, *hard]),
             "note": "结构成立+方向明确，缺辅证确认；需人工判断，系统不授权执行。",
         }
         plan_reason = "人工方案·非授权 — 结构成立+方向明确，缺辅证确认"
 
     primary_blocker, blocker_groups = _blocker_groups(hard, list(wait))
 
-    reason = (
-        "硬闸门：" + "/".join(hard)
-        if hard else "等待：" + "/".join(wait)
-        if wait else "全部硬闸门通过"
-    )
+    if state == "PLAN-B":
+        # 豁免门不得冒充「硬闸门」：方案帧用专属 reason 前缀，豁免门单独标注。
+        reason = ("人工方案（非授权）：结构成立+方向明确，缺辅证确认"
+                  + ("·未达执行级门：" + "/".join(hard) if hard else ""))
+    elif hard:
+        reason = "硬闸门：" + "/".join(hard)
+    elif wait:
+        reason = "等待：" + "/".join(wait)
+    else:
+        reason = "全部硬闸门通过"
     # Observation prices for human judgement only.  A hard veto must not leak a
     # candidate disguised as observation, and a partial tuple is not a plan.
     watch_side, watch_entry, watch_stop, watch_target = "neutral", None, None, None
@@ -657,7 +712,7 @@ def resolve_final_verdict(
     regime_blocked = any(item in hard for item in ("regime_missing", "regime_blocked", "regime_model", "exhaustion_chase"))
     orderflow_yellow = any(item in wait for item in ("dual_alignment", "advanced_direction")) or any(item.startswith("haldro_") for item in warnings)
     gates = {
-        "data": gate("red" if any(item in hard for item in ("data", "decision_evidence")) else "green", "数据过期/证据缺失" if any(item in hard for item in ("data", "decision_evidence")) else "数据新鲜"),
+        "data": gate("red" if any(item in hard for item in ("data", "decision_evidence", "stale_geometry")) else "green", "数据过期/证据缺失/几何陈旧" if any(item in hard for item in ("data", "decision_evidence", "stale_geometry")) else "数据新鲜"),
         "background": gate("red" if "background" in hard else "green", "多周期硬冲突" if "background" in hard else "上级背景允许"),
         "regime": gate("red" if regime_blocked else "green", "模型不适配当前体制" if regime_blocked else "体制允许模型"),
         "location": gate("yellow" if any(item in wait for item in ("location", "zone_quality")) else "green", "位置/区域质量不足" if any(item in wait for item in ("location", "zone_quality")) else "位置有效"),
@@ -669,10 +724,11 @@ def resolve_final_verdict(
         "rr": gate("yellow" if "rr_ratio" in wait else "green", "R:R不足" if "rr_ratio" in wait else "R:R通过"),
         "risk": gate(
             "red" if "risk_constitution" in hard or "svp_authorization" in hard
-            else "yellow" if "svp_authorization" in all_blockers
+            else "yellow" if ("svp_authorization" in all_blockers or "risk_reference_geometry" in wait)
             else "green",
             "风控宪法拦截" if "risk_constitution" in hard
             else "SVP未授权执行" if "svp_authorization" in all_blockers
+            else "无真实计划·参考几何（不授权）" if "risk_reference_geometry" in wait
             else "风控通过",
         ),
     }

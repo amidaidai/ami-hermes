@@ -42,6 +42,11 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
     target = _f(inputs.get("target_price"))
     regime_divisor = _f(inputs.get("regime_multiplier"), 1.0)
     violations: list[str] = []
+    # 2026-09-17 P0-b：plan_geometry=False = 几何来自系统兜底的参考值（无真实计划）。
+    # 此类几何不做计划级判定（R:R 分层 / 止损夹层），也永远不构成「授权」——
+    # 但不产出「风控违规」，避免把「没有计划」误标成「风控拦截」。
+    plan_geometry = inputs.get("plan_geometry")
+    plan_geometry = True if plan_geometry is None else bool(plan_geometry)
 
     if regime_divisor <= 0:
         return {
@@ -50,13 +55,14 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
             "violations": ["体制禁做"], "protections_passed": False,
             "drawdown_multiplier": 0.0, "regime_multiplier": regime_divisor,
         }
-    if balance <= 0 or atr <= 0 or entry <= 0 or stop <= 0 or target <= 0:
+    geometry_ready = entry > 0 and stop > 0 and target > 0
+    if balance <= 0 or atr <= 0 or (plan_geometry and not geometry_ready):
         violations.append("风控输入不完整")
 
     stop_distance = abs(entry - stop)
     stop_atr = stop_distance / atr if atr > 0 else 0.0
     stop_valid = cfg["min_stop_atr"] <= stop_atr <= cfg["max_stop_atr"]
-    if atr > 0 and not stop_valid:
+    if plan_geometry and atr > 0 and not stop_valid:
         violations.append(
             f"止损{stop_atr:.2f}×ATR不在{cfg['min_stop_atr']:.1f}-{cfg['max_stop_atr']:.1f}夹层"
         )
@@ -82,9 +88,9 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
         symbol=str(inputs.get("symbol") or ""),
         risk_usd=risk_usd,
         account_balance=balance,
-        entry_price=entry or None,
-        stop_price=stop or None,
-        target1_price=target or None,
+        entry_price=(entry or None) if plan_geometry else None,
+        stop_price=(stop or None) if plan_geometry else None,
+        target1_price=(target or None) if plan_geometry else None,
         atr_value=atr or None,
         state=state,
         volatility_24h_pct=max(0.0, _f(inputs.get("volatility_24h_pct"))),
@@ -105,8 +111,12 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
         violations.append(f"组合总风险{exposure:.1f}%超过{cfg['max_total_exposure_pct']:.0f}%")
 
     violations = list(dict.fromkeys(violations))
-    allowed = not violations and protections_passed and risk_usd > 0 and stop_distance > 0
-    position_size = round(risk_usd / stop_distance, 8) if allowed else 0.0
+    # 2026-09-17 P0-b：参考几何永不授权（没有真实计划可授权），但也不再是「违规」。
+    allowed = (
+        not violations and protections_passed and risk_usd > 0
+        and stop_distance > 0 and plan_geometry
+    )
+    position_size = round(risk_usd / stop_distance, 8) if (allowed and stop_distance > 0) else 0.0
     dd_mult = _f(base.get("drawdown_mult"), 1.0)
     if not allowed:
         tier = "blocked"
@@ -118,14 +128,20 @@ def evaluate_risk(inputs: dict[str, Any]) -> dict[str, Any]:
     else:
         tier = "normal"
 
+    reasons = list(constitution.get("reasons") or [])
+    if not plan_geometry:
+        reasons.append("无真实计划·参考几何不参与计划级风控（R:R/止损夹层豁免）")
     return {
         "risk_state_status": constitution["risk_state_status"],
         "allowed": allowed,
+        # 2026-09-17 P0-b：几何来源标记。False = 参考几何（无真实计划）——
+        # decision_loop 据此不再把「无计划」记成风控硬门，但也永不授权。
+        "plan_geometry": plan_geometry,
         # 2026-09-15：1.5 ≤ R:R < 2.0 时非 None = 仅人工观察候选，授权线未达。
         "observe_only_rr": constitution.get("observe_only_rr"),
         # 宪法逐项结论必须可见（「R:R x:1 仅B/C人工观察候选」就写在这里），
         # 否则「为什么不授权」在 v2 出口就被吞掉了。
-        "reasons": list(constitution.get("reasons") or []),
+        "reasons": reasons,
         "risk_usd": risk_usd,
         "position_size": position_size,
         "risk_tier": tier,

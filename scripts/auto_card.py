@@ -709,8 +709,10 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         risk_code = int(float(str(risk_raw).replace("−", "-")))
     except (TypeError, ValueError):
         pass
+    # 2026-09-18：位表对齐 AggVol 现行版本（bit8 已不存在；128=OI跨所分歧，256=数据未就绪）。
     risk_defs = ((1, "低覆盖"), (2, "单所主导"), (4, "上级冲突"),
-                 (8, "OI背离"), (16, "CVD背离"), (32, "非加密"), (64, "LSR拥挤"))
+                 (16, "CVD背离"), (32, "非加密"), (64, "LSR拥挤"),
+                 (128, "OI跨所分歧"), (256, "数据未就绪"))
     risk_labels = [label for bit, label in risk_defs if risk_code & bit]
     risk_text = "、".join(risk_labels) if risk_labels else "无硬风险"
     quality = tv_main.get("sub_cvd_quality_code") or tv_sub.get("risk") or coverage
@@ -768,6 +770,9 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
     # 2026-09-13 审计修复：副指标 S3（CVD/OI 背离）必须与 decision_loop 的
     # haldro_state_conflict 硬阻断同源 —— 旧实现只看方向字符串，S3 会让
     # 门7「双指标共振」带着 usable=True 显示 GREEN，与硬闸门自相矛盾。
+    # 2026-09-18 S3 拆位（用户拍板，与 decision_loop 同源）：真矛盾（CVD 背离
+    # bit16）才升级为硬冲突（X禁做观察）；跨所 OI 数据分歧（bit128）是数据
+    # 一致性状态 → 降级为「B等待（副数据分歧）」；风险码缺失/无法归因 → 保守维持硬冲突。
     haldro_s3 = False
     _s3_raw = tv_main.get("sub_haldro_state_pack")
     if _s3_raw not in (None, ""):
@@ -775,7 +780,9 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
             haldro_s3 = int(float(str(_s3_raw).replace("−", "-"))) == 3
         except (TypeError, ValueError):
             haldro_s3 = False
-    hard_conflict = (raw_conflict and valid_code >= 2) or haldro_s3
+    _s3_hard = haldro_s3 and (bool(risk_code & 16) or not bool(risk_code & 128))
+    _s3_soft = haldro_s3 and not _s3_hard
+    hard_conflict = (raw_conflict and valid_code >= 2) or _s3_hard
     crowding_risk = bool(risk_code & 64)
     flow_risk = bool(risk_code & (4 | 8 | 16))
     executable_grade = status.startswith(("A", "B", "C反"))
@@ -783,6 +790,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "B等待（单源冲突）" if conflict and valid_code == 1 else
         "B等待（副单源·仅参考）" if valid_code <= 0 and executable_grade and feed.get("single") else
         "B等待（副指标无效）" if valid_code <= 0 and executable_grade else
+        "B等待（副数据分歧）" if _s3_soft and executable_grade else
         "B等待（副指标风险）" if status.startswith("A") and (crowding_risk or flow_risk) else status
     )
 
@@ -857,7 +865,7 @@ def _dual_indicator_verdict(symbol: str, meta: dict, engine_data: dict,
         "haldro_flow": f"CVD {sub_cvd or '待判'} · 量能 {volume_ratio or '待判'}",
         "haldro_quality": f"覆盖 {coverage or '待判'} · 质量 {quality or '待判'}{_oi_metrics_txt} · 风险 {risk_text}" + feed_tail,
         "haldro_confirm": f"Confirm {confirm or '待判'}",
-        "direction_verdict": "副单源，不参与协同" if valid_code <= 0 and feed.get("single") else "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if (raw_conflict and valid_code >= 2) else "副S3冲突·CVD/OI背离" if haldro_s3 else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
+        "direction_verdict": "副单源，不参与协同" if valid_code <= 0 and feed.get("single") else "副指标无效，不参与裁决" if valid_code <= 0 else "主副强冲突" if (raw_conflict and valid_code >= 2) else "副S3冲突·CVD/OI背离" if _s3_hard else "副数据分歧·降权观察" if _s3_soft else "单源冲突，仅等待" if conflict else "同向但拥挤降级" if aligned and crowding_risk else "主副同向" if aligned else "副指标不足",
         "structure_verdict": "结构顺向" if aligned else "结构需确认",
         "flow_verdict": "订单流冲突，不追" if conflict else f"订单流风险：{risk_text}" if flow_risk or crowding_risk else "订单流支持" if aligned else "等CVD/OI确认",
         "quality_verdict": f"副指标降级：{risk_text}" if risk_labels else "质量已读",
@@ -1108,6 +1116,7 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
         candidate["cross_source_warnings"] = list(cross_validation.get("warnings") or [])
 
     route_candidates = engine_data.get("_candidate_plans")
+    route = None
     if regime is not None and isinstance(route_candidates, list) and route_candidates:
         from model_router import select_primary_model
         route = select_primary_model(route_candidates, regime)
@@ -1117,6 +1126,22 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
                     candidate[key] = route[key]
             model_id = str(candidate.get("model_id") or model_id)
             engine_data["_model_route"] = route
+    # 2026-09-17 P0-b：几何来源标记（必须以 setdefault 兜底「之前」的载荷判定，否则恒真）。
+    # 只有 SVP 执行导出或路由计划自带完整三件套才算真实计划几何；price/st_primary
+    # 兜底的参考几何不做计划级 R:R/夹层硬否决（降为可见等待 risk_reference_geometry，永不授权）。
+    plan_geometry = bool(engine_data.get("_plan_geometry_from_source"))
+    # 路由计划只有「自带完整三件套」才算真实计划几何；从 decision_main 兜底回填的不算。
+    if (route and route.get("geometry_from_result") is True
+            and all(_decision_float(route.get(k)) > 0 for k in ("entry", "stop", "target"))):
+        plan_geometry = True
+    # P0-a 陈旧几何守卫（纵深防御）：三件套与现价同尺度校验，偏离 >10% 视为陈旧/污染输入。
+    from shadow_calibration import geometry_guard
+    guard_price = _decision_float((engine_data.get("prices") or {}).get("primary"))
+    geometry_deviation, stale_geometry = geometry_guard(numeric_entry, guard_price)
+    candidate["stale_geometry"] = bool(stale_geometry)
+    candidate["geometry_deviation_pct"] = (
+        round(geometry_deviation * 100, 2) if geometry_deviation is not None else None
+    )
 
     _bind_main_evidence(symbol, candidate)
     engine_data["_evidence_status"] = {
@@ -1141,6 +1166,7 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
         "current_bar": int(_decision_float(engine_data.get("_current_bar"))),
         "total_exposure_pct": _decision_float(engine_data.get("_total_exposure_pct")),
         "corr_high": bool(engine_data.get("_corr_high")),
+        "plan_geometry": plan_geometry,
     })
     engine_data["_risk_v2"] = risk
     from copy import deepcopy
@@ -1166,11 +1192,22 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
     ).to_dict()
     engine_data["_final_verdict"] = final
     engine_data["_final_verdict_locked"] = True
-    if engine_data.get("_shadow_enabled"):
+    _shadow_explicit_path = engine_data.get("_shadow_path")
+    # 2026-09-17 测试隔离（幽灵记录根因）：pytest 下未显式给 _shadow_path 时禁止写生产账本。
+    # 根因：测试夹具经 render_card_locked → 本函数把 63884/64000 等夹具价写进生产账本。
+    # 测试需要验证影子写入时，显式传 _shadow_path（tmp 路径）即可放行。
+    _shadow_pytest_block = _shadow_explicit_path is None and bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    if engine_data.get("_shadow_enabled") and not _shadow_pytest_block:
         from shadow_calibration import append_shadow_signal, order_model_for_plan
         interval_ms = 900_000 if str(symbol).upper().endswith("USDT") else 300_000
         ts_ms = int(engine_data.get("_snapshot_ts") or time.time() * 1000)
         signal_id = f"{symbol}:{model_id}:{ts_ms // interval_ms}"
+        # 20260917 新增（K线成熟度标记）：每根 K 线前 5 分钟，1m 低周期样本 < CVD_MIN_SAMPLES=5，
+        # SVP 的 cvdLowSample 必然置位——那是「数据没长好」，不是行情判定。
+        # 影子账本 499 条中有 43.9% 落在该窗口；校准/WFO 若不过滤会引入系统性假阴性。
+        # 这里只打标不丢弃：保留全样本可追溯，过滤由消费方按 cvd_sample_mature 决定。
+        bar_pos_ms = ts_ms % interval_ms
+        cvd_sample_mature = bar_pos_ms >= 300_000
         watch_entry = final.get("watch_entry") or candidate.get("entry")
         shadow_entry = _decision_float(watch_entry)
         shadow_stop = _decision_float(candidate.get("stop"))
@@ -1181,30 +1218,50 @@ def _resolve_card_final_verdict(symbol: str, meta: dict, engine_data: dict,
             dual_snapshot = deepcopy(frozen["dual"])
             regime_snapshot = deepcopy(frozen["regime"])
             risk_snapshot = deepcopy(frozen["risk"])
-            append_shadow_signal(
-                engine_data.get("_shadow_path") or DATA / "shadow" / "decision_signals.jsonl",
-                {
-                    "signal_id": signal_id, "symbol": symbol,
-                    "schema_version": frozen["schema_version"],
-                    "final_verdict": deepcopy(final),
-                    "timeframe": "15m" if str(symbol).upper().endswith("USDT") else "5m",
-                    "ts": ts_ms, "side": final.get("watch_side") or candidate.get("direction"),
-                    "entry": shadow_entry, "stop": shadow_stop,
-                    "target": shadow_target, "model_id": final.get("model_id"),
-                    # 2026-09-13：按计划语义写入执行订单模型（闭校准环）。
-                    "order_model": order_model_for_plan(final.get("model_id") or main_snapshot.get("model_id")),
-                    "regime_code": regime.code if regime else "unknown", "grade": candidate.get("grade"),
-                    "fvg_quality": candidate.get("mcp_fvg_quality_score"),
-                    "ob_quality": candidate.get("mcp_ob_quality_score"),
-                    "haldro_valid_code": dual.get("valid_code"),
-                    "haldro_risk_code": dual.get("risk_code"),
-                    "final_state": final.get("state"), "blockers": final.get("blockers"),
-                    "main": main_snapshot, "dual": dual_snapshot,
-                    "regime": regime_snapshot, "risk": risk_snapshot,
-                    "advanced": dict(engine_data.get("_advanced") or {}),
-                    "features": features,
-                },
-            )
+            record = {
+                "signal_id": signal_id, "symbol": symbol,
+                "schema_version": frozen["schema_version"],
+                "final_verdict": deepcopy(final),
+                "timeframe": "15m" if str(symbol).upper().endswith("USDT") else "5m",
+                "ts": ts_ms, "side": final.get("watch_side") or candidate.get("direction"),
+                "entry": shadow_entry, "stop": shadow_stop,
+                "target": shadow_target, "model_id": final.get("model_id"),
+                # 2026-09-13：按计划语义写入执行订单模型（闭校准环）。
+                "order_model": order_model_for_plan(final.get("model_id") or main_snapshot.get("model_id")),
+                "regime_code": regime.code if regime else "unknown", "grade": candidate.get("grade"),
+                "fvg_quality": candidate.get("mcp_fvg_quality_score"),
+                "ob_quality": candidate.get("mcp_ob_quality_score"),
+                "haldro_valid_code": dual.get("valid_code"),
+                "haldro_risk_code": dual.get("risk_code"),
+                # 20260917：K线成熟度（bar_pos_ms = 信号时刻在本根K线内的毫秒偏移）。
+                # cvd_sample_mature=False 表示 1m 样本未攒够，质量码里的「未成熟」位不可当行情否决用。
+                "bar_pos_ms": bar_pos_ms,
+                "cvd_sample_mature": cvd_sample_mature,
+                # 2026-09-17 P0-a：陈旧几何守卫标记（偏离现价比例 + 是否转隔离）。
+                "stale_geometry": bool(stale_geometry),
+                "geometry_deviation_pct": (
+                    round(geometry_deviation * 100, 2) if geometry_deviation is not None else None
+                ),
+                "final_state": final.get("state"), "blockers": final.get("blockers"),
+                "main": main_snapshot, "dual": dual_snapshot,
+                "regime": regime_snapshot, "risk": risk_snapshot,
+                "advanced": dict(engine_data.get("_advanced") or {}),
+                "features": features,
+            }
+            # 2026-09-17 P0-a：陈旧/污染几何不进主账本，转隔离文件保留可追溯
+            # （来源定位探针：下一次现场会连出处一起记录）。
+            shadow_path = Path(str(_shadow_explicit_path
+                                    or DATA / "shadow" / "decision_signals.jsonl"))
+            if stale_geometry:
+                record["quarantine_reason"] = (
+                    f"stale_geometry:{geometry_deviation:.1%}"
+                    if geometry_deviation is not None else "stale_geometry"
+                )
+                append_shadow_signal(shadow_path.with_name("rejected_signals.jsonl"), record)
+                print(f"  ⚠ 影子守卫：几何偏离现价 {geometry_deviation:.1%}"
+                      f"（entry={shadow_entry}），不入主账本，转 rejected_signals.jsonl")
+            else:
+                append_shadow_signal(shadow_path, record)
     return final
 
 
@@ -1461,6 +1518,7 @@ def _build_tv_main_data(dmi_rows: dict, tv_vals: dict, price: float = 0,
         main_grade=main.get("grade"),
         haldro_state=main.get("sub_haldro_state_pack"),
         haldro_valid=main.get("sub_haldro_valid_code"),
+        haldro_risk=main.get("sub_haldro_risk_code"),
         rr=main.get("mcp_rr_ratio") or main.get("rr_ratio"),
         is_crypto=main["_is_crypto"],
     )
@@ -1931,6 +1989,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
             "reason": f"来源矩阵不可用:{type(_cve).__name__}",
         }
     decision_main = dict(engine_data.get("_tv_main") or {})
+    # 2026-09-17 P0-b：在 setdefault 兜底之前采样几何来源（真实计划 = 载荷自带完整三件套）。
+    engine_data["_plan_geometry_from_source"] = all(
+        _decision_float(decision_main.get(k)) > 0 for k in ("entry", "stop", "target")
+    )
     decision_main.setdefault("entry", price)
     decision_main.setdefault("stop", st_a.get("stop"))
     decision_main.setdefault("target", st_a.get("target"))
@@ -1957,6 +2019,10 @@ def render_card_locked(symbol: str, merged: dict, results: list[dict], meta: dic
             quality = _decision_float(decision_main.get(quality_key) or result.get("quality") or result.get("setup_quality"))
             plans.append({
                 "model_id": canonical,
+                # 2026-09-17：标记几何是否来自模型结果本身（兜底回填的不算真实计划几何）。
+                "geometry_from_result": all(
+                    _decision_float(result.get(k)) > 0 for k in ("entry", "stop", "target")
+                ),
                 "entry": _decision_float(result.get("entry")) or _decision_float(decision_main.get("entry")),
                 "stop": _decision_float(result.get("stop")) or _decision_float(decision_main.get("stop")),
                 "target": _decision_float(result.get("target")) or _decision_float(decision_main.get("target")),

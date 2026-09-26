@@ -10,11 +10,11 @@ v13 之前，「指标 DW 字段名 / 行动格行名」被硬编码在至少三
   - 副指标 DW 的 `OI Total` / `Estimated CVD Value` 等早已不存在，映射恒空
 所以把「唯一权威接口」收到这里，其它模块一律引用本文件，不再自写字符串。
 
-权威来源（2026-09-11 用户上传的定版）
+权威来源（2026-09-17 用户上传的定版）
 --------------------------------------
-- 主指标：`SVP_主指标_空格修正_20260911.pine`
-  （= outputs/pine_20260905/SVP_audit_fixed17_20260910.pine，3557 行）
-  sha256[:24] = 68a34fc32da035880a0b332c
+- 主指标：`SVP_主指标_CVD样本拆位_20260917.pine`
+  （= outputs/pine_20260905/SVP_audit_fixed18_20260916.pine，3568 行；云端 2026-09-17 已保存）
+  sha256[:24] = 0fac936cf3a94706253cef0e（LF 归一；CRLF 原样 9da5d5132810fd10a8f869e2）
 - 副指标：`AggVol_副指标_最终版_20260911.pine`
   （= outputs/pine_20260905/AggVol_audit_fixed14_20260910.pine，966 行）
   sha256[:24] = c4c563ef4a08b77cb0ceb73f
@@ -252,6 +252,10 @@ NO_TRADE_BITS = {
     256: "本根未收线",
     512: "触发不新鲜",
     1024: "副指标冲突/降权",
+    # 20260917 新增：CVD 低周期样本未攒够（每根K线前段必然发生）。
+    # 与 32（CVD质量不达标）严格分开——32 是行情判定，2048 是数据没长好，
+    # 下游对 2048 只记待定/重试，不当作质量否决。
+    2048: "CVD样本未成熟·待定",
 }
 
 # 来源：主指标 v13 L2907 entryValidCode
@@ -508,6 +512,11 @@ def decode_quality_code(code):
         "htfFvg": bool(n & 16),
         "mss": bool(n & 32),
         "emaOrderMissing": bool(n & 64),
+        # 20260917 新增（Pine mcpQualityCode bit128）：
+        # CVD 低周期样本未成熟 = 数据没长好，不是行情判定。
+        # 每根 15m K 线前 5 分钟（1m 样本 < CVD_MIN_SAMPLES=5）必然置位；
+        # 499 条影子账本中 43.9% 的信号落在该窗口，旧式把它并入 bit2 造成假阴性。
+        "cvdSampleImmature": bool(n & 128),
     }
 
 

@@ -84,6 +84,20 @@ def test_aligned_dual_without_s3_is_not_affected():
     assert res["gates"]["dual_indicator"]["status"] == "green"
 
 
+def test_s3_oi_split_is_soft_not_x():
+    """2026-09-18 S3 拆位：bit128（跨所 OI 分歧）→ 降级提示，不给 X禁做观察。"""
+    engine_tv = {"_tv_main": {"grade": "A多", "sub_haldro_state_pack": 3,
+                              "sub_haldro_risk_code": 128, "sub_haldro_valid_code": 2,
+                              "sub_composite": 31, "sub_confirm_score": 4,
+                              "sub_coverage_exchanges": 5}}
+    dual = auto_card._dual_indicator_verdict("BTCUSDT",
+                                             {"status": "A多", "direction": "long"}, engine_tv)
+    assert dual["s3_conflict"] is True
+    assert dual["hard_conflict"] is False
+    assert "数据分歧" in dual["direction_verdict"]
+    assert dual["state"] == "B等待（副数据分歧）"
+
+
 # ── 2. 弱共振不再 GREEN ───────────────────────────────────────────────
 
 def test_unresonated_dual_is_yellow_not_green():

@@ -63,10 +63,12 @@ def test_invalid_production_evidence_cannot_authorize(monkeypatch, key, value):
     assert (final['entry'], final['stop'], final['target']) == (None, None, None)
 
 
-def test_shadow_serializes_complete_frozen_inputs(monkeypatch):
+def test_shadow_serializes_complete_frozen_inputs(monkeypatch, tmp_path):
     import shadow_calibration
     main, engine = chain(monkeypatch)
     engine['_shadow_enabled'] = True
+    # 2026-09-17：pytest 下默认路径写入已隔离（幽灵记录根因）；验证写入必须显式给 _shadow_path。
+    engine['_shadow_path'] = tmp_path / 'signals.jsonl'
     captured = []
     monkeypatch.setattr(shadow_calibration, 'append_shadow_signal', lambda path, row: captured.append(row))
     final = resolve(main, engine)

@@ -42,7 +42,10 @@ def test_release_plan_edges():
     assert D.release_plan(None) == []
     assert D.release_plan("") == []
     assert [p["bit"] for p in D.release_plan(1)] == [1]
-    assert len(D.release_plan(2047)) == len(D.NO_TRADE_BITS)
+    # 20260917：全位掩码用 sum(NO_TRADE_BITS)，硬编码 2047 在新增 bit2048 后会漏位。
+    assert len(D.release_plan(sum(D.NO_TRADE_BITS))) == len(D.NO_TRADE_BITS)
+    # 新增位必须带可验证解除条件（不是安慰话术），且属于「本根就能好」的临时项。
+    assert 2048 in D.RELEASE_ACTIONS and 2048 in D.TRANSIENT_BITS
 
 
 def test_every_release_action_is_verifiable_not_platitude():
@@ -173,6 +176,23 @@ def test_hard_block_only_for_main_a():
     b = D.synthesis_verdict(main_grade="B多", haldro_state=3, haldro_valid=2, rr=1.6)
     assert a["hard_block"] is True
     assert b["hard_block"] is False and b["verdict"] == "B/C人工候选"
+
+
+def test_s3_oi_split_degrades_not_veto():
+    """2026-09-18 S3 拆位：bit128（跨所 OI 分歧）→ A 降权为人工候选，不硬阻断。"""
+    syn = D.synthesis_verdict(main_grade="A多", haldro_state=3, haldro_valid=2,
+                              haldro_risk=128, rr=2.5)
+    assert syn["verdict"] == "A降级候选"
+    assert syn["hard_block"] is False
+    assert "数据分歧" in syn["reason"]
+
+
+def test_s3_cvd_divergence_still_vetoes():
+    """2026-09-18 S3 拆位：bit16（CVD 背离）→ 保留硬阻断。"""
+    syn = D.synthesis_verdict(main_grade="A多", haldro_state=3, haldro_valid=2,
+                              haldro_risk=16, rr=2.5)
+    assert syn["verdict"] == "不执行·副冲突"
+    assert syn["hard_block"] is True
 
 
 # ── 4. 卡片一行渲染 ──────────────────────────────────────────────────

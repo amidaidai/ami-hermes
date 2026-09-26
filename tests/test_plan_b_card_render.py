@@ -64,6 +64,14 @@ def test_native_card_renders_manual_plan_block():
     assert "非授权" in card
 
 
+def test_plan_b_native_card_is_primary_not_forbidden():
+    """2026-09-18（用户批准）：PLAN-B 帧以「人工方案」为主推，旧「主推 禁做」必须消失。"""
+    card = _card(BASE_FV)
+    assert "🧭主推 人工方案" in card
+    assert "⚠️主推 禁做" not in card
+    assert "⏳主推 等待" not in card
+
+
 def test_native_card_omits_plan_block_without_plan():
     card = _card({"state": "WAIT", "executable": False, "reason": "等待", "plan": None})
     assert "人工方案" not in card

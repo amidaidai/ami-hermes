@@ -63,7 +63,10 @@ def test_no_trade_reason_bit_boundaries():
     assert C.decode_no_trade("") == []
     assert C.decode_no_trade(1) == ["HTF冲突X"]
     assert C.decode_no_trade(1024) == ["副指标冲突/降权"]
-    assert C.decode_no_trade(2047) == list(C.NO_TRADE_BITS.values())
+    # 20260917：新增 bit2048（CVD样本未成熟·待定）后，全位掩码改为 sum(NO_TRADE_BITS)，
+    # 硬编码 2047 会漏掉最高位。
+    assert C.decode_no_trade(sum(C.NO_TRADE_BITS)) == list(C.NO_TRADE_BITS.values())
+    assert C.decode_no_trade(2048) == ["CVD样本未成熟·待定"]
     assert C.format_no_trade(1976) == "价格几何不成立+R:R不足+CVD质量不达标+溢折价不允许+本根未收线+触发不新鲜+副指标冲突/降权"
     assert C.format_no_trade(0) == ""
 
