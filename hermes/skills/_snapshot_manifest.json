@@ -1,6 +1,6 @@
 {
  "blocked_secrets": {},
- "file_count": 1905,
+ "file_count": 1906,
  "files": {
   "api-dependency-audit/SKILL.md": "abc570d8612ced9d",
   "api-dependency-audit/references/availability-verification-layers.md": "91d9efb21d7c77a7",
@@ -1396,6 +1396,7 @@
   "trading/tangxi-system-audit/references/windows-cron-maintenance-patterns.md": "0e44e9fdf93e7e42",
   "trading/tangxi-system-audit/references/xau-tv-svp-limitation.md": "f81f7196bb68e052",
   "trading/tangxi-system-audit/scripts/tv_keepalive.py": "fe57ebf7e034c090",
+  "trading/tangxi-system-audit/scripts/tv_sync_appdir.py": "a9842747d85260bd",
   "trading/tangxi-tg-report-standard/SKILL.md": "2bf606e36844f046",
   "trading/tangxi-tg-report-standard/references/collector-inventory.md": "45187767e50413f6",
   "trading/tangxi-tg-report-standard/references/emoji-and-format.md": "f9012020914662ff",
@@ -1908,8 +1909,8 @@
   "web/blocked-page-recovery/scripts/recover_page.py": "22b996996ae2bf25",
   "yuanbao/SKILL.md": "239e4875f511124f"
  },
- "generated_at": "2026-09-26T21:10:55+0800",
+ "generated_at": "2026-09-26T21:11:44+0800",
  "oversized": {},
  "source": "C:/Users/Administrator/AppData/Local/hermes/skills",
- "total_bytes": 15313370
+ "total_bytes": 15321098
 }
