@@ -10,7 +10,7 @@
 
 | 指标 | 上传文件名 | 仓内文件 | sha256[:24] | 行数 | 分工 |
 |---|---|---|---:|---:|---|
-| 主指标 | `SVP_主指标_空格修正_20260911.pine` | `outputs/pine_20260905/SVP_audit_fixed17_20260910.pine` | `68a34fc32da035880a0b332c` | 3557 | 结构/位置/FVG·OB/VWAP·EMA·CVD/DMI 体制、13 行行动格、**唯一执行授权** |
+| 主指标 | `SVP_主指标_CVD样本拆位_20260917.pine` | `outputs/pine_20260905/SVP_audit_fixed18_20260916.pine` | `0fac936cf3a94706253cef0e`（LF 归一；CRLF 原样 `9da5d5132810fd10a8f869e2`） | 3568 | 结构/位置/FVG·OB/VWAP·EMA·CVD/DMI 体制、13 行行动格、**唯一执行授权** |
 | 副指标 | `AggVol_副指标_最终版_20260911.pine` | `outputs/pine_20260905/AggVol_audit_fixed14_20260910.pine` | `c4c563ef4a08b77cb0ceb73f` | 966 | 5 所聚合量、4 所 OI、估算 CVD、LSR、基差、6 行行动格、**只确认/降级/否决** |
 
 优先级铁律不变：`X > WAIT > A > B/C`。X/WAIT 清空 Entry/Stop/Target；B/C 价格只进人工候选。
