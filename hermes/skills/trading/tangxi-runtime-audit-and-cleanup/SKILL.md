@@ -1228,7 +1228,51 @@ grep -c "^async def get_\|^def get_" scripts/fetch_tv_mcp.py
 - **fail-closed**：源文件数塌到上次 60% 以下或 <100 个 → 拒绝镜像并报错，**绝不擦备份**
   （备份脚本最贵的错误是「把备份擦成空」，宁可拒绝跑）
 - **只提交该路径**：`git commit -- hermes/skills`，不把工作区里其它在途改动一起扫进去
-- 四条必知 / 日常用法 / 备份洞自检见 `references/skills-backup-mechanism-20260911.md`
+- 四条必知 / 日常用法 / 备份洞自检 / **远端备份核验 + 归档孤儿搬运 recipe** 见 `references/skills-backup-mechanism-20260911.md`
+
+### 「远端备份是不是没更新？」的核验顺序（用户问「对比一下是不是没更新」时照这个答）
+
+先结论后证据，**不要用「本地改动多」或「本地 fetch 过」代替远端状态**——它们都不证明远端：
+
+1. 远端权威是 `git ls-remote origin refs/heads/main`（直接问 GitHub）逐位比对 `git rev-parse main`；
+   `git fetch` 只让本地 refs 跟上，不构成证据。
+2. 次证 GitHub API `https://api.github.com/repos/<owner>/<repo>`：`pushed_at` = 最新一次推送时刻，
+   同一次就能答「这是不是我们自己的备份仓库」（`origin` 指向谁、`fork`、`private`——备份仓是 public 时要提醒用户策略代码人人可读）。
+3. 领先/落后 `git rev-list --count origin/main..main` 与 `main..origin/main`（0/0 才叫同步）+ 工作区 `git status --porcelain`。
+4. **真问题通常不是「远端没更新」，而是「本机有一批变更还没进备份」**（技能归档 / 脚本批改 / 技能副本漂移），按下面两节核。
+
+- 内容级漂移只能靠 `diff -rq --exclude=__pycache__ <本机 skills> <仓库 hermes/skills>`；
+  顶层点文件（`.archive` / `.curator_*` / `.usage.json`）本机独有、`_snapshot_manifest.json` 仓库独有**都是设计如此**，不算漂移。
+- 报告「本机是旧版」前先确认**运行链路用的是哪一份**：cron 的 `script` + `workdir` 常指向仓库根 `scripts/<name>.py`，
+  技能目录里那份只是副本 —— 副本旧 ≠ 功能旧。
+- 拉 GitHub API 落盘用 **bash 重定向**（`curl ... > "$LOCALAPPDATA/Temp/gh.json"`），不要 `curl -o /c/Users/...`：
+  本机 MSYS 路径转换关闭，native curl 不认 `/c/...`，文件会写到别处、紧接着读文件就是 FileNotFound。
+
+### ⚠️ 归档事件会把备份删薄 —— 归档后必须处理备份侧
+
+技能管家把技能移进 `~/AppData/Local/hermes/skills/.archive/` 时**只动了本机**：`.archive` 是顶层点目录，
+被快照脚本 `_skip()` 排除 → 这些文件在「源」里消失 → 下一轮快照判为 `removed`，**从仓库镜像删掉并提交推送**。
+用户看到的形态是「备份莫名少了一批技能」，而他没删过任何东西。处置是备份语义的选择，**先问用户要哪一种**：
+
+| 用户意图 | 做法 |
+|---|---|
+| 备份宁多勿少（推荐） | 把仓库镜像里的孤儿整体搬到 `hermes/skills_archive_<YYYYMMDD>/`（保留相对路径）→ commit 这两个路径 → push → **再跑一次快照**让 manifest 归位 |
+| 跟随本机 | 什么都不做，让下一轮快照照常删除（备份只留本机在用的） |
+
+- 孤儿清单**用快照自己的判定取**（`ss.read_manifest()["files"]` 减去 `ss.collect(ss.SOURCE)`），
+  手写清单会漏或多；移动前 `assert len(removed) == <预期数量>`，对不上就停手。
+- 搬完**必须再跑一次快照**：manifest 仍记着那批文件，不归位则以后每轮都报 `-N`，清单与实际长期不一致（后续审计持续看到假漂移）。
+- **顺序铁律：手动提交先 `git push` 完，再跑快照脚本。** 脚本的推送护栏只在「待推提交全是快照提交」时推；
+  混着手动提交它会拒推 —— 这是设计，不要绕过、也不要靠 `--no-push` 回避。
+
+### 快照的「变更」是相对 manifest，不是相对仓库内容
+
+脚本逐文件判定全部基于 manifest 里上次快照记的本机 sha（`rel not in prev_files → 新增`、
+`prev_files[rel] != sha → 变更`，两者都不命中则**跳过复制**）。因此：
+
+- **仓库侧被直接改过的文件既不会被覆盖、也不会出现在 `--status`/`--dry-run` 里** —— 它被静默冻结在仓库侧，
+  本机继续跑旧版。这类漂移只能用内容 diff 发现，回灌方向是**仓库 → 本机**（反着做会把自己跑着的旧版写回仓库）。
+- `--status` 的 `+N ~N -N` 读作「相对上次快照时本机状态的增/改/删」，不是「相对仓库当前内容」。
 
 ### 自动推送的护栏（任何「自动发到外部」的脚本都适用）
 

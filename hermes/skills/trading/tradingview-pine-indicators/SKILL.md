@@ -7,6 +7,8 @@ description: Build, review, and enhance TradingView Pine Script indicators, espe
 
 Use this skill when the user asks to analyze, modify, combine, or create TradingView Pine Script indicators.
 
+**When a user says the system keeps giving no plan, audit end to end:** inspect panel priority, Pine authorization and packed outputs, then trace the consumer contract through parser, FinalVerdict and renderer; a visible A/B/C row is not proof that the decision pipeline allows it. Probe a fully valid candidate with one state changed at a time, keep a named structure level, trigger and release condition visible, and distinguish soft degradation from hard veto. B/C remain observation conditions/structure only—not Entry/Stop/Target; only executable GO-A with R:R≥2.0 receives execution prices.
+
 3. When auditing a Pine indicator, load `references/pine-indicator-audit-checklist.md` (8-dimension systematic checklist: quotas, repainting, logic, colors, action panels, multi-market, CVD, dead code).
 
 **⚠ 改 plot 标题 / 行动格行名之前先读** `tradingview-indicator-analysis` -> `references/indicator-contract-drift-guard.md`（未落地·勿引）。

@@ -908,6 +908,20 @@ def main():
 - **Gateway 重启会使 MCP deferred 工具失效**: gateway 重启后，之前 loaded 的 MCP deferred tools（如 `mcp_hermes_studio_use_*`）不再可用，需要重新 `tool_search` + `tool_describe` 再调用。
 - **更新 model_visibility 的正确方式**: 用 `PUT /api/hermes/model-visibility`（通过 `mcp_hermes_studio_api_request`），**不是写 `~/.hermes-web-ui/config.json`**。Web UI 运行时维护自己的内部状态，config.json 的修改可能不生效。示例调用见 `references/webui-model-sync.md`。
 
+## Studio 模型列表「只剩一个/只剩几个」—— catalog 陈旧 fallback 行
+
+Studio 模型页的数据源是 `~/.hermes-web-ui/cache/provider-model-catalog.json` 的 provider 行，组内 `models`=可见、`available_models`=候选。该文件**只在 catalog 为空时才在启动时刷新**（日志可见 `[model-catalog-cache] provider model catalog cache exists; skipping startup refresh`），所以一行一旦被写成 `source: "fallback"`（探针失败时写入的“配置声明模型”），就会长期残留，除非在 Studio 里手动点“刷新模型”。
+
+只读排查（最快，别读压缩后的前端 bundle 猜）：
+
+1. 取 token：`cat ~/.hermes-web-ui/profiles/default/.model-run-token`；端口从 `~/.hermes-web-ui/logs/server.log` 找（常见 8748）。
+2. `GET /api/hermes/available-models?profile=default`（Header `Authorization: Bearer $T` + `X-Hermes-Profile: default`），看目标 provider 组的 `models`（可见）与 `available_models`（候选）数量：这就是 UI 真正渲染的数字，先看它再下结论。
+3. 对照 catalog 文件里该 provider 的行：`source`（live/fallback）、`models` 长度、`updated_at`。同一 provider 常同时存在 `custom:<n>|<base_url>|all` 与 `profile:<p>|custom:<n>|<base_url>|all` 两行，**以 API 返回为准**，不要只按源码 key 拼接推断哪行生效。
+
+修复：从 `config.yaml` 的 `custom_providers` 读 key，`GET <base_url>/models` 取真实 id 列表，把该 provider 的所有行重写为 `source: "live"` + 新 `models` + 新 `updated_at`（先备份、用 `os.replace` 原子写），再重新 GET 第 2 步验收。fallback 分支写回时带 `overwriteExistingModels: false`，不会覆盖已有非空行，所以手工修好的 live 行不会被下一次失败刷新冲掉。
+
+用户可见模型 = 组内 `models` = `available_models` ∩ `modelVisibility[provider].models`（mode=include；交集为空则退回全集）。可见清单是用户手工维护的策展结果，要放开必须先问，不要擅自改成 all。
+
 ## 关键陷阱
 
 - **Freerouter 不应改 `model.default`** — 主模型是直连通道，Freerouter 只管理 `auxiliary.vision` 和 `delegation`。如果 patch_config 误改了 model.default，立即 `hermes config set model.default <原值>` 恢复。

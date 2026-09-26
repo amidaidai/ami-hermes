@@ -60,3 +60,22 @@ A 级「待确认态」（`displayLongA` 成立但 `executablePlan` 未成立：
 用户问「还需要怎么增强」时，输出**分级清单 + 配额账**，每条含：现状（源码证据）→ 改法 → 代价（request/plot/input/六项和）→ 价值 → 建议做/后置。
 必须附一节「明确不建议」（伪增强），典型：第三套 CVD、第二套评分或胜率百分比、增加交易所覆盖、
 更多颜色/标签/行、把 OHLC 估算包装成真实 footprint/清算量、把「OI 上升」直接写成「多头增加」、新增 `alertcondition`。
+
+## 7. 减宽执行版（用户说「表格太宽·缩减一点」时）
+
+先量后裁：`chart_get_state` 取副指标 study 的 `entity_id` → `data_get_pine_tables(study_filter='Volume Aggregated')` 读**实际渲染串**，按字数排序定位最宽行（通常「流向」「信号」）。凭源码猜宽度会裁错行。
+
+可用杠杆（零语义损失，按收益排序）：
+1. 段间空隔「 · 」→「·」全表统一（含结论后缀 join、coverageTag 段）。
+2. 去冗余前缀：流向行「本锚近10K卖→近10K卖」「CVD ⚠卖背离→⚠卖背离」（行内已有 CVD 语境）。
+3. 词短化：「滚动同向→滚同向」（先例「共识→同」）；量比「 x0.1→x0.1」。
+
+实测参考：副表最宽行 37→30 字（-19%），典型行 -1~-4 字；「缩减一点」的合理量级约 15-20%，不要为 1-2 字动结构性文案。
+
+禁区（改了断下游，原样保留）：
+- 行标签「信号/结论/流向/持仓/量能/操作」——`auto_card` key_map、`render_tv_card` sub.setdefault、测试夹具都按这些键取值。
+- 「不计A级票」子串——`signal_outcome` 分组判定用它；操作行「确认多/确认空」开头词保持 `startswith('确认')` 可判。
+- 信号行「🔴 」＝ emoji+空格形：下游三种剥离口径并存——`auto_card.sanitize_card_format` 只剥「emoji+空格」、`render_tv_card._clean_text` 剥裸 emoji、`card_reformat._EMOJI_RE` 剥全部。删掉那个空格，文案会经 sanitize 路径把 emoji 漏进卡片（除非同步改 sanitize 表）；这 1 字不值得动。
+- S1-S4 状态词与「否决/不否决」后缀（面板-下游协议语义）不动。
+
+收尾：目标渲染区残留扫描（区内旧模式串应清零）→ 三件套（`scripts/check_line_endings.py` + `scripts/pine_plot_budget.py` + `scripts/pine_cloud_compile_check.py`）→ 交付说明写清「改前→改后」字数对比与逐行变化。

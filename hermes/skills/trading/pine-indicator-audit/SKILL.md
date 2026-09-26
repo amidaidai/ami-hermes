@@ -13,7 +13,8 @@ description: "Audit/optimize Pine main/sub indicators: correctness, quotas, pane
 
 - 人工决策：`references/pine-manual-decision-dashboard-contract.md`
 - 双指标合同：`references/pine-dual-indicator-audit-contracts.md`
-- 多市场合同：`references/pine-dual-indicator-multi-market-contracts-20260825.md`
+- **无方案反馈**：查面板优先级并追踪 Pine 输出→契约/解析→FinalVerdict→渲染；用有效 GO-A 基线逐个验证 S0/S4/未接/低流动/S3。保留具名结构位、触发、解除条件；B/C只给观察条件和结构位，执行三件套仅 GO-A、executable 且 R:R≥2。细则：`references/pine-no-trade-output-and-panel-priority.md`
+- 多市场合同（含**显示层市场门控**：`isCryptoPlot` 门控的 mode 在非加密下副图整块空白、默认 mode 即属此类；修法走行动格提示而非新增 plot；「哪个 mode 好看」先给每市场唯一推荐）：`references/pine-dual-indicator-multi-market-contracts-20260825.md`
 - Basic总线/CE10117：`references/pine-basic-packed-bus-ce10117-20260825.md`
 - 免费版路由：`references/pine-free-tier-dual-indicator-routing-and-decision-closure-20260826.md`
 - 紧凑主表/副表固定六行：`references/pine-dual-indicator-compact-panels-20260826.md`
@@ -28,7 +29,7 @@ description: "Audit/optimize Pine main/sub indicators: correctness, quotas, pane
 - **客户端 CE10117、源码读回哈希、Basic 双脚本身份与最终证据链** → `references/pine-client-compile-evidence-and-dual-deploy-20260901.md`
 - **对称修复核对、生态增量（`once`/Screener）、余量快照与验证命令** → `references/pine-dual-indicator-audit-20260916.md`
 - **版本指纹与云存缺口**（新位值判定图表运行版本、编辑器未 Save 识别、uv 测试运行器） → `references/pine-version-fingerprint-and-cloud-save-gap-20260917.md`
-- **CE10117 减重与大规模编辑陷阱**（此前因 SKILL.md 超限未能入索引，现已补入） → `references/pine-ce10117-reduction-and-edit-traps-20260911.md`
+- **CE10117 减重与大规模编辑陷阱**（上限 100,256 是客户端检查、云编译查不到；含「结果 vs 旋钮」取舍、用非注释代码字符估余量、模块取舍量化清单） → `references/pine-ce10117-reduction-and-edit-traps-20260911.md`
 
 - **单边位失效**：破位、swept、生命周期 → `references/pine-20260812-trending-market-key-level-audit.md`
 - **结构叙事须图上可核验**：HH/HL/LH/LL真定义、BOS/CHoCH活动标签、异步CE10117验收 → `references/pine-structure-visibility-and-semantic-contract.md`
