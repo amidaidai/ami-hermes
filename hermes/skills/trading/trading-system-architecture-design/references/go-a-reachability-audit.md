@@ -11,6 +11,19 @@
 裁决系统若在长窗口（≥1 个月且 ≥200 条信号）里可执行授权出现 **0 次**，那是**系统缺陷，不是行情判断**。
 只能输出单一状态的闸门等于没有闸门：它无法区分「今天没有优势」和「永远没有优势」。
 
+## 用户说「从来都是禁做 / 从来不给方案」时的三层拆分（缺一层就会答错）
+
+1. **工程假故障层**：先跑账本时间线——`main.conclusion` 的转折点能锁定「状态何时变了」
+   （例：`副S3冲突·不执行` → `副S0未接·A禁` 的转折时间 = 主指标换装窗口 = 主→副总线断线，
+   诊断与重接见 `tradingview-state-integrity`）。总线断线、假风控否决、夹具污染都属这层——
+   **先剔干净再谈「严不严」**，否则会把工程故障错答成策略问题。
+2. **决策层真门层**：按 reason 前缀口径数硬门（见下步 4），逐条定性「行情／工程／政策」；
+   B 级（人工方案）帧的硬门残留单独算——它们才是「方案出不来」的直接原因。
+3. **显示层口径层**：**卡面文案会把「等待」压成「禁做」**——`render_v96` 对一切非执行态渲染
+   「⚠️主推 禁做」（WAIT 也不例外），而 `card_reformat` 的 `_PLAIN_MAP` 把同一状态映射成「等待，不做单」。
+   用户看到的「从来都是禁做」有一部分是显示层压缩，不是裁决层结论——报告时把 state（WAIT/NO-GO）
+   与文案分开说，并核对两个渲染器口径是否一致。
+
 ## 数据源
 
 | 文件 | 内容 |
@@ -24,14 +37,18 @@
 ## 步骤
 
 1. **档位/等级分布**：`final_state` 与 `grade` 分别数。出现次数为 0 的档位就是被结构封死的档位。
-2. **必须把有方向与无方向分开再报比例**（最容易误导自己的一步）：账本记录**每一次扫描**，
-   `side=neutral` 常占七成。直接报「85% NO-GO」会把「本来就没方向」算成「被否决」。
-   正确口径：先数有方向候选（`side in (long,short)`），再**只对这个子集**报裁决分布与拦因。
+2. **必须把有方向与无方向分开再报比例**（最容易误导自己的一步）——但**不能用顶层 `side` 字段数方向**：
+   它是 `final_side`，非执行态一律被清成 `neutral`，用它统计会把「有候选但被拦」的帧全错算成「没方向」
+   （同一账本：按 `side` 只剩约 6.5% 有方向；按几何候选则 100% 的扫描都产出过候选）。
+   正确口径：**几何候选 = `entry`/`stop`/`target` 三者全非空**；**方向看 `main.direction`**
+   （`long/short` 才算方向帧；`wait`、以及 `direction_text` 里的「偏多/偏空」只是倾向标注，不按方向帧计）。
+   自带探针 `gate_starvation_audit.py` 的「有方向候选」一节仍按 `side` 统计（其后附【口径补充】块）——
+   引用其输出时以补充块复核。然后**只对有方向子集**报裁决分布与拦因。
 3. **有方向信号的拦因频次** ＋ **「只差一个条件」子集**（`len(blockers)==1`）——后者离放行最近，修复杠杆最大。
    - **先剔幽灵再统计**：冻结快照重放会批量伪造候选样本——识别四件套：① 几何长期固定且与现价差一个量级；② 拦因签名逐条固定重复（同一组 5–8 条）；③ 关键数值全盘扫描只命中账本自身（任何缓存/快照/配置里都不存在）；④ **把数值 grep 到 `tests/`（含 git 历史）：命中测试夹具常量 ⇒ 夹具污染**——修法=影子写入口加 `PYTEST_CURRENT_TEST` 隔离守卫 + 清污，与生产数据线无关（2026-09-17 实案：63884/64000 两夹具 223 条）。命中即从可达性统计中剔除、单独列账。
 4. **顺着拦因回源码，把每道门定性为「行情判断」还是「工程状态」**：
    - 第二层 = `scripts/decision_loop.py`：`hard` 列表 → 硬阻断；`wait` 列表 → 停留观察。
-   - **硬门/等待拆分口径（防误计）**：账本 `blockers` 是 hard＋wait 合并元组，按名字集合硬分类会把 `svp_authorization` 这类双语义码（hard=禁做·不出价／wait=未授权）误计；唯一可靠口径 = 解析 `final_verdict.reason` 的前缀「硬闸门：a/b/c」，无此前缀即等待。
+   - **硬门/等待拆分口径（防误计）**：账本 `blockers` 是 hard＋wait 合并元组，按名字集合硬分类会把 `svp_authorization` 这类双语义码（hard=禁做·不出价／wait=未授权）误计；唯一可靠口径 = 解析 `final_verdict.reason` 的前缀「硬闸门：a/b/c」，无此前缀即等待。**家族表的 soft/hard 标签只是渲染分组、不代表记录内归属**（实测 `tv_live`/`cross_source` 可以是真硬门）——不按名字、不按家族猜。
    - 第一层 = Pine 的 `setupLongA/setupShortA` 的 AND 链 ＋ `setupGradeStable` 稳定器。
 5. **数 AND 链长度**。两层各 10+ 个条件串联且彼此不独立时，通过率是**乘积**不是最小值；
    链越长，「全绿」越接近不可达。
@@ -42,11 +59,16 @@
 
 | 层 | 位置 | 性质 |
 |:--|:--|:--|
-| 第一层 | Pine `setupLongA/setupShortA` | 十余项 AND；且**升级需连续 N 根相同候选、撤销即时**——不对称稳定器使 raw-A 窗口常在被提升前关闭 |
-| 第二层 | `scripts/decision_loop.py` | `is_a = grade.startswith("A")` 才可能 GO-A；再叠 hard 门 ＋ wait 门，并要求 `regime`／`risk`／`advanced` 三者非空 |
-| 刀口 | `decision_loop.py` 的 `if is_bc: wait.append("b_wait")` | B 级与 C反被一律降为等待 → 中间档候选完全失去输出，是「总是禁做」的主因之一 |
-| 等级来源 | `auto_card.py::_grade_from_mcp_values` | `MCP Grade Code`：3=A／2=B／1=C反／-1=X／0=C等待 |
-| 副指标依赖 | Pine `aggAllowLongA/aggAllowShortA` ＋ `decision_loop` 的 `haldro_invalid` | 两条路径依赖**同一条副指标 Bus**：`valid_code<=0` 时第一层封 A、第二层记 wait，双重卡死 |
+| 第一层 A | Pine `setupLongA/setupShortA` | **14 项 AND**（趋势分／分差≥2／CVD／价侧 VWAP／接受度／高周／社区闸／非过热／位移／溢折价／ADR／流动性／OB或关键位／副授权），且 **A 级升级需连续 2 根同候选、撤销即时** |
+| 第一层 B | Pine `bcLongDirectRaw/bcShortDirectRaw`（B「直通」） | 另有 **≈10 项** AND（含 htf／CVD 决策级／关键位／一侧结构）；等级来源 `setupGradeStable` → `MCP Grade Code`：3=A／2=B／1=C反／-1=X／0=C等待 |
+| 第二层 | `scripts/decision_loop.py` | `is_a` 且 **wait 为空** 才可能 GO-A；`plan_b_eligible` = **B 级＋方向＋三件套几何＋无任何硬门＋rr≥1.5**（只认 B，不认 C反） |
+| 高级门控 | `auto_card` 多周期共振 → `decision_loop` | 共振<4/6 → `execute=False` → 硬门 `advanced_confluence`；**硬门一律连坐 PLAN-B**——执行级门控会把「非授权人工方案」一并杀掉，是 B 通道的主要连坐点 |
+| 刀口 | `decision_loop.py` 的 `if is_bc: wait.append("b_wait")` | B 级与 C反被降为等待（PLAN-B 四态已部分接住）；仍要求「无任何硬门」才出人工方案 |
+| 副指标依赖 | Pine `aggAllowLongA/aggAllowShortA` ＋ 决策层 haldo 等待族 | A 的第一层要求副状态 S1/S2；`valid_code<=0` 时封 A。S3 拆位后 OI 分歧只记等待、CVD 背离保留硬拦；**副指标对 B 级无硬拦贡献**（B 帧实测 0 次） |
+
+**复查数据（2026-09-18 · 292 条）**：GO-A=0；**几何候选 292/292**（e/s/t 全非空——「没方案」不是没候选，是等级/硬门不放行）；
+候选 rr≥1.5 占 48%、≥2.0 占 31%；B 级帧（有裁决 25 条）全 NO-GO，真硬门 = tv_live/cross_source 各 18（TV 链路故障期产物）
+· 假风控 16（已修）· 共振<4 5 条。
 
 ## 第一层沉默时的逐位解码（卡面只写「C等待」时必须做）
 
@@ -193,6 +215,7 @@ TVC.DW_ALIASES_SUB['haldro_valid_code']   # 契约里注册的 Data Window title
 - P0-b：无真实计划时合成 ATR 参考几何不做计划级硬否决（改可见等待 `risk_reference_geometry`，永不授权）；真计划 RR<1.5 硬否决保留。来源标记在 `setdefault` 兜底之前采样；路由计划须自带三件套（`geometry_from_result`）才算真实几何（实跑暴露兜底回填恒真后修正）。
 - **P0-c（cross_source 未运行→降级）撤回**：依据数据为夹具污染；无主源运行应 fail-closed。
 - S3 拆位（2026-09-18 用户拍板）：S3 的 OI 部分（bit128，旧口径「非全体一致」）从硬拦降为可见等待 `haldro_state_consensus`；CVD 背离（bit16）保留硬拦。Pine 侧 oiDivergeA 对齐合格线（一致率<75% 或离散度>2.5）+ 单所方向死区（fixed15，待编译）。实盘 S3 38/38 全由「非全体一致」误触发、CVD 背离 0 次。
+- PLAN-B 豁免执行级硬门（2026-09-18 用户批准）：`decision_loop.PLAN_B_EXEMPT_HARD={"advanced_confluence"}`——共振<4/6 不再连坐「非授权人工方案」；GO-A 不变，豁免门在 blockers/warnings/升级前置可见。同时 WAIT/禁做 文案分离：render_v96 非执行态不再一律「主推 禁做」（「禁做」只留给 NO-GO/X；WAIT→⏳主推 等待；PLAN-B→🧭主推 人工方案）。
 - 生产验证：09-17 23:51 / 09-18 00:29 调度记录硬门仅剩 `haldro_state_conflict`，`risk_constitution` 假否决消失。
 
 **修正后真实后段样本（09-15 后）= 18 条全 NO-GO**：risk_constitution 15（P0-b 后消除）· advanced_confluence 11 · haldro_state_conflict 7 · x/svp/trigger 各 2 · 其余 1。

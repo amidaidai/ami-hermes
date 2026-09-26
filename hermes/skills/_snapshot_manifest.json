@@ -1,6 +1,6 @@
 {
  "blocked_secrets": {},
- "file_count": 2021,
+ "file_count": 2022,
  "files": {
   "api-dependency-audit/SKILL.md": "abc570d8612ced9d",
   "api-dependency-audit/references/availability-verification-layers.md": "91d9efb21d7c77a7",
@@ -1552,10 +1552,11 @@
   "trading/trading-card-generation/references/v8.0-narrative-card-format.md": "51d4720efcee720d",
   "trading/trading-card-generation/references/v910-rendering-improvements.md": "1159eab572a86e1e",
   "trading/trading-card-generation/references/v96-table-cockpit-renderer.md": "54532899f9ae041a",
-  "trading/trading-system-architecture-design/SKILL.md": "cb3b44d912636568",
+  "trading/trading-system-architecture-design/SKILL.md": "cc82a15a4e748274",
   "trading/trading-system-architecture-design/references/final-verdict-rendering-integrity.md": "0c53b937cb993ed4",
   "trading/trading-system-architecture-design/references/final-verdict-shadow-calibration-2026-07-10.md": "853e2c946112ee16",
-  "trading/trading-system-architecture-design/references/go-a-reachability-audit.md": "766f9d64af935f6d",
+  "trading/trading-system-architecture-design/references/go-a-reachability-audit.md": "65cfe4c625154bd2",
+  "trading/trading-system-architecture-design/references/indicator-architecture-change-assessment.md": "46081636222ef0d5",
   "trading/trading-system-architecture-design/references/keylevel-monitor-contract-202608.md": "fafcfc90265243bf",
   "trading/trading-system-architecture-design/references/multi-asset-data-quality-and-pine-rollout.md": "9642a88b41de0e82",
   "trading/trading-system-architecture-design/references/multi-asset-tv-cache-shadow-quality-gates.md": "efdaae1d1a428f95",
@@ -1565,7 +1566,7 @@
   "trading/trading-system-architecture-design/references/upstream-interface-drift-audit-20260910.md": "4b214375b47e3f58",
   "trading/trading-system-architecture-design/references/vnext-architecture-2026-07-10.md": "4f1db3826ab707c2",
   "trading/trading-system-architecture-design/scripts/contracts/__init__.py": "05b3e3ab4349f4bf",
-  "trading/trading-system-architecture-design/scripts/gate_starvation_audit.py": "fc5a9251cc2d53ae",
+  "trading/trading-system-architecture-design/scripts/gate_starvation_audit.py": "f989e722e3f22802",
   "trading/trading-system-architecture-design/templates/contracts_package.py": "0bcf722d8661f220",
   "trading/trading-system-architecture-design/templates/regime_multipliers.json": "866b2ae55a614ced",
   "trading/trading-system-architecture-design/templates/risk_constitution.json": "be6156b81bb542f6",
@@ -1997,7 +1998,7 @@
   "trading/tradingview-pine-indicators/references/v10-data-window-encoding.md": "d98f843ae773f579",
   "trading/tradingview-pine-indicators/references/weekly-liquidity-na-guard.md": "6b60a223575df53c",
   "trading/tradingview-pine-indicators/references/weekly-liquidity-sweep-lines.md": "87832e7751bae52f",
-  "trading/tradingview-state-integrity/SKILL.md": "94b779aa89768752",
+  "trading/tradingview-state-integrity/SKILL.md": "79b498380dc2317f",
   "trading/tradingview-state-integrity/references/chart-layer-recovery.md": "8fb0cf5044fb16d0",
   "trading/tradingview-state-integrity/references/collector-chart-ratchet-and-cache-poisoning.md": "05ee99d501396e03",
   "trading/tradingview-state-integrity/references/consumer-layer-chart-evidence.md": "e71a707c70830d0c",
@@ -2024,8 +2025,8 @@
   "web/blocked-page-recovery/scripts/recover_page.py": "22b996996ae2bf25",
   "yuanbao/SKILL.md": "239e4875f511124f"
  },
- "generated_at": "2026-09-18T04:20:39+0800",
+ "generated_at": "2026-09-26T20:46:38+0800",
  "oversized": {},
  "source": "C:/Users/Administrator/AppData/Local/hermes/skills",
- "total_bytes": 16721018
+ "total_bytes": 16731026
 }

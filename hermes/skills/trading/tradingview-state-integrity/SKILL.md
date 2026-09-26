@@ -24,6 +24,7 @@ category: trading
   `tab_new` 无条件返回 `new_tab_opened` 而根本没开页签、`indicator get` 对未缓存的
   study 返回 `inputs: []`。**凡是写操作都必须用行为验收**（面板文案 / Data Window 值 /
   CDP 直查），不能信返回值。详见 `references/mcp-silent-noop-and-bus-wiring-20260911.md`。
+- **MCP 工具注册会按轮次抖动**：同一工具可能上一轮可用、下一轮报 `does not exist`，用 `tool_search` 重新发现（必要时 `tool_describe`）后重试即可，通常 1–3 次内恢复。这是注册抖动、不是环境损坏——不要判成「工具不可用」，也不要因此改走 CLI（CLI 有自己的静默空转问题，见上）。
 - 后台采集可以临时切换图表，但结束时必须恢复用户进入前的 symbol/timeframe；不得无条件停在某个默认品种。
 - 外部报价必须核验返回的 symbol、description、exchange、type 和数量级，防止请求BTC却拿到黄金报价。
 - **MCP 工具名必须用完整形 `mcp__<server>__<tool>`（2026-09-11 实测）**：`mcp` 后是**双**下划线，server 与 tool 之间也是**双**下划线。写成 `mcp_tradingview__tv_health_check`（单下划线夹 server）会直接报 `is not a deferrable tool`；改成 `mcp__tradingview__tv_health_check` 即通。本会话实测走通：`mcp__tradingview__tv_health_check` / `chart_get_state` / `chart_set_symbol` / `chart_set_timeframe` / `data_get_study_values` / `data_get_pine_tables` / `data_get_ohlcv` / `capture_screenshot` / `ui_fullscreen`。名字一律以工具目录为准，不凭肌肉记忆拼写；报 `not a deferrable` 九成是下划线数不对，重搜一次即可。
@@ -65,6 +66,10 @@ indicator_set_inputs(
 ```
 
 接线值必须是 `<副指标id>$49` 形式（`$49` = Basic Packed Bus 在本仓 AggVol 输出里的序号）；用「<id>_<plot名>」或中文 plot 名等其它字符串会静默空转/不生效——**写完必须回读核验**：等 15–30s 重算后，主指标结论行不再出现「副S0未接」且 `in_164` 不再是 `close` 才算接上；**重挂/重启恢复出的新实例同样回退 `close`**，重挂后立即重接。
+
+**2026-09-18 补充：值对≠绑定活**。换装/重挂主指标后，`in_164` 可能**保留着看似正确的 `$49` 字符串但绑定已失活**（回读值正常、结论行仍「副S0未接」）。此时**用同一字符串重写一次即可强制重解析**——本次实测：重写前结论「副S0未接·A禁」，重写同一值 `WfT7NL$49` 后 28s 内变「副S4降权·仅候选」且 OI 行从「OI未接」恢复解码。判据永远以**面板结论行 + 主副 S-code 一致**为准，不以 `in_164` 回读值单独放行。
+
+**定位断线时刻用账本时间线**：`data/shadow/decision_signals.jsonl` 里 `main.conclusion` 的转折点即可锁定——「副S3冲突·不执行」（正常读数）→「副S0未接·A禁」（断线）的切换时间就是主指标换装/重挂窗口。修复前先把断线窗口从账本里切出来，修完确认该结论不再出现；不要凭印象说「一直没接上」。
 
 **主指标 fail-closed 显示「副S0未接·A禁」本身是对的**（宁可禁 A 也不能用错数据）——
 要修的是让它自愈，不是让它放行。**不要**为了自愈在同步脚本里加自动重接：

@@ -11,6 +11,8 @@
 节次:
   1 档位 / 等级分布            从没出现过的档位 = 被结构封死
   2 有方向 vs 无方向            必看：neutral 扫描 tick 会把「本来没方向」算成「被否决」
+                                （口径：顶层 side=final_side，非执行态被清成 neutral，会低估；
+                                 几何候选看 e/s/t，方向看 main.direction——见节 2 的【口径补充】块）
   3 有方向信号拦因频次
   4 「只差一个条件」子集         离放行最近，修复杠杆最大
   5 拦因数量 + 等待家族共现     同一件「不做」被记成几条
@@ -123,6 +125,22 @@ def main():
     print(f"  其中有方向的等级: {dict(collections.Counter(s.get('grade') for s in dirs))}")
     if not dirs:
         print("  [warn] 没有有方向候选——先查上游方向判定，别急着谈闸门。")
+
+    # 口径补充：side 是 final_side——非执行态一律被清成 neutral，按它数方向会系统性低估。
+    # 几何候选 = entry/stop/target 三者全非空（每次扫描都产出过候选）；方向读 main.direction。
+    # 节 3-6 的 dirs 仍是旧口径；引用拦因统计前先用本块复核方向子集。
+    geo = [s for s in sigs if s.get("entry") and s.get("stop") and s.get("target")]
+    mdir = collections.Counter((s.get("main") or {}).get("direction") or "?" for s in sigs)
+    txt_pref = collections.Counter()
+    for s in sigs:
+        txt = str((s.get("main") or {}).get("direction_text") or "")
+        txt_pref[txt.split(" ")[0][:2] if txt else "∅"] += 1
+    print()
+    print("  [口径补充] side=final_side（非执行态被清成 neutral），按它数方向会低估：")
+    print(f"    几何候选（e/s/t 全非空）: {len(geo)}/{len(sigs)} = {pct(len(geo), len(sigs))}")
+    print(f"    方向字段 main.direction 分布: {dict(mdir)}")
+    print(f"    direction_text 前缀分布: {dict(txt_pref.most_common(6))}")
+    print("    ↑ 与按 side 统计的差值 = 被 final_side 清空掩盖的帧；拦因统计须以此为复核口径。")
 
     # 3 拦因频次
     sec("3. 有方向信号的拦因频次　（回源码把每道门定性为行情判断 or 工程状态）")
